@@ -59,6 +59,18 @@ log "签名身份：$IDENTITY"
 log "2/9 解包 ipa"
 mkdir -p "$WORK/payload"
 unzip -q "$IPA" -d "$WORK/payload"
+
+# ── 2a. 包结构规范化 ──────────────────────────────────────────
+# 苹果会因为这几样直接拒，而且报错各不相同，看着像一堆问题其实是一类：
+#   · 缺 LC_ENCRYPTION_INFO_64              → 'encryption info ... missing or invalid'
+#   · 段 vmsize 没按 16K 取整               → 'Invalid Segment Alignment'
+#   · Info.plist 缺 DTPlatformName/DTSDKName → 'Missing Info.plist value' + 'Unsupported SDK'
+#   · 扩展 RPBroadcastProcessMode 放错层     → 'The key was not specified'
+#   · 扩展缺 UIRequiredDeviceCapabilities    → 'Invalid Bundle ... must include arm64'
+# 这里在签名前一次补齐；包本来就合规就不动它（幂等）。
+log "2a/9 规范化包结构"
+python3 tools/check_ipa.py --fix-dir "$WORK/payload/Payload" || fail "包结构规范化失败。"
+
 APP="$(ls -d "$WORK"/payload/Payload/*.app 2>/dev/null | head -1 || true)"
 [ -n "$APP" ] || fail "ipa 结构不对：里面没有 Payload/*.app"
 APPEX="$(ls -d "$APP"/PlugIns/*.appex 2>/dev/null | head -1 || true)"
