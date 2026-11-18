@@ -261,7 +261,8 @@ def macho_scan(path):
                     break
                 seg["sects"].append({
                     "name": d[so:so + 16].split(b"\0")[0].decode("utf-8", "replace"),
-                    "hdr": so, "size": u64(d, so + 40), "offset": u32(d, so + 48)})
+                    "hdr": so, "addr": u64(d, so + 32),
+                    "size": u64(d, so + 40), "offset": u32(d, so + 48)})
             info["segs"].append(seg)
         off += size
     return info
@@ -302,6 +303,136 @@ def want_encryption_extents(info):
     return (cryptoff, cryptsize), None
 
 
+SIG_RESERVE = 16          # codesign 要插一条 LC_CODE_SIGNATURE，正好 16 字节
+
+# 可以安全删掉的加载命令：都是给工具/符号化用的元数据，运行时不读，苹果上传校验也不查。
+# 删它们（命令区整体前移、后面的命令顶上来）比挪节数据安全得多。
+DROPPABLE = (
+    (0x29, "LC_DATA_IN_CODE"),
+    (0x26, "LC_FUNCTION_STARTS"),
+    (0x2A, "LC_SOURCE_VERSION"),
+)
+
+
+def text_file_sections(info):
+    """__TEXT 里真正落在文件中的节，按文件偏移排好。"""
+    text = segs_by_name(info).get("__TEXT")
+    if text is None:
+        return None, []
+    sects = [s for s in text["sects"] if s["size"] > 0 and s["offset"] > 0]
+    sects.sort(key=lambda s: s["offset"])
+    return text, sects
+
+
+def header_end(info):
+    return 32 + info["sizeofcmds"]
+
+
+def free_load_commands(path, info, want_free):
+    """
+    删掉纯工具用的可选加载命令，腾出 want_free 字节的加载命令区空间。
+
+    为什么不在文件里挪节数据来腾地方：节的「文件偏移」必须等于
+    addr - 段vmaddr + 段fileoff，挪了偏移不改虚拟地址，dyld 就会按段的映射
+    读到错位的数据 —— 包能过苹果的校验，但装到手机上一启动就崩。
+    加载命令区整体前移不影响任何东西：命令里的字符串偏移都是相对命令头算的。
+    """
+    if want_free <= 0:
+        return 0, None
+    d = bytearray(info["data"])
+    cmds, off = [], 32
+    for _ in range(info["ncmds"]):
+        cmd, size = struct.unpack_from("<II", d, off)
+        cmds.append((off, cmd, size))
+        off += size
+
+    left = want_free
+    drop = set()
+    dropped = []
+    for code, name in DROPPABLE:
+        if left <= 0:
+            break
+        for coff, ccmd, csize in cmds:
+            if ccmd == code and coff not in drop:
+                drop.add(coff)
+                dropped.append("%s(%d字节)" % (name, csize))
+                left -= csize
+                break
+    if left > 0:
+        raise SystemExit("%s：加载命令区腾不出 %d 字节（可选命令删光了还差 %d）"
+                         % (path, want_free, left))
+
+    _, sects = text_file_sections(info)
+    first = sects[0]["offset"] if sects else header_end(info)
+    keep = [(coff, csize) for coff, ccmd, csize in cmds if coff not in drop]
+    blob = b"".join(bytes(d[coff:coff + csize]) for coff, csize in keep)
+    d[32:first] = b"\0" * (first - 32)
+    d[32:32 + len(blob)] = blob
+    struct.pack_into("<I", d, 16, len(keep))
+    struct.pack_into("<I", d, 20, len(blob))
+
+    with open(path, "wb") as f:
+        f.write(d)
+    return want_free, ("删掉 %s 腾出 %d 字节加载命令空间" % ("、".join(dropped), want_free))
+
+
+def repair_text_section_offsets(path, info):
+    """
+    把 __TEXT 的节数据挪回和虚拟地址对齐的位置。
+
+    之前为了塞下 LC_ENCRYPTION_INFO_64，把节数据在文件里整体后移了 16 字节，
+    虚拟地址一个没动 —— 那样打出去的包装到手机上一启动就崩。
+    挪回去会少吃掉 16 字节命令区空间，所以先删可选命令把地方腾出来。
+    """
+    text, sects = text_file_sections(info)
+    if text is None:
+        return None, "找不到 __TEXT 段"
+    if not sects:
+        return None, None
+
+    deltas = {}
+    for s in sects:
+        want = s["addr"] - text["vmaddr"] + text["fileoff"]
+        deltas[s["offset"] - want] = deltas.get(s["offset"] - want, 0) + 1
+    if len(deltas) == 1 and 0 in deltas:
+        return None, None                                  # 本来就是对齐的
+    if len(deltas) != 1:
+        return None, "节的偏移和虚拟地址错位不一致（%s），不敢自动挪" % deltas
+
+    shift = -next(iter(deltas))
+    first = sects[0]["offset"]
+    new_first = first + shift
+    need_free = header_end(info) + SIG_RESERVE - new_first
+    if need_free > 0:
+        free_load_commands(path, info, need_free)
+        info = macho_scan(path)
+        if info.get("error"):
+            return None, info["error"]
+        text, sects = text_file_sections(info)
+
+    d = bytearray(info["data"])
+    text_end = text["fileoff"] + text["filesize"]
+    block_len = text_end - first
+    if block_len <= 0 or new_first < header_end(info):
+        return None, "挪回去的空间还是不够（要 %d，命令区到 %d）" % (new_first, header_end(info))
+
+    block = bytes(d[first:first + block_len])
+    d[first:first + block_len] = b"\0" * block_len
+    d[new_first:new_first + block_len] = block
+
+    for s in sects:
+        struct.pack_into("<I", d, s["hdr"] + 48, s["offset"] + shift)
+    struct.pack_into("<Q", d, text["hdr"] + 48, text["filesize"] + shift)
+    if info.get("main"):
+        moff, entryoff = info["main"]
+        if first <= entryoff < text_end:
+            struct.pack_into("<Q", d, moff + 8, entryoff + shift)
+
+    with open(path, "wb") as f:
+        f.write(d)
+    return -shift, "把 __TEXT 节数据挪回和虚拟地址对齐（%+d 字节）" % shift
+
+
 def add_encryption_info(path, info):
     """
     补 / 修 LC_ENCRYPTION_INFO_64（cryptid=0）。
@@ -311,9 +442,8 @@ def add_encryption_info(path, info):
     所以两种情况都在这里处理：
 
       · 已有命令 → 就地改正两个数值，不挪任何数据；
-      · 没有命令 → 加载命令区后面只剩十几字节，装不下 24 字节的新命令，
-        把 __TEXT 段内的节数据在文件里整体后移（16 字节对齐），同时更新各节的
-        文件偏移；虚拟地址一个都不动，代码里的引用全不受影响。
+      · 没有命令 → 先删可选加载命令腾出 24（加密）+16（签名）字节，再在命令区
+        末尾插进去。节数据一个字节都不动。
     """
     if info.get("has_sig") and info.get("sig_datasize", 0) > 0:
         return None, "已签名（有签名数据），跳过"
@@ -326,8 +456,7 @@ def add_encryption_info(path, info):
     # 已有这条命令：只改数值
     if info.get("has_enc") and "enc_off" in info:
         cur_off, cur_size, cur_id = info["enc"]
-        cur = (cur_off, cur_size)
-        if cur == want and cur_id == 0:
+        if (cur_off, cur_size) == want and cur_id == 0:
             return None, None      # 已经是苹果口径，不动也不打扰日志
         d = bytearray(info["data"])
         struct.pack_into("<IIII", d, info["enc_off"] + 8, cryptoff, cryptsize, 0, 0)
@@ -336,58 +465,48 @@ def add_encryption_info(path, info):
         return 0, ("改正加密范围 0x%x/0x%x → 0x%x/0x%x（cryptid=0）"
                    % (cur_off, cur_size, cryptoff, cryptsize))
 
-    d = bytearray(info["data"])
-    text = segs_by_name(info).get("__TEXT")
-    if text is None:
-        raise SystemExit("%s：找不到 __TEXT 段" % path)
-
-    file_sects = [s for s in text["sects"] if s["size"] > 0 and s["offset"] > 0]
-    if not file_sects:
+    # 没有命令：先把 24+16 字节腾出来，再插
+    _, sects = text_file_sections(info)
+    if not sects:
         raise SystemExit("%s：__TEXT 里没有落在文件中的节" % path)
-    first = min(s["offset"] for s in file_sects)
-    text_end = text["fileoff"] + text["filesize"]
+    need_free = header_end(info) + ENC_SIZE + SIG_RESERVE - sects[0]["offset"]
+    msg = None
+    if need_free > 0:
+        _, msg = free_load_commands(path, info, need_free)
+        info = macho_scan(path)
+        if info.get("error"):
+            raise SystemExit("%s：%s" % (path, info["error"]))
 
-    need = ENC_SIZE - (first - info["header_end"])
-    shift = (need + 15) // 16 * 16 if need > 0 else 0
+    d = bytearray(info["data"])
+    ins = header_end(info)
+    _, sects = text_file_sections(info)
+    if not sects or ins + ENC_SIZE > sects[0]["offset"]:
+        raise SystemExit("%s：命令区腾不出 %d 字节" % (path, ENC_SIZE))
 
-    # 平移要落在 __TEXT 之后、下一个段之前的空隙里，别压到别的段
-    later = [s["fileoff"] for s in info["segs"]
-             if s["fileoff"] >= text_end and s["name"] != "__PAGEZERO"]
-    limit = min(later) if later else len(d)
-    if limit - text_end < shift:
-        raise SystemExit("%s：__TEXT 后面只有 %d 字节空隙，不够平移 %d"
-                         % (path, limit - text_end, shift))
+    want, problem = want_encryption_extents(info)
+    if want is None:
+        raise SystemExit("%s：%s" % (path, problem))
+    cryptoff, cryptsize = want
 
-    if shift:
-        block = bytes(d[first:text_end])
-        d[first:text_end] = b"\0" * (text_end - first)
-        d[first + shift:text_end + shift] = block
-        for s in file_sects:
-            struct.pack_into("<I", d, s["hdr"] + 48, s["offset"] + shift)
-        if info.get("main"):
-            moff, entryoff = info["main"]
-            if first <= entryoff < text_end:
-                struct.pack_into("<Q", d, moff + 8, entryoff + shift)
-        struct.pack_into("<Q", d, text["hdr"] + 48, text["filesize"] + shift)
-        struct.pack_into("<Q", d, text["hdr"] + 32, text["vmsize"] + shift)
-
-    # 写新加载命令（数值先填 0，写完重新扫一遍再按 ld64 口径填，
-    # 因为平移会改变节的文件偏移，值必须按平移后的实际布局算）
-    ins = info["header_end"]
-    if ins + ENC_SIZE > first + shift:
-        raise SystemExit("%s：腾出的空间不够放加密命令" % path)
-    struct.pack_into("<IIIIII", d, ins, LC_ENCRYPTION_INFO_64, ENC_SIZE, 0, 0, 0, 0)
+    struct.pack_into("<IIIIII", d, ins, LC_ENCRYPTION_INFO_64, ENC_SIZE,
+                     cryptoff, cryptsize, 0, 0)
     struct.pack_into("<I", d, 16, info["ncmds"] + 1)
     struct.pack_into("<I", d, 20, info["sizeofcmds"] + ENC_SIZE)
-
     with open(path, "wb") as f:
         f.write(d)
 
+    # 插完重新按实际布局核一次范围
     again = macho_scan(path)
-    ns, msg = add_encryption_info(path, again)
-    return shift, ("补 LC_ENCRYPTION_INFO_64（cryptid=0）"
-                   + ("，节数据后移 %d 字节" % shift if shift else "")
-                   + "；" + (msg or ""))
+    w2, _ = want_encryption_extents(again)
+    if w2 and w2 != (cryptoff, cryptsize):
+        d = bytearray(open(path, "rb").read())
+        struct.pack_into("<II", d, ins + 8, w2[0], w2[1])
+        with open(path, "wb") as f:
+            f.write(d)
+        cryptoff, cryptsize = w2
+
+    return None, ("补 LC_ENCRYPTION_INFO_64（cryptid=0，范围 0x%x/0x%x）%s"
+                  % (cryptoff, cryptsize, ("；" + msg) if msg else ""))
 
 
 # ── 规范化：段 vmsize 按页取整 ───────────────────────────────
@@ -414,17 +533,40 @@ def align_segment_vmsizes(path, info):
 
 
 def align_all(path):
-    """补加密信息 + 段 vmsize 对齐，两步都改完后返回说明。"""
+    """修节的错位 + 补加密信息 + 给签名命令留位置 + 段 vmsize 对齐。"""
     info = macho_scan(path)
     if info.get("error"):
         return None, info["error"]
     if info.get("fat"):
         return None, "fat 包，跳过"
     notes = []
-    shift, msg = add_encryption_info(path, info)
-    if shift is not None:
+
+    shift, msg = repair_text_section_offsets(path, info)
+    if msg and shift is None:
+        return notes, "节的偏移和虚拟地址对不上，又不敢自动挪：%s" % msg
+    if shift:
         notes.append(msg)
     info = macho_scan(path)
+    if info.get("error"):
+        return notes, info["error"]
+
+    _, msg = add_encryption_info(path, info)
+    if msg:
+        notes.append(msg)
+    info = macho_scan(path)
+    if info.get("error"):
+        return notes, info["error"]
+
+    # 签名命令还得有 16 字节位置：加密命令插完后再核一次
+    if not (info.get("has_sig") and info.get("sig_datasize", 0) > 0):
+        _, sects = text_file_sections(info)
+        if sects:
+            slack = sects[0]["offset"] - header_end(info)
+            if slack < SIG_RESERVE:
+                _, m = free_load_commands(path, info, SIG_RESERVE - slack)
+                notes.append(m or "给签名命令腾了 %d 字节" % (SIG_RESERVE - slack))
+                info = macho_scan(path)
+
     m2 = align_segment_vmsizes(path, info)
     if m2:
         notes.append("段 vmsize 对齐：%s" % m2)
@@ -710,10 +852,16 @@ def check_plist(app, pl):
         icon_names += d.get("CFBundlePrimaryIcon", {}).get("CFBundleIconFiles", [])
     if not icon_names:
         err("Info.plist 里没有任何图标声明")
+    # 有资源目录时，CFBundleIconFiles 里的名字可能只是资源目录里的条目（不落成 PNG），
+    # 这种不算缺文件，否则会把自己误拦在 8b。
+    catalog = os.path.exists(os.path.join(app, "Assets.car"))
     for name in sorted(set(icon_names)):
         f = os.path.join(app, name + ".png")
         if not os.path.exists(f):
-            err("图标 %s.png 在包里不存在（CFBundleIconFiles 提到它）" % name)
+            if catalog and pl.get("CFBundleIconName"):
+                warn("%s.png 不在包里（由资源目录 Assets.car 提供）" % name)
+            else:
+                err("图标 %s.png 在包里不存在（CFBundleIconFiles 提到它）" % name)
             continue
         info = png_info(f)
         if not info:
@@ -807,6 +955,27 @@ def check_macho(path, label):
             err("%s：构建 SDK 是 %s，苹果现在只收新 SDK 编的包（ITMS-90725），会直接退" % (label, v))
         else:
             ok("%s：构建 SDK %s" % (label, v))
+
+    # 节的「文件偏移」必须和虚拟地址对得上。对不上 dyld 会按段的映射取到错位的数据：
+    # 包能过苹果那边的大部分校验，但装到手机上一启动就崩。
+    text, sects = text_file_sections(info)
+    if sects:
+        bad = [s["name"] for s in sects
+               if s["offset"] != s["addr"] - text["vmaddr"] + text["fileoff"]]
+        if bad:
+            err("%s：%s 的文件偏移和虚拟地址错开（装上去一启动就崩）。跑 --fix-dir 会挪回去。"
+                % (label, "、".join(bad[:3])))
+        else:
+            ok("%s：节的偏移和虚拟地址对齐" % label)
+
+        # codesign 要往加载命令区插一条 LC_CODE_SIGNATURE（16 字节），空位不够就签不上
+        if not (info.get("has_sig") and info.get("sig_datasize", 0) > 0):
+            slack = sects[0]["offset"] - header_end(info)
+            if slack < SIG_RESERVE:
+                err("%s：加载命令区只剩 %d 字节空位，codesign 要塞 %d 字节的签名命令，签不上。"
+                    "跑 --fix-dir 会删掉可选命令腾地方。" % (label, slack, SIG_RESERVE))
+            else:
+                ok("%s：加载命令区给签名留了 %d 字节" % (label, slack))
 
     # 加密信息：缺这条苹果必退
     if not info.get("has_enc"):

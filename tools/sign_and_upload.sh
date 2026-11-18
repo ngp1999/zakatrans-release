@@ -234,8 +234,23 @@ python3 tools/check_ipa.py --fix-dir "$WORK/payload/Payload" || fail "包结构�
 log "2c/9 编译图标资源目录（actool）"
 MINOS="$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$APP/Info.plist" 2>/dev/null || echo 16.0)"
 ICONSET="$WORK/Assets.xcassets/AppIcon.appiconset"
+rm -rf "$WORK/Assets.xcassets"
 mkdir -p "$ICONSET"
-python3 - "$APP" "$(dirname "$WORK/payload")" "$ICONSET" <<'PY'
+printf '{\n  "info" : {\n    "author" : "xcode",\n    "version" : 1\n  }\n}\n' > "$WORK/Assets.xcassets/Contents.json"
+
+# 1024 商店图标：AppIcon 里必须有 ios-marketing 这一格，缺了 actool 直接报错。
+# 包里没带就从最大的那张放大一张（sips 是 macOS 自带，不依赖第三方库）。
+if [ ! -f "$WORK/payload/iTunesArtwork@2x" ]; then
+  BIGGEST="$( { ls -S "$APP/Icon-83.5@2x.png" "$APP/Icon-76@2x.png" "$APP/Icon-60@3x.png" 2>/dev/null || true; } | sed -n "1p")"
+  if [ -n "$BIGGEST" ]; then
+    log "包里没带 1024 商店图标，从 $(basename "$BIGGEST") 放大一张补上"
+    sips -z 1024 1024 "$BIGGEST" --out "$WORK/payload/iTunesArtwork@2x" >/dev/null 2>&1 || true
+  fi
+fi
+
+# 注意：unzip -d "$WORK/payload" 之后，包根的 iTunesArtwork 系列在 "$WORK/payload" 下，
+# 不在它的上一级。这里传的必须是 "$WORK/payload"。
+python3 - "$APP" "$WORK/payload" "$ICONSET" <<'PY'
 import json, os, shutil, struct, sys
 
 app, root, iconset = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -261,12 +276,33 @@ MAP = [
     ("ipad", "83.5x83.5", "2x", "Icon-83.5@2x.png"),
 ]
 
-images = []
-missing = []
+
+def png_size(p):
+    """读 PNG 头拿像素尺寸；不是 PNG 返回 None。"""
+    try:
+        d = open(p, "rb").read(24)
+    except OSError:
+        return None
+    if d[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    return struct.unpack(">II", d[16:24])
+
+
+def want_px(size, scale):
+    base = float(size.split("x")[0])
+    return int(round(base * float(scale.rstrip("x"))))
+
+
+images, missing, wrong = [], [], []
 for idiom, size, scale, fname in MAP:
     src = os.path.join(app, fname)
     if not os.path.exists(src):
         missing.append(fname)
+        continue
+    got = png_size(src)
+    exp = want_px(size, scale)
+    if got and got != (exp, exp):
+        wrong.append("%s 是 %dx%d，这一格要 %dx%d" % (fname, got[0], got[1], exp, exp))
         continue
     dst = os.path.join(iconset, "icon-%s-%s@%s.png" % (idiom, size.split("x")[0], scale))
     shutil.copyfile(src, dst)
@@ -275,7 +311,7 @@ for idiom, size, scale, fname in MAP:
 
 # 1024 商店图标（App Store 必带，不能有 alpha）
 mk = os.path.join(root, "iTunesArtwork@2x")
-if os.path.exists(mk):
+if os.path.exists(mk) and png_size(mk) == (1024, 1024):
     dst = os.path.join(iconset, "icon-marketing-1024@1x.png")
     shutil.copyfile(mk, dst)
     images.append({"idiom": "ios-marketing", "size": "1024x1024", "scale": "1x",
@@ -286,33 +322,79 @@ else:
 with open(os.path.join(iconset, "Contents.json"), "w") as f:
     json.dump({"images": images, "info": {"version": 1, "author": "zaka"}}, f, indent=2)
 
-print("  图标条目：%d 个%s" % (len(images), ("；缺：" + "、".join(missing)) if missing else ""))
+print("  图标条目：%d 个" % len(images))
+if missing:
+    print("  缺：%s" % "、".join(missing))
+if wrong:
+    print("  尺寸对不上（已跳过）：%s" % "；".join(wrong))
 PY
 
 CAR_OK=0
 if xcrun --find actool >/dev/null 2>&1; then
+  ACT_OUT="$WORK/asset-out"
+  ACT_LOG="$WORK/actool.log"
+  rm -rf "$ACT_OUT"
+  mkdir -p "$ACT_OUT"
+  # actool 不会自己建输出目录，目录不存在它直接报
+  # 「The output directory ... does not exist」然后什么都不产出。
   set +e
   xcrun actool "$WORK/Assets.xcassets" \
-    --compile "$WORK/asset-out" \
+    --compile "$ACT_OUT" \
     --platform iphoneos \
-    --minimum-deployment-target "$MINOS" \
+    --minimum-deployment-target "${MINOS:-16.0}" \
     --target-device iphone --target-device ipad \
     --app-icon AppIcon \
     --output-partial-info-plist "$WORK/asset-partial.plist" \
-    --output-format human-readable-text 2>&1 | sed 's/^/    /'
-  ACT_STATUS=${PIPESTATUS[0]}
+    --output-format human-readable-text > "$ACT_LOG" 2>&1
+  ACT_STATUS=$?
   set -e
-  if [ -s "$WORK/asset-out/Assets.car" ]; then
+  sed 's/^/    /' "$ACT_LOG" || true
+
+  if [ -s "$ACT_OUT/Assets.car" ]; then
     CAR_OK=1
-    cp "$WORK/asset-out/Assets.car" "$APP/Assets.car"
-    /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AppIcon" "$APP/Info.plist" 2>/dev/null \
-      || /usr/libexec/PlistBuddy -c "Set :CFBundleIconName AppIcon" "$APP/Info.plist"
-    log "已编入 Assets.car（$(du -h "$APP/Assets.car" | cut -f1)），CFBundleIconName=AppIcon"
+    cp "$ACT_OUT/Assets.car" "$APP/Assets.car"
+    # 把 actool 的 partial plist 里的 CFBundleIconName 并进 Info.plist。
+    # 缺这一项苹果直接退（Missing Info.plist value CFBundleIconName）。
+    python3 - "$WORK/asset-partial.plist" "$APP/Info.plist" <<'PY' || true
+import os, plistlib, sys
+
+part, plist = sys.argv[1], sys.argv[2]
+if not os.path.exists(part):
+    raise SystemExit(0)
+try:
+    p = plistlib.load(open(part, "rb"))
+except Exception:  # noqa: BLE001
+    raise SystemExit(0)
+if not isinstance(p, dict):
+    raise SystemExit(0)
+info = plistlib.load(open(plist, "rb"))
+# 只取 CFBundleIconName。CFBundleIcons 保留包里原来的（那些 PNG 确实都在），
+# 换成 actool 那套 AppIcon60x60 名字反而会指向不存在的文件，自检会当场拦下。
+if p.get("CFBundleIconName"):
+    info["CFBundleIconName"] = p["CFBundleIconName"]
+info.setdefault("CFBundleIconName", "AppIcon")
+plistlib.dump(info, open(plist, "wb"), fmt=plistlib.FMT_BINARY)
+PY
+    /usr/libexec/PlistBuddy -c "Print :CFBundleIconName" "$APP/Info.plist" >/dev/null 2>&1 \
+      || /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AppIcon" "$APP/Info.plist"
+    log "已编入 Assets.car（$(du -h "$APP/Assets.car" | cut -f1)），CFBundleIconName=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' "$APP/Info.plist")"
   else
-    log "⚠ actool 退出码 $ACT_STATUS，没产出 Assets.car —— 报错原文在上面，这轮图标大概率还会被退"
+    log "⚠ actool 退出码 ${ACT_STATUS}，没产出 Assets.car —— 报错原文在上面"
   fi
 else
-  log "⚠ 这台机器上找不到 actool（非 Xcode 环境），跳过资源目录"
+  log "⚠ 这台机器上找不到 actool（非 Xcode 环境）"
+fi
+
+# 包里本来就带着资源目录（比如包是 Xcode 直接导出的）：那 actool 没跑成也不耽误
+if [ "$CAR_OK" -ne 1 ] && [ -s "$APP/Assets.car" ] \
+   && /usr/libexec/PlistBuddy -c "Print :CFBundleIconName" "$APP/Info.plist" >/dev/null 2>&1; then
+  CAR_OK=1
+  log "包里本来就有 Assets.car + CFBundleIconName，用包里这份"
+fi
+
+if [ "$CAR_OK" -ne 1 ]; then
+  fail "图标资源目录没编出来。苹果只从 Resources 目录里找图标，散落的 PNG 它不认，
+继续走下去必报「缺 120x120 / 152x152」+「缺 CFBundleIconName」。先修上面 actool 的报错再跑。"
 fi
 
 
@@ -382,6 +464,11 @@ fi
 log "8/9 重新打包"
 rm -rf "$WORK/repack" && mkdir -p "$WORK/repack"
 cp -R "$WORK/payload/Payload" "$WORK/repack/Payload"
+# 包根的 1024 商店图标一起带上（自检会看它）
+for f in "$WORK"/payload/iTunesArtwork*; do
+  [ -e "$f" ] || continue
+  cp "$f" "$WORK/repack/"
+done
 ( cd "$WORK/repack" && ditto -c -k --sequesterRsrc --keepParent Payload "$WORK/out.ipa" )
 cp "$WORK/out.ipa" "$OUT"
 if ! unzip -l "$OUT" | grep -qE "Payload/[^/]+\.app/Info\.plist"; then
