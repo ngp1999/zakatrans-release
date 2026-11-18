@@ -51,7 +51,7 @@ security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASS" "$K
 security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
 
 IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" \
-  | grep -o '"\(Apple Distribution\|iPhone Distribution\)[^"]*"' | head -1 | tr -d '"' || true)"
+  | grep -oE '"(Apple Distribution|iPhone Distribution)[^"]*"' | head -1 | tr -d '"' || true)"
 [ -n "$IDENTITY" ] || fail "钥匙串里没有 Distribution 证书，检查 p12 是否导错、密码是否正确。"
 log "签名身份：$IDENTITY"
 
@@ -73,8 +73,140 @@ if [ -n "$APPEX" ]; then
 fi
 
 if [ -n "${APP_BUNDLE_ID:-}" ] && [ "$APP_BUNDLE_ID" != "$APP_ID_FROM_PLIST" ]; then
-  fail "描述文件是给 $APP_BUNDLE_ID 的，但包里是 $APP_ID_FROM_PLIST，签了也装不上。"
+  fail "描述文件是给 ${APP_BUNDLE_ID} 的，但包里是 ${APP_ID_FROM_PLIST}，签了也装不上。"
 fi
+
+# ── 2b. Mach-O 段表自检/自愈 ────────────────────────────────────
+# 旧签名被截掉、但 __LINKEDIT 段声明的长度没跟着改，二进制就声称存在一段
+# 超出文件尾的区间。这种包 codesign 会直接拒绝：
+#   ZakaTrans.app/PlugIns/Broadcast.appex: main executable failed strict validation
+# 这里在签名前统一修好：截签名 → 段表长度改回真实值 → 去掉签名加载命令。
+log "2b/9 检查 Mach-O 段表"
+python3 - "$WORK/payload/Payload" <<'PY'
+import os, struct, sys
+
+LC_SEGMENT_64 = 0x19
+LC_CODE_SIGNATURE = 0x1D
+MAGIC = 0xFEEDFACF
+PAGE = 0x4000
+
+
+def u32(d, o):
+    return struct.unpack("<I", d[o:o + 4])[0]
+
+
+def u64(d, o):
+    return struct.unpack("<Q", d[o:o + 8])[0]
+
+
+def load_cmds(d):
+    ncmds = u32(d, 16)
+    sizeofcmds = u32(d, 20)
+    off, cmds = 32, []
+    for i in range(ncmds):
+        cmd, size = struct.unpack("<II", d[off:off + 8])
+        cmds.append((i, off, cmd, size))
+        off += size
+    return ncmds, sizeofcmds, cmds
+
+
+def fix(path):
+    d = bytearray(open(path, "rb").read())
+    orig_len = len(d)
+    ncmds, sizeofcmds, cmds = load_cmds(d)
+    sig = None
+    linkedit = None
+    for i, off, cmd, size in cmds:
+        if cmd == LC_CODE_SIGNATURE and size >= 16:
+            sig = (i, off, size, u32(d, off + 8), u32(d, off + 12))
+        elif cmd == LC_SEGMENT_64 and d[off + 8:off + 24].rstrip(b"\0") == b"__LINKEDIT":
+            linkedit = off
+    if linkedit is None:
+        raise SystemExit("%s: 找不到 __LINKEDIT 段" % path)
+
+    le_fileoff = u64(d, linkedit + 40)
+    le_filesize = u64(d, linkedit + 48)
+    le_vmsize = u64(d, linkedit + 32)
+
+    notes = []
+    if sig and sig[3] == 0 and sig[4] == 0:
+        notes.append("签名命令是空的")
+    if le_fileoff + le_filesize > orig_len:
+        notes.append("__LINKEDIT 超出文件 %d 字节" % (le_fileoff + le_filesize - orig_len))
+
+    if sig and 0 < sig[3] <= len(d):
+        d = d[:sig[3]]
+        notes.append("清掉旧签名段")
+
+    filesize = len(d) - le_fileoff
+    if filesize < 0:
+        raise SystemExit("%s: __LINKEDIT 起点超过文件长度" % path)
+    vmsize = le_vmsize
+    while vmsize < filesize:
+        vmsize += PAGE
+    struct.pack_into("<Q", d, linkedit + 48, filesize)
+    struct.pack_into("<Q", d, linkedit + 32, vmsize)
+
+    if sig:
+        i, cmd_off, size = sig[0], sig[1], sig[2]
+        if i == ncmds - 1:
+            d[cmd_off:cmd_off + size] = b"\0" * size
+            struct.pack_into("<I", d, 16, ncmds - 1)
+            struct.pack_into("<I", d, 20, sizeofcmds - size)
+        else:
+            struct.pack_into("<IIQ", d, cmd_off, 0x2A, 16, 0)
+
+    open(path, "wb").write(d)
+    return "、".join(dict.fromkeys(notes)) if notes else "本来就是好的"
+
+
+def check(path):
+    d = open(path, "rb").read()
+    ncmds, sizeofcmds, cmds = load_cmds(d)
+    for i, off, cmd, size in cmds:
+        if cmd == LC_SEGMENT_64:
+            name = d[off + 8:off + 24].rstrip(b"\0").decode()
+            fileoff, filesize = u64(d, off + 40), u64(d, off + 48)
+            if fileoff + filesize > len(d) and name != "__PAGEZERO":
+                return "%s 段超出文件尾" % name
+        elif cmd == LC_CODE_SIGNATURE:
+            return "还残留 LC_CODE_SIGNATURE"
+    return None
+
+
+root = sys.argv[1]
+targets = []
+for base, dirs, files in os.walk(root):
+    for fn in files:
+        p = os.path.join(base, fn)
+        try:
+            with open(p, "rb") as f:
+                if f.read(4) == b"\xcf\xfa\xed\xfe":
+                    targets.append(p)
+        except OSError:
+            pass
+
+if not targets:
+    raise SystemExit("Payload 里没找到 64 位 Mach-O，包结构不对")
+
+bad = 0
+for p in targets:
+    rel = os.path.relpath(p, root)
+    try:
+        print("  %s：%s" % (rel, fix(p)))
+        err = check(p)
+    except Exception as e:  # noqa: BLE001
+        print("  %s：修正失败 %s" % (rel, e))
+        bad += 1
+        continue
+    if err:
+        print("  ❌ %s：%s" % (rel, err))
+        bad += 1
+
+if bad:
+    raise SystemExit("段表自检没过，停止签名")
+print("  段表全部一致，可以签名")
+PY
 
 # 构建号：苹果只认比上一次高的，重复传同一个号会被 ITMS-90189 顶回来
 BUILD_NUMBER="${BUILD_NUMBER:-$(date +%m%d%H%M)}"
@@ -163,12 +295,24 @@ if [ -n "$ASC_KEY_ID" ] && [ -n "$ASC_ISSUER_ID" ] && [ -n "$ASC_KEY_FILE" ]; th
   chmod 600 "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
 
   set +e
-  xcrun altool --upload-app -f "$OUT" -t ios \
-    --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID" --verbose 2>&1 | tee "$WORK/upload.log"
-  STATUS=${PIPESTATUS[0]}
+  if xcrun --find altool >/dev/null 2>&1; then
+    log "上传工具：altool"
+    xcrun altool --upload-app -f "$OUT" -t ios \
+      --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID" --verbose 2>&1 | tee "$WORK/upload.log"
+    STATUS=${PIPESTATUS[0]}
+  elif xcrun --find iTMSTransporter >/dev/null 2>&1; then
+    log "上传工具：Transporter（这台镜像没带 altool）"
+    xcrun iTMSTransporter -m upload -assetFile "$OUT" \
+      -apiKey "$ASC_KEY_ID" -apiIssuer "$ASC_ISSUER_ID" -v informational 2>&1 | tee "$WORK/upload.log"
+    STATUS=${PIPESTATUS[0]}
+  else
+    : > "$WORK/upload.log"
+    STATUS=127
+    log "⚠ 这台机器上既没有 altool 也没有 Transporter"
+  fi
   set -e
 
-  if grep -qE "No errors uploading|UPLOAD SUCCEEDED|success-message" "$WORK/upload.log" && [ "$STATUS" -eq 0 ]; then
+  if [ "$STATUS" -eq 0 ] && grep -qE "No errors uploading|UPLOAD SUCCEEDED|success-message|Package upload succeeded" "$WORK/upload.log"; then
     echo "✅ UPLOAD_OK"
   else
     echo "—— 苹果返回的错误码 ——"
