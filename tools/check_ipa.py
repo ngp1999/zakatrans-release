@@ -627,7 +627,8 @@ def check_signed(app, appex_list):
             err("%s：codesign 校验不过 — %s" % (label, r.stderr.strip()[:200]))
         r = subprocess.run(["codesign", "-d", "--entitlements", ":-", target],
                            capture_output=True, text=True)
-        ent = r.stdout
+        # 不同版本的 codesign 有的写 stdout、有的写 stderr，两个都收，别误判成「缺权限」。
+        ent = (r.stdout or "") + (r.stderr or "")
         if "get-task-allow" in ent and "true" in ent.split("get-task-allow")[1][:80]:
             err("%s：entitlements 里 get-task-allow=true（这是开发签名，商店包必须没有）" % label)
         if "platform-application" in ent:
