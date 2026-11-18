@@ -1,0 +1,143 @@
+name: ZakaTrans -> App Store Connect
+
+# 一键：云端申请证书 / App ID / 描述文件 → 重签 → 自检 → 上传 App Store Connect。
+# 传上去的包先出现在 TestFlight，TestFlight 跑通后在同一条构建上直接提正式审核，
+# 不用再传第二次。
+#
+# 只需要 3 个 Secret（仓库 Settings → Secrets and variables → Actions）：
+#   ASC_KEY_ID       App Store Connect API Key 的 Key ID
+#   ASC_ISSUER_ID    API Key 的 Issuer ID
+#   ASC_KEY_P8       AuthKey_XXXX.p8 转成 base64（一整行）
+#
+# 苹果后台只需人工做一件事：把 App Group group.com.zaka.trans 建好并勾到
+# com.zakatrans.app 与 com.zakatrans.app.ext 两个 App ID 上（要点 Configure 选具体 group）。
+# 没勾好，流水线会在签名前停下并指名道姓告诉你缺哪个，不会签出一个录屏是废的包。
+
+on:
+  workflow_dispatch:
+    inputs:
+      ipa:
+        description: "要上传的包（仓库根目录下的文件名）"
+        required: false
+        default: "ZakaTrans-AppStore-1.0.0.ipa"
+      app_bundle_id:
+        description: "主 App bundle id（必须跟包内一致）"
+        required: false
+        default: "com.zakatrans.app"
+      ext_bundle_id:
+        description: "扩展 bundle id（不带扩展的包留空）"
+        required: false
+        default: "com.zakatrans.app.ext"
+      app_group:
+        description: "App Group（不用录屏扩展就留空）"
+        required: false
+        default: "group.com.zaka.trans"
+      skip_upload:
+        description: "只签名不上传，填 true"
+        required: false
+        default: "false"
+      build_number:
+        description: "构建号（留空按时间自动生成，重复上传不会撞车）"
+        required: false
+        default: ""
+
+jobs:
+  sign-and-upload:
+    runs-on: macos-15
+    timeout-minutes: 50
+
+    steps:
+      - name: 取代码
+        uses: actions/checkout@v4
+
+      - name: 显示环境
+        run: |
+          xcodebuild -version
+          echo "Python: $(python3 --version)"
+
+      - name: 装依赖
+        run: |
+          python3 -m pip install --quiet --upgrade pip
+          python3 -m pip install --quiet pyjwt cryptography
+
+      - name: 准备 API 密钥
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        run: |
+          set -euo pipefail
+          [ -n "${ASC_KEY_P8:-}" ] || { echo "❌ 没填 ASC_KEY_P8"; exit 1; }
+          [ -n "${ASC_KEY_ID:-}" ] || { echo "❌ 没填 ASC_KEY_ID"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/keys"
+          KEY="$RUNNER_TEMP/keys/AuthKey_${ASC_KEY_ID}.p8"
+          if printf '%s' "$ASC_KEY_P8" | base64 --decode > "$KEY" 2>/dev/null; then
+            :
+          else
+            printf '%s' "$ASC_KEY_P8" > "$KEY"
+          fi
+          chmod 600 "$KEY"
+          if ! grep -q "BEGIN PRIVATE KEY" "$KEY"; then
+            echo "❌ ASC_KEY_P8 不是有效的 p8。用 PowerShell 转一次："
+            echo '   [Convert]::ToBase64String([IO.File]::ReadAllBytes("AuthKey_XXXX.p8"))'
+            exit 1
+          fi
+          echo "ASC_KEY_FILE=$KEY" >> "$GITHUB_ENV"
+          echo "✅ 密钥就位"
+
+      - name: 解析要上传的包
+        id: pick
+        env:
+          CHOICE: ${{ github.event.inputs.ipa }}
+        run: |
+          set -euo pipefail
+          IPA_NAME="${CHOICE:-ZakaTrans-AppStore-1.0.0.ipa}"
+          [ -f "$IPA_NAME" ] || { echo "❌ 仓库里找不到 $IPA_NAME"; ls -la *.ipa || true; exit 1; }
+          echo "IPA_NAME=$IPA_NAME" >> "$GITHUB_ENV"
+          echo "选中的包：$IPA_NAME ($(du -h "$IPA_NAME" | cut -f1))"
+
+      - name: 上机前自检（结构 / 图标 / 隐私清单 / SDK）
+        run: |
+          set -euo pipefail
+          python3 tools/check_ipa.py "$IPA_NAME"
+
+      - name: 自动申请签名材料（App ID / 证书 / 描述文件）
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          APP_BUNDLE_ID: ${{ github.event.inputs.app_bundle_id }}
+          EXT_BUNDLE_ID: ${{ github.event.inputs.ext_bundle_id }}
+          APP_GROUP: ${{ github.event.inputs.app_group }}
+        run: |
+          set -euo pipefail
+          python3 tools/asc_provision.py
+
+      - name: 签名 + 自检 + 上传
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          SKIP_UPLOAD: ${{ github.event.inputs.skip_upload }}
+          BUILD_NUMBER: ${{ github.event.inputs.build_number }}
+        run: |
+          set -euo pipefail
+          if [ "${SKIP_UPLOAD}" = "true" ]; then
+            unset ASC_KEY_ID ASC_ISSUER_ID
+          fi
+          IPA="$IPA_NAME" bash tools/sign_and_upload.sh
+
+      - name: 留存签名好的包
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-ipa
+          path: ZakaTrans-AppStore-signed.ipa
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: 留住签名材料（下次重签不用重新申请证书）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signing-materials
+          path: provision/
+          if-no-files-found: warn
+          retention-days: 14
