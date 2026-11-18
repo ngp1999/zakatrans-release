@@ -353,6 +353,13 @@ if xcrun --find actool >/dev/null 2>&1; then
   if [ -s "$ACT_OUT/Assets.car" ]; then
     CAR_OK=1
     cp "$ACT_OUT/Assets.car" "$APP/Assets.car"
+    # Xcode 编资源目录时也会把这两张编好的图标（AppIcon60x60@2x.png /
+    # AppIcon76x76@2x~ipad.png）一起放进包里，老系统靠它们兜底。
+    # 苹果的分析器在找「120x120 / 152x152 的 png」时也会看这几张。
+    for pn in "$ACT_OUT"/*.png; do
+      [ -e "$pn" ] || continue
+      cp "$pn" "$APP/"
+    done
     # 把 actool 的 partial plist 里的 CFBundleIconName 并进 Info.plist。
     # 缺这一项苹果直接退（Missing Info.plist value CFBundleIconName）。
     python3 - "$WORK/asset-partial.plist" "$APP/Info.plist" <<'PY' || true
@@ -367,13 +374,38 @@ except Exception:  # noqa: BLE001
     raise SystemExit(0)
 if not isinstance(p, dict):
     raise SystemExit(0)
-info = plistlib.load(open(plist, "rb"))
-# 只取 CFBundleIconName。CFBundleIcons 保留包里原来的（那些 PNG 确实都在），
-# 换成 actool 那套 AppIcon60x60 名字反而会指向不存在的文件，自检会当场拦下。
-if p.get("CFBundleIconName"):
-    info["CFBundleIconName"] = p["CFBundleIconName"]
-info.setdefault("CFBundleIconName", "AppIcon")
-plistlib.dump(info, open(plist, "wb"), fmt=plistlib.FMT_BINARY)
+with open(plist, "rb") as f:
+    info = plistlib.load(f)
+
+name = p.get("CFBundleIconName") or "AppIcon"
+
+# 按 actool 的输出整份对齐，别只抄 CFBundleIconName 一项。
+# Xcode 编出来的包长这样（这一整套苹果的分析器都认）：
+#   CFBundleIconName = AppIcon
+#   CFBundleIcons      = {CFBundlePrimaryIcon = {CFBundleIconFiles = (AppIcon60x60), CFBundleIconName = AppIcon}}
+#   CFBundleIcons~ipad = {CFBundlePrimaryIcon = {CFBundleIconFiles = (AppIcon60x60, AppIcon76x76), CFBundleIconName = AppIcon}}
+info["CFBundleIconName"] = name
+if isinstance(p.get("CFBundleIcons"), dict):
+    info["CFBundleIcons"] = p["CFBundleIcons"]
+if isinstance(p.get("CFBundleIcons~ipad"), dict):
+    info["CFBundleIcons~ipad"] = p["CFBundleIcons~ipad"]
+for key in ("CFBundleIcons", "CFBundleIcons~ipad"):
+    d = info.get(key)
+    if isinstance(d, dict) and isinstance(d.get("CFBundlePrimaryIcon"), dict):
+        d["CFBundlePrimaryIcon"].setdefault("CFBundleIconName", name)
+
+# 老式顶层 CFBundleIconFiles（iOS 3.2~6 那套散图名字数组）删掉：
+# iOS 11 以后苹果只认资源目录，留着它会让分析器走「找散图」的老路，
+# 结果就是同时报「缺 120x120/152x152」+「缺 CFBundleIconName」。
+info.pop("CFBundleIconFiles", None)
+
+with open(plist, "wb") as f:
+    plistlib.dump(info, f, fmt=plistlib.FMT_BINARY)
+
+print("  Info.plist 图标键：CFBundleIconName=%s；CFBundleIcons.CFBundlePrimaryIcon=%s；~ipad=%s"
+      % (name,
+         (info.get("CFBundleIcons") or {}).get("CFBundlePrimaryIcon", {}).get("CFBundleIconFiles"),
+         (info.get("CFBundleIcons~ipad") or {}).get("CFBundlePrimaryIcon", {}).get("CFBundleIconFiles")))
 PY
     /usr/libexec/PlistBuddy -c "Print :CFBundleIconName" "$APP/Info.plist" >/dev/null 2>&1 \
       || /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AppIcon" "$APP/Info.plist"
@@ -480,6 +512,38 @@ log "已生成：$OUT ($(du -h "$OUT" | cut -f1))"
 log "8b/9 提交前自检"
 if ! python3 tools/check_ipa.py "$OUT" --signed; then
   fail "自检没过（上面列出的拦路项先修），这个包不往上传。"
+fi
+
+# ── 8c. 用苹果自己的分析器复核（altool 上传前就是拿 swinfo 看包的）──
+# 目的：不再靠猜。苹果看到什么，这里就打什么；它看不到图标声明就当场停下，
+# 别白花一次上传。
+log "8c/9 复核苹果分析器眼里的包"
+APP_NAME="$(basename "$APP")"
+if unzip -p "$OUT" "Payload/$APP_NAME/Info.plist" > "$WORK/final.plist" 2>/dev/null; then
+  echo "  最终包里的图标声明："
+  plutil -p "$WORK/final.plist" | grep -E "CFBundleIcon(Name|s|Files)" | sed 's/^/    /' || true
+fi
+
+SWINFO="$(ls -d /Applications/Xcode*.app/Contents/SharedFrameworks/ContentDelivery.framework/Resources/swinfo 2>/dev/null | head -1 || true)"
+if [ -n "$SWINFO" ]; then
+  set +e
+  "$SWINFO" -f "$OUT" -o "$WORK/desc.plist" --plistFormat xml --platform ios > "$WORK/swinfo.log" 2>&1
+  SW=$?
+  set -e
+  if [ -s "$WORK/desc.plist" ] && grep -q "CFBundleShortVersionString" "$WORK/desc.plist"; then
+    if grep -q "CFBundleIconName" "$WORK/desc.plist"; then
+      log "苹果分析器看到了 CFBundleIconName 和资源目录，继续"
+    else
+      echo "  分析器抽出来的相关行："
+      grep -nE "CFBundleIcon|Assets|AppIcon|120x120|152x152" "$WORK/desc.plist" | head -12 | sed 's/^/    /' || true
+      fail "苹果的分析器在包里没看到 CFBundleIconName —— 这样传上去必报缺图标。上面是它实际抽到的东西。"
+    fi
+  else
+    log "⚠ 分析器没产出可用的描述文件（退出码 $SW），跳过这一步"
+    sed 's/^/    /' "$WORK/swinfo.log" | head -6 || true
+  fi
+else
+  log "⚠ 这台机器上找不到苹果的分析器，跳过"
 fi
 
 # ── 9. 上传 ────────────────────────────────────────────────────

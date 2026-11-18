@@ -532,6 +532,41 @@ def align_segment_vmsizes(path, info):
     return None
 
 
+def pad_text_filesize(path, info):
+    """
+    __TEXT 段的 filesize 按页取整——ld64 本来就这么干。
+
+    为什么必须补：苹果校验加密范围时，是拿 cryptoff+cryptsize 去跟 __TEXT 段
+    在文件里的实际范围比的。ld64 链接出来的 __TEXT filesize 一定是页的整数倍
+    （头部/加载命令那一块会被填到页边界），而 ld64.lld 不填，留下
+    0x246ac 这种尾巴 —— 加密范围算到 0x28000，段却声明到 0x246ac，
+    苹果就报 'Mismatched Encryption Extents'（还附一句「请用苹果认可的工具构建」）。
+
+    这里把 filesize 补到页边界，中间那段本来就是 0 填充，一个字节的数据都不动。
+    """
+    text = segs_by_name(info).get("__TEXT")
+    if text is None:
+        return None
+    end = text["fileoff"] + text["filesize"]
+    if text["filesize"] % PAGE == 0:
+        return None
+    want = (end + PAGE - 1) // PAGE * PAGE
+    nxt = [s["fileoff"] for s in info["segs"]
+           if s["name"] != "__PAGEZERO" and s["fileoff"] > text["fileoff"]]
+    want = min([want] + nxt + [info["size"]])
+    if want <= end:
+        return None
+    gap = info["data"][end:want]
+    if gap.strip(b"\0"):
+        return None                      # 中间有别的内容，不敢动
+    d = bytearray(info["data"])
+    struct.pack_into("<Q", d, text["hdr"] + 48, want - text["fileoff"])
+    with open(path, "wb") as f:
+        f.write(d)
+    return "__TEXT 段 filesize 0x%x→0x%x（按页补齐，加密范围末端与段尾对齐）" % (
+        text["filesize"], want - text["fileoff"])
+
+
 def align_all(path):
     """修节的错位 + 补加密信息 + 给签名命令留位置 + 段 vmsize 对齐。"""
     info = macho_scan(path)
@@ -549,6 +584,13 @@ def align_all(path):
     info = macho_scan(path)
     if info.get("error"):
         return notes, info["error"]
+
+    mpad = pad_text_filesize(path, info)
+    if mpad:
+        notes.append(mpad)
+        info = macho_scan(path)
+        if info.get("error"):
+            return notes, info["error"]
 
     _, msg = add_encryption_info(path, info)
     if msg:
@@ -994,8 +1036,19 @@ def check_macho(path, label):
                 "苹果报 'Mismatched Encryption Extents'，必退。跑 --fix-dir 会自动改正。"
                 % (label, cryptoff, cryptsize, want[0], want[1]))
         else:
-            ok("%s：加密信息正常（cryptid=%d，范围 0x%x+0x%x）"
-               % (label, cryptid, cryptoff, cryptsize))
+            text_seg = segs_by_name(info).get("__TEXT") or {}
+            seg_end = text_seg.get("fileoff", 0) + text_seg.get("filesize", 0)
+            if text_seg.get("filesize", 0) % PAGE:
+                err("%s：__TEXT 段 filesize=0x%x 不是 16K 的整数倍（加密范围末端落在段外，"
+                    "苹果报 Mismatched Encryption Extents）。跑 --fix-dir 会按页补齐，数据一个字节不动。"
+                    % (label, text_seg.get("filesize", 0)))
+            elif cryptoff + cryptsize != seg_end:
+                err("%s：加密范围末端 0x%x 和 __TEXT 段文件末尾 0x%x 差 0x%x 字节，"
+                    "苹果报 Mismatched Encryption Extents。跑 --fix-dir 会自动对齐。"
+                    % (label, cryptoff + cryptsize, seg_end, abs(cryptoff + cryptsize - seg_end)))
+            else:
+                ok("%s：加密信息正常（cryptid=%d，范围 0x%x+0x%x，与 __TEXT 段尾 0x%x 齐平）"
+                   % (label, cryptid, cryptoff, cryptsize, seg_end))
 
     # 段结构：对齐 + 边界
     body = [s for s in info["segs"] if s["name"] != "__PAGEZERO"]
