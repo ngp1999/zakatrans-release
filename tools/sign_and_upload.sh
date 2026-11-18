@@ -220,6 +220,102 @@ if bad:
 print("  段表全部一致，可以签名")
 PY
 
+# ── 2b2. 复核 ─────────────────────────────────────────────────
+# 上面这步会清掉二进制里的旧签名命令。如果送进来的是已签名的包，
+# 2a 那轮会因为「有签名数据」跳过加密信息，清完签名这里再补一次。
+log "2b2/9 复核包结构（清签名后再补一次加密信息）"
+python3 tools/check_ipa.py --fix-dir "$WORK/payload/Payload" || fail "包结构复核失败。"
+
+# ── 2c. 图标资源目录 ──────────────────────────────────────────
+# 苹果对 iOS 11 以上的包只从 Assets.car 里找 App 图标，散落的 Icon-*.png 一律不认，
+# 于是报「Missing required icon file 120x120 / 152x152」+「Missing CFBundleIconName」。
+# 这一步用 Xcode 自带的 actool 现场编一个（runner 是 macOS，工具自带），
+# 编完把 CFBundleIconName 指过去。散图标照样留着，老系统还要用。
+log "2c/9 编译图标资源目录（actool）"
+MINOS="$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$APP/Info.plist" 2>/dev/null || echo 16.0)"
+ICONSET="$WORK/Assets.xcassets/AppIcon.appiconset"
+mkdir -p "$ICONSET"
+python3 - "$APP" "$(dirname "$WORK/payload")" "$ICONSET" <<'PY'
+import json, os, shutil, struct, sys
+
+app, root, iconset = sys.argv[1], sys.argv[2], sys.argv[3]
+
+# (idiom, size, scale, 包里的文件名)
+MAP = [
+    ("iphone", "20x20", "2x", "Icon-20@2x.png"),
+    ("iphone", "20x20", "3x", "Icon-20@3x.png"),
+    ("iphone", "29x29", "2x", "Icon-29@2x.png"),
+    ("iphone", "29x29", "3x", "Icon-29@3x.png"),
+    ("iphone", "40x40", "2x", "Icon-40@2x.png"),
+    ("iphone", "40x40", "3x", "Icon-40@3x.png"),
+    ("iphone", "60x60", "2x", "Icon-60@2x.png"),
+    ("iphone", "60x60", "3x", "Icon-60@3x.png"),
+    ("ipad", "20x20", "1x", "Icon-20.png"),
+    ("ipad", "20x20", "2x", "Icon-20@2x.png"),
+    ("ipad", "29x29", "1x", "Icon-29.png"),
+    ("ipad", "29x29", "2x", "Icon-29@2x.png"),
+    ("ipad", "40x40", "1x", "Icon-40.png"),
+    ("ipad", "40x40", "2x", "Icon-40@2x.png"),
+    ("ipad", "76x76", "1x", "Icon-76.png"),
+    ("ipad", "76x76", "2x", "Icon-76@2x.png"),
+    ("ipad", "83.5x83.5", "2x", "Icon-83.5@2x.png"),
+]
+
+images = []
+missing = []
+for idiom, size, scale, fname in MAP:
+    src = os.path.join(app, fname)
+    if not os.path.exists(src):
+        missing.append(fname)
+        continue
+    dst = os.path.join(iconset, "icon-%s-%s@%s.png" % (idiom, size.split("x")[0], scale))
+    shutil.copyfile(src, dst)
+    images.append({"idiom": idiom, "size": size, "scale": scale,
+                   "filename": os.path.basename(dst)})
+
+# 1024 商店图标（App Store 必带，不能有 alpha）
+mk = os.path.join(root, "iTunesArtwork@2x")
+if os.path.exists(mk):
+    dst = os.path.join(iconset, "icon-marketing-1024@1x.png")
+    shutil.copyfile(mk, dst)
+    images.append({"idiom": "ios-marketing", "size": "1024x1024", "scale": "1x",
+                   "filename": os.path.basename(dst)})
+else:
+    missing.append("iTunesArtwork@2x(1024)")
+
+with open(os.path.join(iconset, "Contents.json"), "w") as f:
+    json.dump({"images": images, "info": {"version": 1, "author": "zaka"}}, f, indent=2)
+
+print("  图标条目：%d 个%s" % (len(images), ("；缺：" + "、".join(missing)) if missing else ""))
+PY
+
+CAR_OK=0
+if xcrun --find actool >/dev/null 2>&1; then
+  set +e
+  xcrun actool "$WORK/Assets.xcassets" \
+    --compile "$WORK/asset-out" \
+    --platform iphoneos \
+    --minimum-deployment-target "$MINOS" \
+    --target-device iphone --target-device ipad \
+    --app-icon AppIcon \
+    --output-partial-info-plist "$WORK/asset-partial.plist" \
+    --output-format human-readable-text 2>&1 | sed 's/^/    /'
+  ACT_STATUS=${PIPESTATUS[0]}
+  set -e
+  if [ -s "$WORK/asset-out/Assets.car" ]; then
+    CAR_OK=1
+    cp "$WORK/asset-out/Assets.car" "$APP/Assets.car"
+    /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AppIcon" "$APP/Info.plist" 2>/dev/null \
+      || /usr/libexec/PlistBuddy -c "Set :CFBundleIconName AppIcon" "$APP/Info.plist"
+    log "已编入 Assets.car（$(du -h "$APP/Assets.car" | cut -f1)），CFBundleIconName=AppIcon"
+  else
+    log "⚠ actool 退出码 $ACT_STATUS，没产出 Assets.car —— 报错原文在上面，这轮图标大概率还会被退"
+  fi
+else
+  log "⚠ 这台机器上找不到 actool（非 Xcode 环境），跳过资源目录"
+fi
+
+
 # 构建号：苹果只认比上一次高的，重复传同一个号会被 ITMS-90189 顶回来
 BUILD_NUMBER="${BUILD_NUMBER:-$(date +%m%d%H%M)}"
 log "设置构建号 CFBundleVersion = $BUILD_NUMBER"

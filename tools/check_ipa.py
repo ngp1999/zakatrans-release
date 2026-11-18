@@ -56,6 +56,127 @@ def png_info(path):
     return w, h, color_type  # color_type 6 = RGBA（带透明）
 
 
+def _paeth(a, b, c):
+    p = a + b - c
+    pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+    if pa <= pb and pa <= pc:
+        return a
+    return b if pb <= pc else c
+
+
+def png_decode(path):
+    """解 PNG：只处理 8 位、非隔行的灰度/RGB/带 alpha 图（够用了）。"""
+    import zlib
+    with open(path, "rb") as f:
+        raw = f.read()
+    if raw[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    pos, idat, w = 8, [], None
+    h = depth = ctype = interlace = 0
+    while pos + 8 <= len(raw):
+        ln = struct.unpack(">I", raw[pos:pos + 4])[0]
+        typ = raw[pos + 4:pos + 8]
+        body = raw[pos + 8:pos + 8 + ln]
+        if typ == b"IHDR":
+            w, h, depth, ctype, _, _, interlace = struct.unpack(">IIBBBBB", body)
+        elif typ == b"IDAT":
+            idat.append(body)
+        elif typ == b"IEND":
+            break
+        pos += 12 + ln
+    if not w or depth != 8 or interlace != 0 or ctype not in (0, 2, 4, 6):
+        return None
+    nch = {0: 1, 2: 3, 4: 2, 6: 4}[ctype]
+    data = zlib.decompress(b"".join(idat))
+    stride = w * nch
+    out = bytearray(h * stride)
+    prev = bytearray(stride)
+    p = 0
+    for y in range(h):
+        ft = data[p]
+        p += 1
+        line = bytearray(data[p:p + stride])
+        p += stride
+        for x in range(stride):
+            a = line[x - nch] if x >= nch else 0
+            b = prev[x]
+            c = prev[x - nch] if x >= nch else 0
+            if ft == 1:
+                line[x] = (line[x] + a) & 0xFF
+            elif ft == 2:
+                line[x] = (line[x] + b) & 0xFF
+            elif ft == 3:
+                line[x] = (line[x] + ((a + b) >> 1)) & 0xFF
+            elif ft == 4:
+                line[x] = (line[x] + _paeth(a, b, c)) & 0xFF
+        out[y * stride:(y + 1) * stride] = line
+        prev = line
+    return w, h, nch, bytes(out)
+
+
+def png_write_rgb(path, w, h, rgb):
+    import zlib
+
+    def chunk(typ, body):
+        return (struct.pack(">I", len(body)) + typ + body
+                + struct.pack(">I", zlib.crc32(typ + body) & 0xFFFFFFFF))
+
+    stride = w * 3
+    rows = b"".join(b"\x00" + rgb[y * stride:(y + 1) * stride] for y in range(h))
+    ihdr = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr)
+                + chunk(b"IDAT", zlib.compress(rows, 9)) + chunk(b"IEND", b""))
+
+
+def flatten_icon(path):
+    """
+    把带透明通道的图标压成不透明 RGB。
+
+    苹果对 App 图标是硬性要求：不能有 alpha。透明的地方（比如圆角外面）
+    用图里不透明像素的平均色填平——正好让图标变成满幅方块，系统自己会切圆角。
+    """
+    dec = png_decode(path)
+    if not dec:
+        return False
+    w, h, nch, px = dec
+    if nch == 3:
+        return False
+
+    if nch == 1:                       # 灰度，没有 alpha
+        rgb = bytearray(w * h * 3)
+        for i in range(w * h):
+            v = px[i]
+            rgb[i * 3] = rgb[i * 3 + 1] = rgb[i * 3 + 2] = v
+        png_write_rgb(path, w, h, bytes(rgb))
+        return True
+
+    # 灰度+alpha 或 RGBA
+    def comp(i):
+        if nch == 2:
+            v = px[i * 2]
+            return v, v, v, px[i * 2 + 1]
+        return px[i * 4], px[i * 4 + 1], px[i * 4 + 2], px[i * 4 + 3]
+
+    sr = sg = sb = n = 0
+    for i in range(w * h):
+        r, g, b, a = comp(i)
+        if a >= 250:
+            sr += r
+            sg += g
+            sb += b
+            n += 1
+    br, bg, bb = (sr // n, sg // n, sb // n) if n else (255, 255, 255)
+    out = bytearray(w * h * 3)
+    for i in range(w * h):
+        r, g, b, a = comp(i)
+        out[i * 3] = (r * a + br * (255 - a)) // 255
+        out[i * 3 + 1] = (g * a + bg * (255 - a)) // 255
+        out[i * 3 + 2] = (b * a + bb * (255 - a)) // 255
+    png_write_rgb(path, w, h, bytes(out))
+    return True
+
+
 # ── Mach-O 常量 ──────────────────────────────────────────────
 MH_MAGIC_64 = 0xFEEDFACF
 LC_BUILD_VERSION = 0x32
@@ -119,6 +240,7 @@ def macho_scan(path):
             info["sig_datasize"] = u32(d, off + 12)
         elif cmd == LC_ENCRYPTION_INFO_64:
             info["has_enc"] = True
+            info["enc_off"] = off
             info["enc"] = (u32(d, off + 8), u32(d, off + 12), u32(d, off + 16))
         elif cmd == LC_MAIN:
             info["main"] = (off, u64(d, off + 8))
@@ -150,18 +272,69 @@ def segs_by_name(info):
 
 
 # ── 规范化：补加密信息 ───────────────────────────────────────
+def want_encryption_extents(info):
+    """
+    按苹果自家链接器（ld64）的口径算出 cryptoff / cryptsize：
+
+      cryptoff  = 头部+加载命令所占页数之后的那一页起点
+      cryptsize = __TEXT 里最后一个节结束位置按页向上取整，再减去 cryptoff
+
+    照抄 ld64 OutputFile.cpp / HeaderAndLoadCommands.hpp 的做法。
+    苹果上传校验（Mismatched Encryption Extents）就是拿这两个值跟 __TEXT 段
+    的实际范围比，差一截就退。注意末尾是「向上取整」，不是向下截断——
+    上一版按向下取整算，主包少了 0x4000、扩展少了 0x4000，正是这次的报错来源。
+    """
+    text = segs_by_name(info).get("__TEXT")
+    if text is None:
+        return None, "找不到 __TEXT 段"
+    header_end = info["header_end"]
+    pages = (header_end + PAGE - 1) // PAGE
+    if header_end % PAGE == 0:      # 加载命令正好占满整页时，正文页要再往后挪一页
+        pages += 1
+    cryptoff = pages * PAGE
+
+    ends = [s["offset"] + s["size"] for s in text["sects"]
+            if s["size"] > 0 and s["offset"] > 0 and s["name"] != "__oslogstring"]
+    if not ends:
+        return None, "__TEXT 里没有落在文件中的节"
+    end = (max(ends) + PAGE - 1) // PAGE * PAGE
+    cryptsize = max(0, end - cryptoff)
+    return (cryptoff, cryptsize), None
+
+
 def add_encryption_info(path, info):
     """
-    补 LC_ENCRYPTION_INFO_64。
+    补 / 修 LC_ENCRYPTION_INFO_64（cryptid=0）。
 
-    加载命令区后面只剩十几字节，装不下 24 字节的新命令，所以把 __TEXT 段内的
-    节数据在文件里整体后移（16 字节对齐），同时更新各节的文件偏移；
-    虚拟地址一个都不动，代码里的引用全不受影响。
+    缺这条苹果报 'encryption info missing or invalid'；
+    有了但 cryptoff/cryptsize 跟 __TEXT 对不上，报 'Mismatched Encryption Extents'。
+    所以两种情况都在这里处理：
+
+      · 已有命令 → 就地改正两个数值，不挪任何数据；
+      · 没有命令 → 加载命令区后面只剩十几字节，装不下 24 字节的新命令，
+        把 __TEXT 段内的节数据在文件里整体后移（16 字节对齐），同时更新各节的
+        文件偏移；虚拟地址一个都不动，代码里的引用全不受影响。
     """
-    if info.get("has_enc"):
-        return None, "已有 LC_ENCRYPTION_INFO_64"
     if info.get("has_sig") and info.get("sig_datasize", 0) > 0:
         return None, "已签名（有签名数据），跳过"
+
+    want, problem = want_encryption_extents(info)
+    if want is None:
+        raise SystemExit("%s：%s" % (path, problem))
+    cryptoff, cryptsize = want
+
+    # 已有这条命令：只改数值
+    if info.get("has_enc") and "enc_off" in info:
+        cur_off, cur_size, cur_id = info["enc"]
+        cur = (cur_off, cur_size)
+        if cur == want and cur_id == 0:
+            return None, None      # 已经是苹果口径，不动也不打扰日志
+        d = bytearray(info["data"])
+        struct.pack_into("<IIII", d, info["enc_off"] + 8, cryptoff, cryptsize, 0, 0)
+        with open(path, "wb") as f:
+            f.write(d)
+        return 0, ("改正加密范围 0x%x/0x%x → 0x%x/0x%x（cryptid=0）"
+                   % (cur_off, cur_size, cryptoff, cryptsize))
 
     d = bytearray(info["data"])
     text = segs_by_name(info).get("__TEXT")
@@ -198,20 +371,23 @@ def add_encryption_info(path, info):
         struct.pack_into("<Q", d, text["hdr"] + 48, text["filesize"] + shift)
         struct.pack_into("<Q", d, text["hdr"] + 32, text["vmsize"] + shift)
 
-    # 写新加载命令：cryptoff 指向第一个页之后，cryptsize 取到 __TEXT 数据末尾
+    # 写新加载命令（数值先填 0，写完重新扫一遍再按 ld64 口径填，
+    # 因为平移会改变节的文件偏移，值必须按平移后的实际布局算）
     ins = info["header_end"]
     if ins + ENC_SIZE > first + shift:
         raise SystemExit("%s：腾出的空间不够放加密命令" % path)
-    cryptoff = PAGE if text_end + shift > PAGE else 0
-    cryptsize = max(0, ((text_end + shift - cryptoff) // PAGE) * PAGE)
-    struct.pack_into("<IIIIII", d, ins, LC_ENCRYPTION_INFO_64, ENC_SIZE,
-                     cryptoff, cryptsize, 0, 0)
+    struct.pack_into("<IIIIII", d, ins, LC_ENCRYPTION_INFO_64, ENC_SIZE, 0, 0, 0, 0)
     struct.pack_into("<I", d, 16, info["ncmds"] + 1)
     struct.pack_into("<I", d, 20, info["sizeofcmds"] + ENC_SIZE)
 
     with open(path, "wb") as f:
         f.write(d)
-    return shift, "补 LC_ENCRYPTION_INFO_64（cryptid=0）" + ("，节数据后移 %d 字节" % shift if shift else "")
+
+    again = macho_scan(path)
+    ns, msg = add_encryption_info(path, again)
+    return shift, ("补 LC_ENCRYPTION_INFO_64（cryptid=0）"
+                   + ("，节数据后移 %d 字节" % shift if shift else "")
+                   + "；" + (msg or ""))
 
 
 # ── 规范化：段 vmsize 按页取整 ───────────────────────────────
@@ -404,9 +580,31 @@ def normalize_payload(payload_dir):
         if ch:
             notes.append("%s Info.plist：%s" % (os.path.basename(t), "、".join(ch)))
 
-    icon = ensure_store_icon(os.path.dirname(payload_dir), app)
+    root = os.path.dirname(payload_dir)
+    icon = ensure_store_icon(root, app)
     if icon:
         notes.append(icon)
+    mk = os.path.join(root, "iTunesArtwork@2x")
+    if os.path.exists(mk):
+        nfo = png_info(mk)
+        if nfo and nfo[2] in (4, 6) and flatten_icon(mk):
+            notes.append("1024 商店图标去透明")
+
+    # 图标去透明：苹果对 App 图标是硬性要求，带 alpha 直接拒
+    flat = []
+    for fn in sorted(os.listdir(app)):
+        if not fn.lower().endswith(".png"):
+            continue
+        p = os.path.join(app, fn)
+        nfo = png_info(p)
+        if nfo and nfo[2] in (4, 6):
+            try:
+                if flatten_icon(p):
+                    flat.append(fn)
+            except Exception:  # noqa: BLE001
+                notes.append("%s 去透明失败（格式少见），actool 那步可能报 alpha" % fn)
+    if flat:
+        notes.append("图标去透明（%d 张）：%s" % (len(flat), "、".join(flat)))
     return notes
 
 
@@ -521,10 +719,49 @@ def check_plist(app, pl):
         if not info:
             err("%s.png 不是有效 PNG" % name)
             continue
-        w, h, _ = info
+        w, h, ct = info
         expect = ICON_SIZES.get(name)
         if expect and (w, h) != (expect, expect):
             err("%s.png 实际 %dx%d，应为 %dx%d" % (name, w, h, expect, expect))
+        if ct in (4, 6):
+            err("%s.png 带透明通道，苹果硬性拒收，要压成无 alpha 的 RGB" % name)
+
+
+def check_icon_assets(app, pl, strict=False):
+    """
+    iOS 11+ 的 App 图标必须来自资源目录（Assets.car），并且 Info.plist 要有
+    CFBundleIconName 指过去。散落的 Icon-*.png 只对 iOS 10 及更早有效——
+    这就是这次苹果报「缺 120x120 / 152x152 图标 + 缺 CFBundleIconName」的原因。
+    """
+    def bad(msg):
+        if strict:
+            err(msg)
+        else:
+            warn(msg)
+
+    name = pl.get("CFBundleIconName")
+    car = os.path.join(app, "Assets.car")
+    has_car = os.path.exists(car)
+
+    if has_car and os.path.getsize(car) == 0:
+        bad("Assets.car 是空文件")
+        has_car = False
+
+    if has_car:
+        with open(car, "rb") as f:
+            blob = f.read()
+        if b"AppIcon" not in blob and (name or "").encode() not in blob:
+            bad("Assets.car 里找不到 %s 这个名字，图标可能没编进去" % (name or "AppIcon"))
+        else:
+            ok("图标资源目录 Assets.car 就位（%d KB）" % (len(blob) // 1024))
+    else:
+        bad("包里没有 Assets.car：苹果必报「缺 120x120/152x152 图标」。"
+            "流水线第 2c 步会用 actool 现场编一个；本地自建包要先跑一遍那一步")
+
+    if not name:
+        bad("Info.plist 缺 CFBundleIconName（iOS 11+ 必填，苹果会直接退）")
+    elif has_car:
+        ok("CFBundleIconName=%s" % name)
 
 
 def check_appex_plist(a, epl):
@@ -576,15 +813,20 @@ def check_macho(path, label):
         err("%s：缺 LC_ENCRYPTION_INFO_64（苹果报 'encryption info ... missing or invalid'，必退）" % label)
     else:
         cryptoff, cryptsize, cryptid = info["enc"]
+        want, problem = want_encryption_extents(info)
         if cryptid not in (0, 1):
             err("%s：LC_ENCRYPTION_INFO_64 的 cryptid=%d 不合法" % (label, cryptid))
         elif cryptid == 1:
             err("%s：二进制处于加密状态（cryptid=1），上传前必须是 0" % label)
-        elif cryptoff and cryptoff + cryptsize > info["size"]:
-            err("%s：加密区间超出文件范围（cryptoff=0x%x cryptsize=0x%x，文件 0x%x）"
-                % (label, cryptoff, cryptsize, info["size"]))
+        elif want is None:
+            err("%s：%s" % (label, problem))
+        elif (cryptoff, cryptsize) != want:
+            err("%s：加密范围跟 __TEXT 段对不上（现在是 0x%x/0x%x，应为 0x%x/0x%x）。"
+                "苹果报 'Mismatched Encryption Extents'，必退。跑 --fix-dir 会自动改正。"
+                % (label, cryptoff, cryptsize, want[0], want[1]))
         else:
-            ok("%s：加密信息正常（cryptid=%d）" % (label, cryptid))
+            ok("%s：加密信息正常（cryptid=%d，范围 0x%x+0x%x）"
+               % (label, cryptid, cryptoff, cryptsize))
 
     # 段结构：对齐 + 边界
     body = [s for s in info["segs"] if s["name"] != "__PAGEZERO"]
@@ -683,6 +925,7 @@ def main():
 
     pl, _ = load_plist(os.path.join(app, "Info.plist"))
     check_plist(app, pl)
+    check_icon_assets(app, pl, strict=signed)
 
     exes = [os.path.join(app, pl.get("CFBundleExecutable", ""))]
     appex_dir = os.path.join(app, "PlugIns")
@@ -752,7 +995,13 @@ def report():
             print("  ❌ " + m)
         print("\n共 %d 项，先修完再传。" % len(ERRORS))
         sys.exit(1)
-    print("全部通过，可以上传。")
+    hard = [m for m in WARNS if "Assets.car" in m or "CFBundleIconName" in m]
+    if hard:
+        print("结构检查通过；图标那两条是硬要求，签名前必须由流水线第 2c 步补齐。")
+    elif WARNS:
+        print("结构检查通过（提醒项不影响上传）。")
+    else:
+        print("全部通过，可以上传。")
 
 
 if __name__ == "__main__":
