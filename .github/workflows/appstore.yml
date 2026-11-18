@@ -57,8 +57,8 @@ jobs:
 
       - name: 装依赖（失败了也不拦，后面用 openssl 兜底）
         run: |
-          python3 -m pip install --quiet --break-system-packages --upgrade pip || true
-          if python3 -m pip install --quiet --break-system-packages pyjwt cryptography; then
+          # 这台的 pip 是 brew 装的，升级自己永远失败（no RECORD file），不折腾它。
+          if python3 -m pip install --quiet --break-system-packages --disable-pip-version-check pyjwt cryptography; then
             echo "✅ PyJWT / cryptography 已安装"
           else
             echo "⚠ PyJWT 装不上，JWT 改用 openssl 直接签，不影响签名和上传"
@@ -79,9 +79,9 @@ jobs:
           # 都不成再按“直接贴的 p8 原文”处理。
           : > "$KEY"
           for FLAG in -D -d --decode; do
-            if printf '%s' "$ASC_KEY_P8" | base64 "$FLAG" > "$KEY" 2>/dev/null \
+            if printf '%s' "$ASC_KEY_P8" | base64 "${FLAG}" > "$KEY" 2>/dev/null \
                && grep -q "BEGIN PRIVATE KEY" "$KEY"; then
-              echo "✅ ASC_KEY_P8 已解码（base64 $FLAG）"
+              echo "✅ ASC_KEY_P8 已解码（base64 ${FLAG}）"
               break
             fi
           done
