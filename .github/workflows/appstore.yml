@@ -55,10 +55,15 @@ jobs:
           xcodebuild -version
           echo "Python: $(python3 --version)"
 
-      - name: 装依赖
+      - name: 装依赖（失败了也不拦，后面用 openssl 兜底）
         run: |
-          python3 -m pip install --quiet --upgrade pip
-          python3 -m pip install --quiet pyjwt cryptography
+          python3 -m pip install --quiet --break-system-packages --upgrade pip || true
+          if python3 -m pip install --quiet --break-system-packages pyjwt cryptography; then
+            echo "✅ PyJWT / cryptography 已安装"
+          else
+            echo "⚠ PyJWT 装不上，JWT 改用 openssl 直接签，不影响签名和上传"
+          fi
+          python3 -c "import jwt" 2>/dev/null && echo "✅ import jwt 正常" || echo "ℹ 走 openssl 兜底"
 
       - name: 准备 API 密钥
         env:
@@ -70,10 +75,18 @@ jobs:
           [ -n "${ASC_KEY_ID:-}" ] || { echo "❌ 没填 ASC_KEY_ID"; exit 1; }
           mkdir -p "$RUNNER_TEMP/keys"
           KEY="$RUNNER_TEMP/keys/AuthKey_${ASC_KEY_ID}.p8"
-          if printf '%s' "$ASC_KEY_P8" | base64 --decode > "$KEY" 2>/dev/null; then
-            :
-          else
-            printf '%s' "$ASC_KEY_P8" > "$KEY"
+          # macOS 自带的 base64 只认 -D / -d，不认 Linux 的 --decode，三个都试一遍，
+          # 都不成再按“直接贴的 p8 原文”处理。
+          : > "$KEY"
+          for FLAG in -D -d --decode; do
+            if printf '%s' "$ASC_KEY_P8" | base64 "$FLAG" > "$KEY" 2>/dev/null \
+               && grep -q "BEGIN PRIVATE KEY" "$KEY"; then
+              echo "✅ ASC_KEY_P8 已解码（base64 $FLAG）"
+              break
+            fi
+          done
+          if ! grep -q "BEGIN PRIVATE KEY" "$KEY"; then
+            printf '%s\n' "$ASC_KEY_P8" > "$KEY"
           fi
           chmod 600 "$KEY"
           if ! grep -q "BEGIN PRIVATE KEY" "$KEY"; then
