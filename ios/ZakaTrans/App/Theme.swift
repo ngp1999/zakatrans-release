@@ -146,6 +146,7 @@ struct CreditPill: View {
 /// 分组标题（大写小字，灰色），原生设置页的样子
 struct SectionLabel: View {
     var text: String
+    init(_ text: String) { self.text = text }
     var body: some View {
         Text(text)
             .font(.system(size: 13, weight: .regular))
