@@ -12,7 +12,6 @@ struct SubtitleSettingsView: View {
                 previewCard
                 styleCard
                 pipCard
-                if app.prefs.tts { speechCard }
             }
             .padding(.horizontal, 16)
             .padding(.top, 8)
@@ -151,64 +150,36 @@ struct SubtitleSettingsView: View {
         Rectangle().fill(Theme.line).frame(height: 0.5)
     }
 
-    // MARK: 画中画
+    // MARK: 窗口比例（画中画尺寸，选了就按这个大小开）
 
     private var pipCard: some View {
-        VStack(spacing: 18) {
+        VStack(spacing: 12) {
             HStack {
-                Text("画中画").font(.system(size: 15)).foregroundStyle(Theme.ink)
+                Text("窗口比例").font(.system(size: 15)).foregroundStyle(Theme.ink)
                 Spacer()
-                Toggle("", isOn: Binding(
-                    get: { app.pipOn },
-                    set: { v in withAnimation(.easeOut(duration: 0.18)) { app.setPip(v) } }
-                ))
-                .labelsHidden()
-                .tint(Theme.accent)
+                Text(SubtitlePrefs.pipSizeText(app.prefs.pip))
+                    .font(.system(size: 13).monospacedDigit())
+                    .foregroundStyle(Theme.sub)
             }
 
-            divider
-
-            HStack {
-                Text("比例").font(.system(size: 15)).foregroundStyle(Theme.ink)
-                Spacer()
-            }
-            Picker("比例", selection: Binding(
+            Picker("窗口比例", selection: Binding(
                 get: { app.prefs.pip },
-                set: { v in app.updatePrefs { $0.pip = v } }
+                set: { v in
+                    haptic.impactOccurred()
+                    app.updatePrefs { $0.pip = v }
+                    app.setPip(true)
+                }
             )) {
                 ForEach(SubtitlePrefs.pipOptions, id: \.0) { opt in
                     Text(opt.1).tag(opt.0)
                 }
             }
             .pickerStyle(.segmented)
-        }
-        .card(padding: 16)
-    }
 
-    // MARK: 朗读
-
-    private var speechCard: some View {
-        VStack(spacing: 18) {
-            HStack {
-                Text("语速").font(.system(size: 15)).foregroundStyle(Theme.ink)
-                Spacer()
-                Text(String(format: "%.1fx", app.prefs.speechRate / 0.5))
-                    .font(.system(size: 15, weight: .medium).monospacedDigit())
-                    .foregroundStyle(Theme.sub)
-            }
-            Slider(value: Binding(
-                get: { app.prefs.speechRate },
-                set: { v in app.updatePrefs { $0.speechRate = v } }
-            ), in: 0.4...0.62, step: 0.01)
-            .tint(Theme.accent)
-
-            Button {
-                Speaker.shared.rate = app.prefs.speechRate
-                Speaker.shared.preview("这是朗读效果，翻译结果会这样读出来。")
-            } label: {
-                Text("试听")
-            }
-            .buttonStyle(SecondaryButtonStyle())
+            Text("选哪个，字幕浮窗开出来就是哪个大小；大 4:3 适合看整段，小 21:9 最窄最省屏。")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.faint)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .card(padding: 16)
     }
