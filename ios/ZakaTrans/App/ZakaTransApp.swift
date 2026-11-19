@@ -7,11 +7,6 @@ struct ZakaTransApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
-                .task {
-                    await cloud.bootstrap()
-                    await Purchases.shared.load()
-                    await Purchases.shared.syncUnfinished()
-                }
         }
     }
 }
