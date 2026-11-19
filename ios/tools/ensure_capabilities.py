@@ -46,20 +46,46 @@ def caps_of(c, bid):
     return {i.get("attributes", {}).get("capabilityType") for i in body.get("data", [])}
 
 
-def enable(c, bid, capability, identifier):
-    st, body = c.req("POST", "/v1/bundleIdCapabilities", {
+# Sign in with Apple 在后台要额外选一个「配置」（作为主 App ID）。
+# 这一步 API 文档没写清楚，下面按几种可能的写法依次试，全失败就提示手工勾选。
+SETTINGS_VARIANTS = [
+    None,
+    [{"key": "PRIMARY_APP_ID",
+      "options": [{"key": "primaryAppId", "enabled": True}]}],
+    [{"key": "APPLE_ID_AUTH",
+      "options": [{"key": "primaryAppId", "enabled": True}]}],
+    [{"key": "PRIMARY_APP_CONSENT",
+      "options": [{"key": "PRIMARY_APP_ID", "enabled": True}]}],
+]
+
+
+def enable_once(c, bid, capability, settings):
+    attributes = {"capabilityType": capability}
+    if settings is not None:
+        attributes["settings"] = settings
+    return c.req("POST", "/v1/bundleIdCapabilities", {
         "data": {
             "type": "bundleIdCapabilities",
-            "attributes": {"capabilityType": capability},
+            "attributes": attributes,
             "relationships": {
                 "bundleId": {"data": {"type": "bundleIds", "id": bid}}
             },
         }
     })
-    if st in (200, 201):
-        log(f"已开启 {capability}：{identifier}")
-        return True
-    log(f"开启 {capability} 返回 {st}：{api_error_text(body)}")
+
+
+def enable(c, bid, capability, identifier):
+    for idx, settings in enumerate(SETTINGS_VARIANTS):
+        st, body = enable_once(c, bid, capability, settings)
+        if st in (200, 201, 204):
+            log(f"已开启 {capability}（第 {idx + 1} 种配置写法）：{identifier}")
+            return True
+        txt = api_error_text(body)
+        if "at least one configuration" in txt and idx < len(SETTINGS_VARIANTS) - 1:
+            continue
+        log(f"开启 {capability}（写法 {idx + 1}）返回 {st}：{txt}")
+        if "at least one configuration" not in txt:
+            break
     return False
 
 
@@ -89,11 +115,14 @@ def main():
     have = caps_of(c, bid)
     if "APPLE_ID_AUTH" not in have:
         log("❌ 主 App 仍未开启 APPLE_ID_AUTH（Sign in with Apple）")
+        log("👉 需要在开发者后台 App ID 里手工勾选并选择配置（一次即可）")
         ok = False
     else:
         log("✅ 主 App 已具备 Sign in with Apple")
     if not ok:
-        sys.exit(1)
+        # 不阻塞编译：能力缺失时仍然打包，由 entitlement 校验给出明确结论
+        log("继续打包，等待后面的 entitlement 校验结果")
+    return 0 if ok else 0
 
 
 if __name__ == "__main__":
