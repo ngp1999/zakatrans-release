@@ -56,12 +56,10 @@ struct HomeView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("语幕")
-                        .font(.system(size: 18, weight: .bold))
+                    Text("语幕-实时翻译")
+                        .font(.system(size: 17, weight: .bold))
                         .foregroundStyle(Theme.ink)
-                    Text("实时翻译")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.sub)
+                        .lineLimit(1)
                 }
 
                 if app.running {
