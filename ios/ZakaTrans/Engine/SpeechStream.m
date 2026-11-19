@@ -156,7 +156,7 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
 
 // 语种 / 凭据改了：重建一次同传会话（豆包的语种在会话里固定，中途换不了）
 - (void)reloadLocale {
-    NSString *code = [ZKStore setting:@"asrlang"] ?: @"en";
+    NSString *code = [ZKStore setting:@"asrlang"] ?: @"auto";
     NSString *dst = [ZKStore setting:@"dstlang"] ?: @"zh";
     NSString *sig = [NSString stringWithFormat:@"%@|%@|%@|%@",
                      code, dst,

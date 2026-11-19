@@ -10,7 +10,7 @@ import UIKit
 final class AppleSignIn: NSObject, ObservableObject {
     static let shared = AppleSignIn()
 
-    @Published private(set) var busy = false
+    @Published var busy = false
     @Published var error: String?
 
     /// 登录成功回调：(identityToken, 姓名)

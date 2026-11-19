@@ -199,8 +199,8 @@ static NSString *ZTSign(NSString *token, NSString *method, NSString *path,
             }
 
             NSString *ws = json[@"ws_url"];
-            NSString *src = [ZKStore setting:@"asrlang"] ?: @"zh";
-            NSString *dst = [ZKStore setting:@"dstlang"] ?: @"en";
+            NSString *src = [ZKStore setting:@"asrlang"] ?: @"auto";
+            NSString *dst = [ZKStore setting:@"dstlang"] ?: @"zh";
             ws = [NSString stringWithFormat:@"%@&src=%@&dst=%@", ws, src, dst];
 
             s->_ticket = json[@"ticket"];
@@ -287,8 +287,13 @@ static NSString *ZTSign(NSString *token, NSString *method, NSString *path,
         [self setState:msg];
         [self fail:msg];
     } else if ([type isEqualToString:@"settled"]) {
-        NSNumber *billed = m[@"billed"];
-        [self setState:[NSString stringWithFormat:@"本次消耗 %@ token", billed ?: @0]];
+        NSNumber *creds = m[@"credits"];
+        if (creds) {
+            [self setState:[NSString stringWithFormat:@"本次消耗 %@ 积分", creds]];
+        } else {
+            NSNumber *billed = m[@"billed"];
+            [self setState:[NSString stringWithFormat:@"本次消耗 %@ token", billed ?: @0]];
+        }
     }
 }
 
