@@ -19,6 +19,7 @@ final class Purchases: ObservableObject {
         "com.zakatrans.credits.680",
         "com.zakatrans.credits.1380",
         "com.zakatrans.credits.2980",
+        "com.zakatrans.credits.5980",
     ]
 
     /// 兜底价目（当 StoreKit 拉不到商品时用来占位，真实价格永远以苹果返回为准）
@@ -28,6 +29,7 @@ final class Purchases: ObservableObject {
         ("com.zakatrans.credits.680", 68, 680),
         ("com.zakatrans.credits.1380", 138, 1380),
         ("com.zakatrans.credits.2980", 298, 2980),
+        ("com.zakatrans.credits.5980", 598, 5980),
     ]
 
     @Published var products: [Product] = []
