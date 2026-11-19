@@ -10,8 +10,7 @@ import UIKit
 final class Cloud: ObservableObject {
     static let shared = Cloud()
 
-    private override init() {
-        super.init()
+    private init() {
         // 冷启动第一帧就把登录态认下来：本地有 token 就直接进主界面，
         // 不再先显示一个转圈的检查页等异步结果。
         loggedIn = !(Keychain.get("account_token") ?? "").isEmpty
