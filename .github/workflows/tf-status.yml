@@ -1,0 +1,40 @@
+name: TestFlight 状态
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号前缀（留空看全部）"
+        required: false
+        default: ""
+
+jobs:
+  query:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 准备 API 密钥
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/keys" "$HOME/.appstoreconnect/private_keys"
+          KEY="$RUNNER_TEMP/keys/AuthKey_${ASC_KEY_ID}.p8"
+          : > "$KEY"
+          for FLAG in -D -d --decode; do
+            if printf '%s' "$ASC_KEY_P8" | base64 "${FLAG}" > "$KEY" 2>/dev/null \
+               && grep -q "BEGIN PRIVATE KEY" "$KEY"; then break; fi
+          done
+          grep -q "BEGIN PRIVATE KEY" "$KEY" || printf '%s\n' "$ASC_KEY_P8" > "$KEY"
+          chmod 600 "$KEY"
+          cp "$KEY" "$HOME/.appstoreconnect/private_keys/"
+          echo "ASC_KEY_FILE=$KEY" >> "$GITHUB_ENV"
+
+      - name: 查询
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: python3 ios/tools/tf_status.py "${{ github.event.inputs.version }}"
