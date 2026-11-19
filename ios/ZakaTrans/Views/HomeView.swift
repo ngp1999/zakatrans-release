@@ -7,6 +7,7 @@ struct HomeView: View {
     @ObservedObject private var cloud = Cloud.shared
     @ObservedObject private var speaker = Speaker.shared
     @State private var showCredit = false
+    @State private var showAudio = false
 
     private let haptic = UIImpactFeedbackGenerator(style: .light)
 
@@ -31,6 +32,9 @@ struct HomeView: View {
         }
         .sheet(isPresented: $showCredit) {
             NavigationStack { CreditView() }
+        }
+        .sheet(isPresented: $showAudio) {
+            NavigationStack { AudioOutputView() }
         }
         .alert("积分不足", isPresented: Binding(
             get: { app.alert != nil },
@@ -128,18 +132,19 @@ struct HomeView: View {
             }
 
             VStack(alignment: .leading, spacing: 14) {
-                step(1, "点下面的「开始实时翻译」")
+                step(1, "点下面的「开始字幕翻译」")
                 step(2, "在系统面板里选「语幕」并开始录屏")
-                step(3, "字幕自动浮出来，回桌面也继续显示")
+                step(3, "字幕浮窗自动出现，回桌面也继续显示")
             }
 
-            HStack(spacing: 6) {
-                Image(systemName: "globe")
-                    .font(.system(size: 11))
-                Text("源语言自动识别 · 输出中文")
-                    .font(.system(size: 11))
+            Divider().opacity(0.5)
+
+            VStack(alignment: .leading, spacing: 8) {
+                tip("globe", "源语言自动识别，输出中文")
+                tip("speaker.wave.2", "开着音频输出时，别的视频声音会自动降低")
+                tip("rectangle.on.rectangle", "窗口大小、字号、颜色都在「我的 → 字幕样式」里")
+                tip("mic.slash", "不说话的部分不计费，按识别出的文字量算")
             }
-            .foregroundStyle(Theme.faint)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, 24)
@@ -157,6 +162,19 @@ struct HomeView: View {
             Text(text)
                 .font(.system(size: 14))
                 .foregroundStyle(Theme.ink)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func tip(_ icon: String, _ text: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.accent)
+                .frame(width: 16)
+            Text(text)
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.faint)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -204,68 +222,91 @@ struct HomeView: View {
         VStack(spacing: 10) {
             Button {
                 haptic.impactOccurred(intensity: 0.7)
-                if app.running {
+                if app.running || app.preparing {
                     withAnimation(.easeOut(duration: 0.2)) { app.stop() }
-                } else {
+                } else if !app.preparing {
                     Task {
                         await app.start()
                         if app.running { BroadcastTrigger.shared.fire() }
                     }
                 }
             } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: app.running ? "stop.fill" : "play.fill")
-                        .font(.system(size: 15, weight: .bold))
-                    Text(app.running ? "停止" : "开始实时翻译")
+                HStack(spacing: 9) {
+                    if app.preparing {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .tint(.white)
+                            .scaleEffect(0.85)
+                    } else {
+                        Image(systemName: (app.running && !app.preparing) ? "stop.fill" : "play.fill")
+                            .font(.system(size: 15, weight: .bold))
+                    }
+                    Text(app.preparing ? "正在加载字幕浮窗" : (app.running ? "停止" : "开始字幕翻译"))
+                        .font(.system(size: 17, weight: .semibold))
+                        .contentTransition(.opacity)
                 }
+                .frame(maxWidth: .infinity)
             }
-            .buttonStyle(PrimaryButtonStyle(tint: app.running ? Theme.warn : Theme.accent))
+            .buttonStyle(PrimaryButtonStyle(tint: (app.running && !app.preparing) ? Theme.warn : Theme.accent))
+            // 加载态的呼吸光圈：让人一眼看出「在等浮窗，不是没反应」
+            .overlay(PreparingGlow(on: app.preparing).allowsHitTesting(false))
 
             HStack(spacing: 10) {
-                // 输出音频：开 / 关
+                // 朗读设置：点进去调语速、压低、音色
                 Button {
                     haptic.impactOccurred()
-                    withAnimation(.easeOut(duration: 0.18)) {
-                        app.updatePrefs { $0.tts.toggle() }
-                    }
-                    if !app.prefs.tts { Speaker.shared.stop() }
+                    showAudio = true
                 } label: {
                     tile(
                         icon: speaker.enabled ? "speaker.wave.2.fill" : "speaker.slash.fill",
-                        title: "输出音频",
-                        detail: speaker.enabled ? "已开启" : "已关闭",
+                        title: "音频输出",
+                        detail: speaker.enabled ? String(format: "已开启 · %.2fx", app.prefs.speechRate) : "已关闭",
                         on: speaker.enabled
                     )
                 }
                 .buttonStyle(TileButtonStyle())
 
-                // 画中画：这里选比例，开关在「字幕样式」里
+                // 窗口：选哪个，画中画开出来就是多大（含开关）
                 Menu {
                     ForEach(SubtitlePrefs.pipOptions, id: \.0) { opt in
                         Button {
                             haptic.impactOccurred()
                             withAnimation(.easeOut(duration: 0.18)) {
                                 app.updatePrefs { $0.pip = opt.0 }
+                                app.setPip(true)
                             }
                         } label: {
                             if app.prefs.pip == opt.0 {
-                                Label(opt.0 == "4:3" ? "4:3 大窗" : "21:9 宽横条", systemImage: "checkmark")
+                                Label("窗口\(opt.1) · \(SubtitlePrefs.pipSizeText(opt.0))", systemImage: "checkmark")
                             } else {
-                                Text(opt.0 == "4:3" ? "4:3 大窗" : "21:9 宽横条")
+                                Text("窗口\(opt.1) · \(SubtitlePrefs.pipSizeText(opt.0))")
                             }
                         }
                     }
+                    Divider()
+                    Button {
+                        haptic.impactOccurred()
+                        app.setPip(!app.pipOn)
+                    } label: {
+                        Label(app.pipOn ? "关闭画中画" : "打开画中画",
+                              systemImage: app.pipOn ? "pip.remove" : "pip.fill")
+                    }
                 } label: {
                     tile(
-                        icon: app.prefs.pip == "21:9" ? "rectangle.wide" : "pip.fill",
-                        title: "画中画",
-                        detail: app.prefs.pip,
+                        icon: app.pipOn ? (app.prefs.pip == "S" ? "rectangle.wide" : "pip.fill") : "pip.remove",
+                        title: "窗口",
+                        detail: app.pipOn ? "窗口\(pipLabel) · \(SubtitlePrefs.pipSizeText(app.prefs.pip))" : "已关闭",
                         on: app.pipOn
                     )
                 }
                 .buttonStyle(TileButtonStyle())
             }
         }
+    }
+
+    /// 大 / 中 / 小
+    private var pipLabel: String {
+        SubtitlePrefs.pipOptions.first { $0.0 == app.prefs.pip }?.1 ?? "大"
     }
 
     private func tile(icon: String, title: String, detail: String, on: Bool) -> some View {
@@ -309,4 +350,20 @@ struct TileButtonStyle: ButtonStyle {
 struct AlertText: Identifiable {
     let id = UUID()
     let text: String
+}
+
+/// 加载态光环：按钮外面一圈呼吸的描边
+private struct PreparingGlow: View {
+    let on: Bool
+    @State private var flip = false
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .stroke(Theme.accent.opacity(0.6), lineWidth: 2)
+            .scaleEffect(flip ? 1.035 : 1.0)
+            .opacity(flip ? 0 : 0.9)
+            .animation(on ? .easeInOut(duration: 0.95).repeatForever(autoreverses: true) : .easeOut(duration: 0.2), value: flip)
+            .onChange(of: on) { v in flip = v }
+            .onAppear { if on { flip = true } }
+    }
 }
