@@ -10,6 +10,13 @@ import UIKit
 final class Cloud: ObservableObject {
     static let shared = Cloud()
 
+    private override init() {
+        super.init()
+        // 冷启动第一帧就把登录态认下来：本地有 token 就直接进主界面，
+        // 不再先显示一个转圈的检查页等异步结果。
+        loggedIn = !(Keychain.get("account_token") ?? "").isEmpty
+    }
+
     static let baseURL = "https://api.xingyans.com"
 
     /// 余额对内是 token，对外全部显示积分（1 元 = 10 积分，1400 积分 = 100 万 token）
