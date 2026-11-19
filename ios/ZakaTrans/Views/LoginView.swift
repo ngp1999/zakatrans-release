@@ -7,53 +7,33 @@ struct LoginView: View {
     @ObservedObject private var apple = AppleSignIn.shared
     @State private var error: String?
     @State private var working = false
+    @State private var terms: TermsView.Kind?
 
     var body: some View {
         ZStack {
             Theme.bg.ignoresSafeArea()
 
             VStack(spacing: 0) {
-                Spacer(minLength: 40)
+                Spacer(minLength: 60)
 
-                // 品牌区
-                VStack(spacing: 14) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 22, style: .continuous)
-                            .fill(
-                                LinearGradient(colors: [Theme.accent, Theme.accent.opacity(0.75)],
-                                               startPoint: .topLeading, endPoint: .bottomTrailing)
-                            )
-                            .frame(width: 76, height: 76)
-                        Image(systemName: "waveform")
-                            .font(.system(size: 32, weight: .semibold))
-                            .foregroundStyle(.white)
-                    }
-                    .shadow(color: Theme.accent.opacity(0.35), radius: 18, x: 0, y: 8)
+                VStack(spacing: 12) {
+                    Image("Logo")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 88, height: 88)
+                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
 
-                    Text("ZakaTrans")
-                        .font(.system(size: 30, weight: .bold, design: .default))
+                    Text("语幕")
+                        .font(.system(size: 30, weight: .semibold))
                         .foregroundStyle(Theme.ink)
-                    Text("实时语音翻译")
+                    Text("实时字幕翻译")
                         .font(.system(size: 15))
                         .foregroundStyle(Theme.sub)
                 }
 
-                Spacer(minLength: 28)
+                Spacer(minLength: 40)
 
-                // 三个卖点
-                VStack(alignment: .leading, spacing: 16) {
-                    feature("waveform", "边说边译", "自动识别对方语言，译文实时上屏")
-                    feature("rectangle.inset.filled.and.person.filled", "画中画字幕", "切到别的 App 也能看，横条模式一句一行")
-                    feature("icloud", "云端同步", "换设备登录，记录和设置自动带回")
-                }
-                .padding(20)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .card(padding: 20)
-                .padding(.horizontal, 24)
-
-                Spacer(minLength: 32)
-
-                VStack(spacing: 12) {
+                VStack(spacing: 14) {
                     AppleSignInButton(action: { apple.start() })
                         .frame(height: 52)
                         .disabled(working)
@@ -65,12 +45,28 @@ struct LoginView: View {
                             .multilineTextAlignment(.center)
                     }
 
-                    Text("登录即表示同意《用户协议》与《隐私政策》")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.faint)
+                    HStack(spacing: 0) {
+                        Text("登录即表示同意 ")
+                        Button("《用户协议》") { terms = .terms }
+                        Text(" 与 ")
+                        Button("《隐私政策》") { terms = .privacy }
+                    }
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.faint)
+                    .buttonStyle(.plain)
                 }
                 .padding(.horizontal, 24)
-                .padding(.bottom, 20)
+                .padding(.bottom, 28)
+            }
+        }
+        .sheet(item: $terms) { kind in
+            NavigationStack {
+                TermsView(kind: kind)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("完成") { terms = nil }
+                        }
+                    }
             }
         }
         .onAppear {
@@ -92,19 +88,6 @@ struct LoginView: View {
             self.error = error.localizedDescription
         }
         apple.busy = false
-    }
-
-    private func feature(_ icon: String, _ title: String, _ desc: String) -> some View {
-        HStack(alignment: .top, spacing: 14) {
-            Image(systemName: icon)
-                .font(.system(size: 18, weight: .medium))
-                .foregroundStyle(Theme.accent)
-                .frame(width: 26, height: 26)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.ink)
-                Text(desc).font(.system(size: 13)).foregroundStyle(Theme.sub)
-            }
-        }
     }
 }
 
