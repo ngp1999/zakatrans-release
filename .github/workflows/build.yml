@@ -60,6 +60,7 @@ jobs:
           echo "ASC_KEY_FILE=$KEY" >> "$GITHUB_ENV"
 
       - name: 确保 App ID 开好 Sign in with Apple / App Groups
+        continue-on-error: true
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
