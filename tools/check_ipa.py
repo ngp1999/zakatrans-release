@@ -471,11 +471,12 @@ def free_load_commands(path, info, want_free):
 
 def repair_text_section_offsets(path, info):
     """
-    把 __TEXT 的节数据挪回和虚拟地址对齐的位置。
+    只核对 __TEXT 各节的偏移和虚拟地址对不对得上，**绝不改字节**。
 
-    之前为了塞下 LC_ENCRYPTION_INFO_64，把节数据在文件里整体后移了 16 字节，
-    虚拟地址一个没动 —— 那样打出去的包装到手机上一启动就崩。
-    挪回去会少吃掉 16 字节命令区空间，所以先删可选命令把地方腾出来。
+    历史教训（2026-11-19）：这里原来会「把节数据在文件里挪动」去迁就别的位置，
+    挪完之后代码里的 adrp 全部指错地方，包能上传、能装上，一打开就 SIGBUS。
+    所以现在只做一件事：对不上就报错，让人回到原始产物重新打包，
+    绝不在这条路径上再产生任何位移。
     """
     text, sects = text_file_sections(info)
     if text is None:
@@ -490,40 +491,9 @@ def repair_text_section_offsets(path, info):
     if len(deltas) == 1 and 0 in deltas:
         return None, None                                  # 本来就是对齐的
     if len(deltas) != 1:
-        return None, "节的偏移和虚拟地址错位不一致（%s），不敢自动挪" % deltas
-
-    shift = -next(iter(deltas))
-    first = sects[0]["offset"]
-    new_first = first + shift
-    need_free = header_end(info) + SIG_RESERVE - new_first
-    if need_free > 0:
-        free_load_commands(path, info, need_free)
-        info = macho_scan(path)
-        if info.get("error"):
-            return None, info["error"]
-        text, sects = text_file_sections(info)
-
-    d = bytearray(info["data"])
-    text_end = text["fileoff"] + text["filesize"]
-    block_len = text_end - first
-    if block_len <= 0 or new_first < header_end(info):
-        return None, "挪回去的空间还是不够（要 %d，命令区到 %d）" % (new_first, header_end(info))
-
-    block = bytes(d[first:first + block_len])
-    d[first:first + block_len] = b"\0" * block_len
-    d[new_first:new_first + block_len] = block
-
-    for s in sects:
-        struct.pack_into("<I", d, s["hdr"] + 48, s["offset"] + shift)
-    struct.pack_into("<Q", d, text["hdr"] + 48, text["filesize"] + shift)
-    if info.get("main"):
-        moff, entryoff = info["main"]
-        if first <= entryoff < text_end:
-            struct.pack_into("<Q", d, moff + 8, entryoff + shift)
-
-    with open(path, "wb") as f:
-        f.write(d)
-    return -shift, "把 __TEXT 节数据挪回和虚拟地址对齐（%+d 字节）" % shift
+        return None, "节的偏移和虚拟地址错位不一致（%s）" % deltas
+    return None, ("节的偏移比虚拟地址偏了 %d 字节——不自动挪（挪了寻址必崩），"
+                  "请用未改动的原始产物重新打包" % next(iter(deltas)))
 
 
 def fix_encryption_cmd_id(path, info):
@@ -869,7 +839,7 @@ def normalize_payload(payload_dir):
         exe = os.path.join(t, pl.get("CFBundleExecutable", ""))
         label = os.path.basename(t)
         if not os.path.exists(exe):
-            notes.append("%s：找不到可执行文件" % label)
+            notes.append("!! %s：找不到可执行文件" % label)
             continue
         before = macho_scan(exe)
         if before.get("error") or before.get("fat"):
@@ -879,7 +849,7 @@ def normalize_payload(payload_dir):
                 sdk = before["sdk"]
             ns, problem = align_all(exe)
             if problem:
-                notes.append("%s：%s" % (label, problem))
+                notes.append("!! %s：%s" % (label, problem))
             elif ns:
                 notes.append("%s：%s" % (label, "；".join(ns)))
 
@@ -1147,7 +1117,7 @@ def check_macho(path, label):
         bad = [s["name"] for s in sects
                if s["offset"] != s["addr"] - text["vmaddr"] + text["fileoff"]]
         if bad:
-            err("%s：%s 的文件偏移和虚拟地址错开（装上去一启动就崩）。跑 --fix-dir 会挪回去。"
+            err("%s：%s 的文件偏移和虚拟地址错开（装上去一启动就崩）。只能拿原始产物重新打包，工具不再挪动任何节数据。"
                 % (label, "、".join(bad[:3])))
         else:
             ok("%s：节的偏移和虚拟地址对齐" % label)
@@ -1213,11 +1183,61 @@ def check_macho(path, label):
     else:
         ok("%s：段结构和对齐正常" % label)
 
+    check_geometry(label, info)
+
     if "__RESTRICT" in [s["name"] for s in info["segs"]]:
         err("%s：含 __RESTRICT 段（防注入标记），App Store 会拒" % label)
     for d in info["dylibs"]:
         if not d.startswith(SENSITIVE_DYLIB_PREFIX):
             err("%s：链接了非系统库 %s（App Store 不收）" % (label, d))
+
+
+def check_geometry(label, info):
+    """加载几何：苹果解包时会先按这套规则走一遍。
+
+    真实事故（2026-11-19）：整幅平移过的二进制，段/偏移/符号表自洽不了，
+    上传被 App Store Connect 判成
+    'Missing binary. The app doesn't contain any valid binaries'（91052）。
+    这类包本地也能签名成功，所以必须在签名前逐条核。
+    """
+    d = info["data"]
+    segs = [x for x in info["segs"] if x["name"] != "__PAGEZERO"]
+    bad = []
+    if not segs or segs[0]["name"] != "__TEXT":
+        bad.append("第一个段不是 __TEXT")
+    elif segs[0]["fileoff"] != 0:
+        bad.append("__TEXT.fileoff=0x%x（必须是 0，映像头要落在文件开头）" % segs[0]["fileoff"])
+    for i in range(len(segs)):
+        for j in range(i + 1, len(segs)):
+            a, b = segs[i], segs[j]
+            if a["vmsize"] and b["vmsize"] \
+               and a["vmaddr"] < b["vmaddr"] + b["vmsize"] and b["vmaddr"] < a["vmaddr"] + a["vmsize"]:
+                bad.append("%s 与 %s 的虚拟地址重叠" % (a["name"], b["name"]))
+            if a["filesize"] and b["filesize"] \
+               and a["fileoff"] < b["fileoff"] + b["filesize"] and b["fileoff"] < a["fileoff"] + a["filesize"]:
+                bad.append("%s 与 %s 的文件区间重叠" % (a["name"], b["name"]))
+    if info.get("main") and segs:
+        entryoff = info["main"][1]
+        if not 0 < entryoff < segs[0]["filesize"]:
+            bad.append("入口 entryoff=0x%x 不在 __TEXT 里" % entryoff)
+    le = [x for x in segs if x["name"] == "__LINKEDIT"]
+    off = 32
+    for _ in range(info["ncmds"]):
+        cmd, size = struct.unpack("<II", d[off:off + 8])
+        if cmd == 0x2:  # LC_SYMTAB
+            symoff, nsyms, stroff, strsize = struct.unpack("<IIII", d[off + 8:off + 24])
+            if le:
+                lo, hi = le[0]["fileoff"], le[0]["fileoff"] + le[0]["filesize"]
+                if symoff and not (lo <= symoff <= hi):
+                    bad.append("符号表 0x%x 不在 __LINKEDIT(0x%x-0x%x) 里" % (symoff, lo, hi))
+                if stroff and not (lo <= stroff <= hi):
+                    bad.append("字符串表 0x%x 不在 __LINKEDIT(0x%x-0x%x) 里" % (stroff, lo, hi))
+        off += size
+    if bad:
+        err("%s：加载几何不成立 —— %s（苹果报 Missing binary / 91052）"
+            % (label, "；".join(bad)))
+    else:
+        ok("%s：加载几何成立（段不重叠、入口在 __TEXT、符号表在 __LINKEDIT）" % label)
 
 
 def check_signed(app, appex_list):
@@ -1256,6 +1276,12 @@ def main():
         print("规范化：")
         for n in notes or ["已经是苹果要求的形态，没动。"]:
             print("  · " + n)
+        fatal = [n for n in notes if n.startswith("!! ")]
+        if fatal:
+            print("\n规范化没做成，签名前必须解决（否则包能传上去、装上会崩）：")
+            for n in fatal:
+                print("  ✗ " + n[3:])
+            raise SystemExit(1)
         return
 
     ipa = args[0]
