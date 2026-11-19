@@ -1,38 +1,72 @@
 import Foundation
 import StoreKit
 
-/// 内购。商品是消耗型：100 万 token / 140 元。
+/// 内购。档位全部是消耗型商品，买的是积分。
+///
+/// 换算：1 元 = 10 积分，1400 积分 = 100 万用量。
+/// 苹果没有 10 元整这一档，最低实际档位是 12 元（120 积分）。
 ///
 /// 客户端只负责把 StoreKit 给的凭据送到服务端；
-/// 发多少额度、能不能发，全由服务端验完苹果签名后决定。
+/// 发多少积分、能不能发，全由服务端验完苹果签名后按商品表决定。
 @MainActor
 final class Purchases: ObservableObject {
     static let shared = Purchases()
 
-    static let productID = "com.zakatrans.token.1m"
-    static let displayPrice = "¥140"
+    /// 与后端 credit.Products() 一一对应
+    static let productIDs = [
+        "com.zakatrans.credits.120",
+        "com.zakatrans.credits.300",
+        "com.zakatrans.credits.680",
+        "com.zakatrans.credits.1380",
+        "com.zakatrans.credits.2980",
+    ]
 
-    @Published var product: Product?
+    /// 兜底价目（当 StoreKit 拉不到商品时用来占位，真实价格永远以苹果返回为准）
+    static let fallback: [(id: String, cny: Int, credits: Int)] = [
+        ("com.zakatrans.credits.120", 12, 120),
+        ("com.zakatrans.credits.300", 30, 300),
+        ("com.zakatrans.credits.680", 68, 680),
+        ("com.zakatrans.credits.1380", 138, 1380),
+        ("com.zakatrans.credits.2980", 298, 2980),
+    ]
+
+    @Published var products: [Product] = []
     @Published var busy = false
     @Published var message: String?
+    @Published var loadFailed = false
 
     func load() async {
         do {
-            product = try await Product.products(for: [Self.productID]).first
-            if product == nil {
-                message = "商品还没在 App Store Connect 上线"
+            let list = try await Product.products(for: Self.productIDs)
+            // 按我们定义的顺序排，不按苹果返回的顺序
+            products = Self.productIDs.compactMap { id in list.first { $0.id == id } }
+            loadFailed = products.isEmpty
+            if products.isEmpty {
+                message = "商品还没在 App Store Connect 就绪，稍后再试"
             }
         } catch {
+            loadFailed = true
             message = "商品信息加载失败：\(error.localizedDescription)"
         }
     }
 
-    var priceText: String {
-        product?.displayPrice ?? Self.displayPrice
+    func product(id: String) -> Product? { products.first { $0.id == id } }
+
+    func credits(for id: String) -> Int {
+        Self.fallback.first { $0.id == id }?.credits ?? 0
     }
 
-    func buy() async {
-        guard let product else { return }
+    func priceText(for id: String) -> String {
+        if let p = product(id: id) { return p.displayPrice }
+        if let f = Self.fallback.first(where: { $0.id == id }) { return "¥\(f.cny)" }
+        return "—"
+    }
+
+    func buy(id: String) async {
+        guard let product = product(id: id) else {
+            message = "这个档位还没上架，去 App Store Connect 看一下商品状态"
+            return
+        }
         busy = true
         message = nil
         defer { busy = false }
@@ -44,16 +78,17 @@ final class Purchases: ObservableObject {
                     message = "交易未通过苹果校验"
                     return
                 }
-                let jws = verification.jwsRepresentation
-                let r = try await Cloud.shared.verifyPurchase(jws: jws)
+                let r = try await Cloud.shared.verifyPurchase(jws: verification.jwsRepresentation)
                 await transaction.finish()
-                message = r.credited > 0
-                    ? "已到账 \(Self.format(r.credited)) token"
-                    : "这笔交易已经入过账，余额 \(Self.format(r.balance))"
+                if r.credited > 0 {
+                    message = "已到账 \(Format.credits(r.creditedCredits)) 积分"
+                } else {
+                    message = "这笔交易已入过账，当前余额 \(Format.credits(r.balanceCredits)) 积分"
+                }
             case .userCancelled:
                 message = nil
             case .pending:
-                message = "交易处理中，稍后自动到账"
+                message = "交易处理中，到账后会自动通知"
             @unknown default:
                 message = "未知的交易状态"
             }
@@ -66,8 +101,10 @@ final class Purchases: ObservableObject {
     func syncUnfinished() async {
         for await result in Transaction.unfinished {
             guard case .verified(let transaction) = result else { continue }
-            if let credited = try? await Cloud.shared.verifyPurchase(jws: result.jwsRepresentation) {
-                message = credited.credited > 0 ? "已补记 \(Self.format(credited.credited)) token" : nil
+            if let r = try? await Cloud.shared.verifyPurchase(jws: result.jwsRepresentation) {
+                if r.credited > 0 {
+                    message = "已补记 \(Format.credits(r.creditedCredits)) 积分"
+                }
                 await transaction.finish()
             }
         }

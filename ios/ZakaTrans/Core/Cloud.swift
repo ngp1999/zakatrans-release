@@ -5,17 +5,42 @@ import UIKit
 /// 与自家后端通信。豆包凭据只在服务端，客户端连上游的资格都没有。
 ///
 /// 每个请求都带签名：method + path + reqid + ts + nonce + body hash，
-/// 用设备 token 做 HMAC。改一个字节签名就对不上，重发一次也会被 nonce 拦掉。
+/// 用账号 token 做 HMAC。改一个字节签名就对不上，重发一次也会被 nonce 拦掉。
 @MainActor
 final class Cloud: ObservableObject {
     static let shared = Cloud()
 
     static let baseURL = "https://api.xingyans.com"
 
-    @Published private(set) var balance: Int64 = 0
-    @Published private(set) var todayUsed: Int64 = 0
+    /// 余额对内是 token，对外全部显示积分（1 元 = 10 积分，1400 积分 = 100 万 token）
+    @Published private(set) var balanceTokens: Int64 = 0
+    @Published private(set) var balanceCredits: Double = 0
+    @Published private(set) var todayUsedCredits: Double = 0
     @Published private(set) var loggedIn = false
     @Published private(set) var lastError: String?
+
+    @Published private(set) var profile: Profile?
+
+    var minStartCredits: Double = 2.8
+    private var minStartTokens: Int64 = 2000
+
+    struct Profile: Codable, Equatable {
+        var id: String
+        var email: String
+        var display_name: String
+        var provider: String
+        var created_at: Int64
+
+        var displayName: String {
+            if !display_name.isEmpty { return display_name }
+            if !email.isEmpty { return String(email.split(separator: "@").first ?? "") }
+            return "Zaka 用户"
+        }
+        var initials: String {
+            let n = displayName
+            return n.isEmpty ? "Z" : String(n.prefix(1)).uppercased()
+        }
+    }
 
     private var token: String {
         get { Keychain.get("account_token") ?? "" }
@@ -24,45 +49,72 @@ final class Cloud: ObservableObject {
 
     private(set) var accountID: String = Keychain.get("account_id") ?? ""
 
-    var minStartBalance: Int64 = 2000
+    var hasAccount: Bool { !token.isEmpty }
 
-    // MARK: - 启动登录
+    // MARK: - 启动
 
-    /// 首次进入时注册设备；已有凭据就直接用，失败再重注册一次。
+    /// 已登录就直接刷新；没登录就停在登录页，不再偷偷用设备号建号。
     func bootstrap() async {
-        if !token.isEmpty {
-            if await refresh() { return }
+        guard !token.isEmpty else {
+            loggedIn = false
+            return
         }
-        await register()
+        _ = await refresh()
     }
 
-    func register() async {
-        let body: [String: Any] = [
+    // MARK: - Sign in with Apple
+
+    /// 用苹果返回的 identityToken 换我们自己的账号 token。
+    /// 老设备号账号会在服务端自动绑定，余额一分不动。
+    func loginWithApple(identityToken: String, fullName: String?) async throws {
+        var body: [String: Any] = [
+            "identity_token": identityToken,
             "device_id": Keychain.deviceID(),
             "platform": "ios",
             "model": UIDevice.current.model,
             "app_version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0",
         ]
-        do {
-            let data = try await rawRequest(path: "/v1/auth/device", body: body, auth: false)
-            if let dict = data as? [String: Any],
-               let t = dict["token"] as? String {
-                token = t
-                accountID = dict["account_id"] as? String ?? ""
-                Keychain.set(accountID, for: "account_id")
-                balance = (dict["balance"] as? NSNumber)?.int64Value ?? 0
-                loggedIn = true
-                // 引擎层（ObjC）要拿它连识别服务
-                UserDefaults.standard.set(t, forKey: "zt_account_token")
-                UserDefaults.standard.set(Self.baseURL, forKey: "zt_base_url")
-                lastError = nil
-            }
-        } catch {
-            lastError = "登录失败：\(error.localizedDescription)"
+        if let fullName, !fullName.isEmpty { body["full_name"] = fullName }
+
+        let data = try await rawRequest(path: "/v1/auth/apple", body: body, auth: false)
+        guard let dict = data as? [String: Any],
+              let t = dict["token"] as? String else {
+            throw CloudError.server("登录失败，请重试")
         }
+        token = t
+        accountID = dict["account_id"] as? String ?? ""
+        Keychain.set(accountID, for: "account_id")
+        balanceTokens = (dict["balance"] as? NSNumber)?.int64Value ?? 0
+        balanceCredits = (dict["balance_credits"] as? NSNumber)?.doubleValue ?? 0
+        if let p = dict["profile"] as? [String: Any] {
+            profile = Profile(
+                id: p["id"] as? String ?? accountID,
+                email: p["email"] as? String ?? "",
+                display_name: p["display_name"] as? String ?? "",
+                provider: p["provider"] as? String ?? "apple",
+                created_at: (p["created_at"] as? NSNumber)?.int64Value ?? 0
+            )
+        }
+        loggedIn = true
+        lastError = nil
+        // 引擎层（ObjC）要拿它连识别服务
+        UserDefaults.standard.set(t, forKey: "zt_account_token")
+        UserDefaults.standard.set(Self.baseURL, forKey: "zt_base_url")
+        await refresh()
     }
 
-    // MARK: - 余额与流水
+    func logout() {
+        token = ""
+        Keychain.set("", for: "account_token")
+        UserDefaults.standard.removeObject(forKey: "zt_account_token")
+        accountID = ""
+        profile = nil
+        balanceTokens = 0
+        balanceCredits = 0
+        loggedIn = false
+    }
+
+    // MARK: - 余额
 
     @discardableResult
     func refresh() async -> Bool {
@@ -70,9 +122,20 @@ final class Cloud: ObservableObject {
         do {
             let data = try await request(path: "/v1/me")
             if let d = data as? [String: Any] {
-                balance = (d["balance"] as? NSNumber)?.int64Value ?? balance
-                todayUsed = (d["today_used"] as? NSNumber)?.int64Value ?? 0
-                minStartBalance = (d["min_start_balance"] as? NSNumber)?.int64Value ?? 2000
+                balanceTokens = (d["balance"] as? NSNumber)?.int64Value ?? balanceTokens
+                balanceCredits = (d["balance_credits"] as? NSNumber)?.doubleValue ?? balanceCredits
+                todayUsedCredits = (d["today_used"] as? NSNumber)?.doubleValue ?? 0
+                minStartTokens = (d["min_start_balance"] as? NSNumber)?.int64Value ?? 2000
+                minStartCredits = (d["min_start_credits"] as? NSNumber)?.doubleValue ?? 2.8
+                if let p = d["profile"] as? [String: Any] {
+                    profile = Profile(
+                        id: p["id"] as? String ?? accountID,
+                        email: p["email"] as? String ?? "",
+                        display_name: p["display_name"] as? String ?? "",
+                        provider: p["provider"] as? String ?? "device",
+                        created_at: (p["created_at"] as? NSNumber)?.int64Value ?? 0
+                    )
+                }
                 loggedIn = true
                 lastError = nil
                 return true
@@ -83,46 +146,30 @@ final class Cloud: ObservableObject {
         return false
     }
 
-    struct LedgerItem: Identifiable {
-        let id: Int64
-        let kind: String
-        let delta: Int64
-        let balanceAfter: Int64
-        let at: Date
-        var title: String {
-            switch kind {
-            case "purchase": return "购买额度"
-            case "usage": return "同传消耗"
-            case "grant": return "赠送额度"
-            case "refund": return "退还"
-            default: return kind
-            }
-        }
-    }
+    // MARK: - 云端偏好（字幕样式）
 
-    /// 明细（额度流水）。查询串不参与签名——签名串里带 ?limit=50 会和服务端对不上，
-    /// 之前明细页一直是空的，就是这个原因。
-    func ledger(limit: Int = 50) async -> [LedgerItem] {
-        guard !token.isEmpty else { return [] }
+    func loadPrefs() async -> [String: Any]? {
+        guard !token.isEmpty else { return nil }
         do {
-            let data = try await request(path: "/v1/usage", query: "limit=\(limit)")
-            guard let d = data as? [String: Any], let items = d["items"] as? [[String: Any]] else { return [] }
-            return items.compactMap { row in
-                guard let id = (row["id"] as? NSNumber)?.int64Value else { return nil }
-                return LedgerItem(
-                    id: id,
-                    kind: row["kind"] as? String ?? "",
-                    delta: (row["delta"] as? NSNumber)?.int64Value ?? 0,
-                    balanceAfter: (row["balance_after"] as? NSNumber)?.int64Value ?? 0,
-                    at: Date(timeIntervalSince1970: (row["created_at"] as? NSNumber)?.doubleValue ?? 0)
-                )
-            }
+            let data = try await request(path: "/v1/prefs")
+            return (data as? [String: Any])?["data"] as? [String: Any]
         } catch {
-            return []
+            return nil
         }
     }
 
-    // MARK: - 使用记录（每次开始到停止一条）
+    @discardableResult
+    func savePrefs(_ prefs: [String: Any]) async -> Bool {
+        guard !token.isEmpty else { return false }
+        do {
+            _ = try await request(path: "/v1/prefs", body: prefs, method: "PUT")
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    // MARK: - 使用记录
 
     struct UsageSession: Identifiable {
         let id: String
@@ -130,24 +177,20 @@ final class Cloud: ObservableObject {
         let endedAt: Date?
         let audioMs: Int64
         let upstreamTokens: Int64
-        let billed: Int64
+        let billedTokens: Int64
         let endReason: String
+        let summary: String?
 
-        var durationText: String {
-            let s = Double(audioMs) / 1000.0
-            if s < 60 { return String(format: "%.0f 秒", s) }
-            let m = Int(s) / 60, r = Int(s) % 60
-            return r == 0 ? "\(m) 分" : "\(m) 分 \(r) 秒"
-        }
-
-        /// 上游没返回用量的会话，扣费是按音频折算的，界面上标一下，别让人以为数错了
-        var isEstimated: Bool { upstreamTokens == 0 && billed > 0 }
+        var credits: Double { Double(billedTokens) * 1400.0 / 1_000_000.0 }
+        var creditsText: String { Format.credits(credits) }
+        var durationText: String { Format.duration(audioMs) }
+        var hasSummary: Bool { !(summary ?? "").isEmpty }
 
         var reasonText: String {
             switch endReason {
             case "client_finish": return "主动停止"
             case "client_closed": return "连接断开"
-            case "insufficient_balance": return "额度用完"
+            case "insufficient_balance": return "积分用完"
             case "session_cap": return "达单次上限"
             case "session_timeout": return "达时长上限"
             case "upstream_failed", "upstream_send_failed": return "识别服务异常"
@@ -173,8 +216,9 @@ final class Cloud: ObservableObject {
                     endedAt: end > 0 ? Date(timeIntervalSince1970: end) : nil,
                     audioMs: (row["audio_ms"] as? NSNumber)?.int64Value ?? 0,
                     upstreamTokens: (row["upstream_tokens"] as? NSNumber)?.int64Value ?? 0,
-                    billed: (row["billed_tokens"] as? NSNumber)?.int64Value ?? 0,
-                    endReason: row["end_reason"] as? String ?? ""
+                    billedTokens: (row["billed_tokens"] as? NSNumber)?.int64Value ?? 0,
+                    endReason: row["end_reason"] as? String ?? "",
+                    summary: row["summary"] as? String
                 )
             }
         } catch {
@@ -182,20 +226,63 @@ final class Cloud: ObservableObject {
         }
     }
 
-    // MARK: - 内购核销
+    // MARK: - 对话记录 / 总结
 
-    /// 把 StoreKit 给的交易凭据交给服务端验签，额度由服务端发，客户端说了不算。
-    func verifyPurchase(jws: String) async throws -> (credited: Int64, balance: Int64) {
+    struct TranscriptLine: Identifiable {
+        let id: Int
+        let seq: Int64
+        let source: String
+        let trans: String
+        let at: Date
+    }
+
+    struct SessionDetail {
+        var lines: [TranscriptLine]
+        var summary: String
+    }
+
+    func transcript(sessionID: String) async throws -> SessionDetail {
+        let data = try await request(path: "/v1/sessions/\(sessionID)/transcript")
+        guard let d = data as? [String: Any] else { throw CloudError.badResponse }
+        let raw = d["items"] as? [[String: Any]] ?? []
+        var lines: [TranscriptLine] = []
+        for (i, row) in raw.enumerated() {
+            lines.append(TranscriptLine(
+                id: i,
+                seq: (row["seq"] as? NSNumber)?.int64Value ?? 0,
+                source: row["source"] as? String ?? "",
+                trans: row["trans"] as? String ?? "",
+                at: Date(timeIntervalSince1970: (row["at"] as? NSNumber)?.doubleValue ?? 0)
+            ))
+        }
+        return SessionDetail(lines: lines, summary: d["summary"] as? String ?? "")
+    }
+
+    /// 生成（或取回）这一场的 AI 总结。服务端已生成过会直接返回，不重复花钱。
+    func summarize(sessionID: String) async throws -> String {
+        let data = try await request(path: "/v1/sessions/\(sessionID)/summary", body: [:], method: "POST")
+        guard let d = data as? [String: Any], let s = d["summary"] as? String, !s.isEmpty else {
+            throw CloudError.server("总结没生成出来，稍后再试")
+        }
+        return s
+    }
+
+    // MARK: - 内购
+
+    func verifyPurchase(jws: String) async throws -> (credited: Int64, creditedCredits: Double, balance: Int64, balanceCredits: Double) {
         let body: [String: Any] = ["jws": jws]
         let data = try await request(path: "/v1/iap/verify", body: body)
         guard let d = data as? [String: Any] else { throw CloudError.badResponse }
         let credited = (d["credited"] as? NSNumber)?.int64Value ?? 0
-        let bal = (d["balance"] as? NSNumber)?.int64Value ?? balance
-        balance = bal
-        return (credited, bal)
+        let cr = (d["credited_credits"] as? NSNumber)?.doubleValue ?? 0
+        let bal = (d["balance"] as? NSNumber)?.int64Value ?? balanceTokens
+        let balCr = (d["balance_credits"] as? NSNumber)?.doubleValue ?? balanceCredits
+        balanceTokens = bal
+        balanceCredits = balCr
+        return (credited, cr, bal, balCr)
     }
 
-    // MARK: - 请求与签名
+    // MARK: - 请求
 
     enum CloudError: LocalizedError {
         case badResponse
@@ -208,16 +295,17 @@ final class Cloud: ObservableObject {
         }
     }
 
-    private func request(path: String, query: String? = nil, body: [String: Any]? = nil) async throws -> Any {
-        try await rawRequest(path: path, query: query, body: body, auth: true)
+    private func request(path: String, query: String? = nil, body: [String: Any]? = nil, method: String? = nil) async throws -> Any {
+        try await rawRequest(path: path, query: query, body: body, auth: true, method: method)
     }
 
-    private func rawRequest(path: String, query: String? = nil, body: [String: Any]?, auth: Bool) async throws -> Any {
+    private func rawRequest(path: String, query: String? = nil, body: [String: Any]?, auth: Bool, method: String? = nil) async throws -> Any {
         var full = Self.baseURL + path
         if let q = query, !q.isEmpty { full += "?" + q }
         guard let url = URL(string: full) else { throw CloudError.badResponse }
         var req = URLRequest(url: url)
-        req.httpMethod = body == nil ? "GET" : "POST"
+        let httpMethod = method ?? (body == nil ? "GET" : "POST")
+        req.httpMethod = httpMethod
         req.timeoutInterval = 20
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
@@ -229,11 +317,12 @@ final class Cloud: ObservableObject {
 
         if auth {
             let t = token
-            guard !t.isEmpty else { throw CloudError.server("请先进入 App 完成初始化") }
+            guard !t.isEmpty else { throw CloudError.server("请先登录") }
             let reqID = UUID().uuidString
             let ts = String(Int(Date().timeIntervalSince1970))
             let nonce = Self.randomHex(16)
-            let sig = Self.sign(token: t, method: req.httpMethod ?? "GET", path: path,
+            // 查询串不参与签名（服务端按 r.URL.Path 校验）
+            let sig = Self.sign(token: t, method: httpMethod, path: path,
                                 reqID: reqID, ts: ts, nonce: nonce, body: payload)
             req.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization")
             req.setValue(reqID, forHTTPHeaderField: "X-Req-Id")

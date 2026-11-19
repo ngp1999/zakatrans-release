@@ -1,0 +1,122 @@
+name: ZakaTrans Build (Xcode)
+
+# 真实 Xcode 编译：xcodegen 生成工程 → 自动签名 → 归档 → 导出 ipa → 上传 TestFlight
+on:
+  workflow_dispatch:
+    inputs:
+      marketing_version:
+        description: "版本号（如 3.1.0）"
+        required: false
+        default: "3.1.0"
+      upload:
+        description: "上传到 TestFlight（true/false）"
+        required: false
+        default: "true"
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 选最新的 Xcode
+        run: |
+          set -euo pipefail
+          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          xcodebuild -version
+
+      - name: 安装 xcodegen
+        run: |
+          brew install xcodegen || brew upgrade xcodegen
+          xcodegen --version
+
+      - name: 生成工程
+        working-directory: ios
+        run: |
+          xcodegen generate
+          ls -la
+
+      - name: 准备 API 密钥
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        run: |
+          set -euo pipefail
+          [ -n "${ASC_KEY_P8:-}" ] || { echo "❌ 没填 ASC_KEY_P8"; exit 1; }
+          [ -n "${ASC_KEY_ID:-}" ] || { echo "❌ 没填 ASC_KEY_ID"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/keys" "$HOME/.appstoreconnect/private_keys"
+          KEY="$RUNNER_TEMP/keys/AuthKey_${ASC_KEY_ID}.p8"
+          : > "$KEY"
+          for FLAG in -D -d --decode; do
+            if printf '%s' "$ASC_KEY_P8" | base64 "${FLAG}" > "$KEY" 2>/dev/null \
+               && grep -q "BEGIN PRIVATE KEY" "$KEY"; then
+              break
+            fi
+          done
+          grep -q "BEGIN PRIVATE KEY" "$KEY" || printf '%s\n' "$ASC_KEY_P8" > "$KEY"
+          chmod 600 "$KEY"
+          cp "$KEY" "$HOME/.appstoreconnect/private_keys/"
+          echo "ASC_KEY_FILE=$KEY" >> "$GITHUB_ENV"
+
+      - name: 归档（自动签名）
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          MV: ${{ github.event.inputs.marketing_version }}
+        run: |
+          set -euo pipefail
+          BUILD_NO="$(date +%s)"
+          echo "BUILD_NO=$BUILD_NO" >> "$GITHUB_ENV"
+          xcodebuild -project ios/ZakaTrans.xcodeproj \
+            -scheme ZakaTrans \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/ZakaTrans.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_FILE" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            MARKETING_VERSION="${MV:-3.1.0}" \
+            CURRENT_PROJECT_VERSION="$BUILD_NO" \
+            DEVELOPMENT_TEAM=9VSZ8M2JL5 \
+            CODE_SIGN_STYLE=Automatic \
+            archive 2>&1 | tee "$RUNNER_TEMP/archive.log"
+          test ${PIPESTATUS[0]} -eq 0
+
+      - name: 导出 ipa
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/ZakaTrans.xcarchive" \
+            -exportPath "$RUNNER_TEMP/out" \
+            -exportOptionsPlist ios/ExportOptions.plist \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_FILE" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+          ls -la "$RUNNER_TEMP/out"
+
+      - name: 上传 TestFlight
+        if: ${{ github.event.inputs.upload != 'false' }}
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          IPA="$(ls "$RUNNER_TEMP"/out/*.ipa | head -1)"
+          echo "上传 $IPA"
+          xcrun altool --upload-app -f "$IPA" -t ios \
+            --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID" --verbose
+
+      - name: 留存 ipa
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZakaTrans-ipa
+          path: ${{ runner.temp }}/out/*.ipa
+          if-no-files-found: warn
+          retention-days: 14

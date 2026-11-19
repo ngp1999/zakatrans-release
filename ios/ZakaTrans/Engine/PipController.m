@@ -20,6 +20,15 @@
 
 static const CGFloat ZK_ZH_SIZE = 20.0;
 static const CGFloat ZK_EN_SIZE = 13.0;
+
+// 字幕外观（从 App 的字幕设置同步过来）
+static CGFloat gZhSize = 20.0;
+static CGFloat gEnSize = 13.0;
+static UIColor *gTextColor = nil;
+static NSString *gStyle = @"shadow";       // shadow | box | plain
+static NSString *gMode = @"bilingual";     // bilingual | zh | source
+static CGSize gPipSize = {640, 180};       // bar 默认横条
+static BOOL gPipBar = YES;
 static const CGFloat ZK_PARA_GAP = 14.0;      // 句与句之间的空档
 static const CGFloat ZK_MAX_BLOCKS = 120.0;   // 历史句上限（正常一场对话到不了）
 
@@ -64,6 +73,7 @@ static const CGFloat ZK_SPRING_W_BIG = 13.0;
         _zhLabel.lineBreakMode = NSLineBreakByWordWrapping;
         _zhLabel.opaque = NO;
         _zhLabel.backgroundColor = [UIColor clearColor];
+        _zhLabel.numberOfLines = 0;
         [self addSubview:_zhLabel];
 
         _enLabel = [UILabel new];
@@ -77,36 +87,32 @@ static const CGFloat ZK_SPRING_W_BIG = 13.0;
 }
 
 // 属性字典建一次就够：每帧 new 一个 ParagraphStyle + 字典是白扔的内存和 CPU
+// 每次按当前设置生成（字幕设置改了要立刻生效，所以不能 dispatch_once 缓存死）
 static NSDictionary *ZKZhAttrs(void) {
-    static NSDictionary *d = nil;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        NSMutableParagraphStyle *p = [NSMutableParagraphStyle new];
-        p.lineSpacing = 2.0;
-        p.lineBreakMode = NSLineBreakByWordWrapping;
-        d = @{
-            NSFontAttributeName: [UIFont boldSystemFontOfSize:ZK_ZH_SIZE],
-            NSForegroundColorAttributeName: [UIColor colorWithWhite:1 alpha:1.0],
-            NSParagraphStyleAttributeName: p,
-        };
-    });
-    return d;
+    NSMutableParagraphStyle *p = [NSMutableParagraphStyle new];
+    p.lineSpacing = 2.0;
+    p.lineBreakMode = NSLineBreakByWordWrapping;
+    p.alignment = NSTextAlignmentLeft;
+    UIColor *c = gTextColor ?: [UIColor whiteColor];
+    return @{
+        NSFontAttributeName: [UIFont boldSystemFontOfSize:gZhSize],
+        NSForegroundColorAttributeName: c,
+        NSParagraphStyleAttributeName: p,
+    };
 }
 
 static NSDictionary *ZKEnAttrs(void) {
-    static NSDictionary *d = nil;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        NSMutableParagraphStyle *p = [NSMutableParagraphStyle new];
-        p.lineSpacing = 1.0;
-        p.lineBreakMode = NSLineBreakByWordWrapping;
-        d = @{
-            NSFontAttributeName: [UIFont systemFontOfSize:ZK_EN_SIZE],
-            NSForegroundColorAttributeName: [UIColor colorWithWhite:0.62 alpha:1],
-            NSParagraphStyleAttributeName: p,
-        };
-    });
-    return d;
+    NSMutableParagraphStyle *p = [NSMutableParagraphStyle new];
+    p.lineSpacing = 1.0;
+    p.lineBreakMode = NSLineBreakByWordWrapping;
+    p.alignment = NSTextAlignmentLeft;
+    // 原文比译文暗一档：同一底色下按 70% 亮度走，纯白时是浅灰
+    UIColor *c = gTextColor ?: [UIColor colorWithWhite:1 alpha:1];
+    return @{
+        NSFontAttributeName: [UIFont systemFontOfSize:gEnSize],
+        NSForegroundColorAttributeName: [c colorWithAlphaComponent:0.72],
+        NSParagraphStyleAttributeName: p,
+    };
 }
 
 // 这个视图只做"内容画在固定位置上"，位置由外层滚动统一控制。
@@ -148,6 +154,13 @@ static NSDictionary *ZKEnAttrs(void) {
 - (void)applyEn:(NSString *)en zh:(NSString *)zh first:(BOOL)first width:(CGFloat)w force:(BOOL)force {
     en = en ?: @"";
     zh = zh ?: @"";
+    // 语言模式：双语 / 仅中文 / 仅原文
+    if ([gMode isEqualToString:@"zh"]) {
+        en = @"";
+    } else if ([gMode isEqualToString:@"source"]) {
+        zh = en;      // 原文当主字幕显示
+        en = @"";
+    }
     self.enText = en;
     self.zhText = zh;
 
@@ -162,6 +175,19 @@ static NSDictionary *ZKEnAttrs(void) {
     _appliedFirst = first;
 
     CGFloat padTop = first ? 0 : ZK_PARA_GAP;
+
+    // 样式：底板 / 描边阴影 / 纯文字
+    BOOL box = [gStyle isEqualToString:@"box"];
+    BOOL plain = [gStyle isEqualToString:@"plain"];
+    for (UILabel *l in @[self.zhLabel, self.enLabel]) {
+        l.backgroundColor = box ? [UIColor colorWithWhite:0 alpha:0.45] : [UIColor clearColor];
+        l.layer.cornerRadius = box ? 6 : 0;
+        l.layer.masksToBounds = box;
+        l.layer.shadowOpacity = plain ? 0 : (box ? 0 : 0.85);
+        l.layer.shadowColor = [UIColor blackColor].CGColor;
+        l.layer.shadowRadius = 3;
+        l.layer.shadowOffset = CGSizeMake(0, 1);
+    }
 
     NSAttributedString *za = [self zhAttr:zh];
     NSAttributedString *ea = [self enAttr:en];
@@ -609,6 +635,37 @@ static NSDictionary *ZKEnAttrs(void) {
     BOOL _starting;
 }
 
+// App 的字幕设置传进来：字号、颜色、样式、语言模式、画中画形态
++ (void)applyStyle:(NSDictionary *)p {
+    if (![p isKindOfClass:[NSDictionary class]]) return;
+    NSNumber *size = p[@"size"];
+    if ([size isKindOfClass:[NSNumber class]] && size.doubleValue > 8) {
+        gZhSize = size.doubleValue;
+        gEnSize = MAX(11.0, size.doubleValue - 6.0);
+    }
+    NSString *color = p[@"color"];
+    if ([color isKindOfClass:[NSString class]]) {
+        if ([color isEqualToString:@"yellow"])      gTextColor = [UIColor colorWithRed:1.00 green:0.85 blue:0.30 alpha:1];
+        else if ([color isEqualToString:@"cyan"])   gTextColor = [UIColor colorWithRed:0.40 green:0.90 blue:0.95 alpha:1];
+        else if ([color isEqualToString:@"green"])  gTextColor = [UIColor colorWithRed:0.55 green:0.95 blue:0.65 alpha:1];
+        else if ([color isEqualToString:@"black"])  gTextColor = [UIColor blackColor];
+        else                                        gTextColor = [UIColor whiteColor];
+    }
+    NSString *style = p[@"style"];
+    if ([style isKindOfClass:[NSString class]]) gStyle = style;
+    NSString *mode = p[@"mode"];
+    if ([mode isKindOfClass:[NSString class]]) gMode = mode;
+
+    NSString *pip = p[@"pip"];
+    if ([pip isKindOfClass:[NSString class]]) {
+        gPipBar = [pip isEqualToString:@"bar"];
+        // 横条：3.5:1，缩到最小窗口时一句中文也基本能放一行，不会两三行叠在一起
+        gPipSize = gPipBar ? CGSizeMake(640, 180) : CGSizeMake(420, 300);
+    }
+    [ZKStore log:@"pip style size=%.0f color=%@ style=%@ mode=%@ pip=%@",
+        gZhSize, color ?: @"", gStyle, gMode, pip ?: @""];
+}
+
 + (instancetype)shared {
     static ZKPip *s; static dispatch_once_t o;
     dispatch_once(&o, ^{ s = [ZKPip new]; });
@@ -640,7 +697,7 @@ static NSDictionary *ZKEnAttrs(void) {
     ZKCrumb("pip.2.host");
     @try {
         _host = [[AVPictureInPictureVideoCallViewController alloc] init];
-        _host.preferredContentSize = CGSizeMake(400, 260);
+        _host.preferredContentSize = gPipSize;
         _sub = [[ZKSubtitleVC alloc] init];
         [_host addChildViewController:_sub];
         _sub.view.frame = _host.view.bounds;

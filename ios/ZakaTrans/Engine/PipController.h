@@ -2,6 +2,8 @@
 
 @interface ZKPip : NSObject
 + (instancetype)shared;
+// 字幕设置：size / color / style / mode / pip
++ (void)applyStyle:(NSDictionary *)p;
 - (BOOL)isActive;
 - (void)startInView:(UIView *)view;
 - (void)stop;
