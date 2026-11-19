@@ -39,6 +39,18 @@ ASC_KEY_FILE="${ASC_KEY_FILE:-}"
 # 手工改字节那条路已经证明会崩。编出来的包交给下面的流程重签。
 if [ -f "ios/project.yml" ] && [ "${SKIP_BUILD:-0}" != "1" ]; then
   log "0.4/9 从 SwiftUI 源码编译"
+
+  # 苹果从 2025 年起按编译 SDK 卡上传：低于 iOS 26 SDK 直接 409。
+  # runner 上通常装了多个 Xcode，挑版本号最大的那个用。
+  BEST_XCODE="$(ls -d /Applications/Xcode*.app 2>/dev/null | sed 's|.*/Xcode||; s|\.app||' | sort -V | tail -1)"
+  if [ -n "${BEST_XCODE}" ]; then
+    BEST_PATH="/Applications/Xcode${BEST_XCODE}.app"
+    if [ -d "${BEST_PATH}" ]; then
+      log "使用 Xcode ${BEST_XCODE}（$(/usr/libexec/PlistBuddy -c 'Print :DTXcode' "${BEST_PATH}/Contents/Info.plist" 2>/dev/null || echo '?')）"
+      sudo xcode-select -s "${BEST_PATH}" 2>/dev/null || xcode-select -s "${BEST_PATH}" 2>/dev/null || true
+    fi
+  fi
+  xcodebuild -version | head -2
   # 这个包是 Xcode 自家链接器产物，加密范围按苹果口径本来就不与段尾齐平
   export ALLOW_NATIVE_CRYPT=1
   if ! command -v xcodegen >/dev/null 2>&1; then
@@ -70,6 +82,18 @@ if [ -f "ios/project.yml" ] && [ "${SKIP_BUILD:-0}" != "1" ]; then
     echo "---- 编译日志末尾 ----"
     tail -30 build/xcodebuild.log || true
     fail "编译产物里没有 ZakaTrans.app"
+  fi
+  # 苹果的校验要求 bundle 根目录里真有 120x120 / 152x152 的 png，
+  # 只放在 Assets.car 里它会报 "Missing required icon file"。
+  ICON_SRC="ios/ZakaTrans/Resources/Assets.xcassets/AppIcon.appiconset"
+  if [ -d "${ICON_SRC}" ]; then
+    cp "${ICON_SRC}/icon-60x60@2x.png" "${APP_PATH}/Icon-60@2x.png" 2>/dev/null || true
+    cp "${ICON_SRC}/icon-76x76@2x.png" "${APP_PATH}/Icon-76@2x.png" 2>/dev/null || true
+    cp "${ICON_SRC}/icon-60x60@3x.png" "${APP_PATH}/Icon-60@3x.png" 2>/dev/null || true
+    cp "${ICON_SRC}/icon-29x29@2x.png" "${APP_PATH}/Icon-29@2x.png" 2>/dev/null || true
+    cp "${ICON_SRC}/icon-40x40@3x.png" "${APP_PATH}/Icon-40@3x.png" 2>/dev/null || true
+    cp "${ICON_SRC}/icon-1024x1024@1x.png" "${APP_PATH}/Icon-1024.png" 2>/dev/null || true
+    ls -la "${APP_PATH}"/*.png 2>/dev/null | head -8 || true
   fi
   rm -rf build/Payload && mkdir -p build/Payload
   cp -R "$APP_PATH" build/Payload/
