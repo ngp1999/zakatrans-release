@@ -34,6 +34,42 @@ ASC_KEY_ID="${ASC_KEY_ID:-}"
 ASC_ISSUER_ID="${ASC_ISSUER_ID:-}"
 ASC_KEY_FILE="${ASC_KEY_FILE:-}"
 
+# ── 0.4 从源码编译（仓库里有 ios/project.yml 就走这一步）──────────
+# 为什么要放在这里：Apple 自家 ld64 编出来的二进制才带正确的段标志，
+# 手工改字节那条路已经证明会崩。编出来的包交给下面的流程重签。
+if [ -f "ios/project.yml" ] && [ "${SKIP_BUILD:-0}" != "1" ]; then
+  log "0.4/9 从 SwiftUI 源码编译"
+  if ! command -v xcodegen >/dev/null 2>&1; then
+    brew install xcodegen >/dev/null 2>&1 || true
+  fi
+  command -v xcodegen >/dev/null 2>&1 || fail "xcodegen 装不上，没法生成工程"
+  ( cd ios && xcodegen generate --quiet ) || fail "xcodegen 生成工程失败"
+  mkdir -p build
+  set +e
+  xcodebuild -project ios/ZakaTrans.xcodeproj \
+    -scheme ZakaTrans -configuration Release \
+    -destination 'generic/platform=iOS' \
+    -archivePath build/ZakaTrans.xcarchive \
+    CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+    DEVELOPMENT_TEAM="" ENABLE_BITCODE=NO \
+    > build/xcodebuild.log 2>&1
+  XC=$?
+  set -e
+  if [ $XC -ne 0 ]; then
+    echo "---- 编译失败，最后 60 行 ----"
+    tail -60 build/xcodebuild.log || true
+    echo "---- 报错汇总 ----"
+    grep -nE "error:|error " build/xcodebuild.log | head -30 || true
+    fail "xcodebuild 失败（退出码 $XC）"
+  fi
+  APP_PATH="build/ZakaTrans.xcarchive/Products/Applications/ZakaTrans.app"
+  [ -d "$APP_PATH" ] || fail "编译产物里没有 ZakaTrans.app"
+  rm -rf build/Payload && mkdir -p build/Payload
+  cp -R "$APP_PATH" build/Payload/
+  ( cd build && ditto -c -k --sequesterRsrc --keepParent Payload "../$IPA" )
+  log "编译完成：$IPA（$(du -h "$IPA" | cut -f1)）"
+fi
+
 [ -f "$CERT_P12" ] || fail "找不到签名证书：$CERT_P12"
 [ -f "$APP_PROFILE" ] || fail "找不到主 App 描述文件：$APP_PROFILE"
 [ -f "$IPA" ] || fail "找不到待签名的 ipa：$IPA"
