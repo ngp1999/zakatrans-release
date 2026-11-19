@@ -117,7 +117,7 @@ for BIN in "$APP/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/
            $(ls "$APP"/PlugIns/*.appex/* 2>/dev/null | grep -v Info.plist | grep -v PkgInfo || true); do
   [ -f "$BIN" ] || continue
   python3 - "$BIN" <<'PYBIN' || fail "可执行文件版式不对：$BIN"
-import struct, sys
+import os, struct, sys
 p = sys.argv[1]
 d = open(p, "rb").read()
 if struct.unpack("<I", d[:4])[0] != 0xFEEDFACF:
@@ -170,7 +170,11 @@ if fs % 0x4000 or vs % 0x4000:
 if co != 0x4000:
     bad.append("cryptoff=0x%x（应为 0x4000）" % co)
 if co + cs != fs:
-    bad.append("加密末端 0x%x ≠ __TEXT 段尾 0x%x" % (co + cs, fs))
+    # Xcode 自家 ld64 产出的包，cryptsize 只覆盖到最后一个有内容的节，
+    # 末端通常小于段尾 —— 苹果一直是接受的。真正会退包的是「超出段范围」。
+    # 只有手工改过版式的包才要求末端与段尾齐平，用 STRICT_LAYOUT=1 打开。
+    if os.environ.get("STRICT_LAYOUT") == "1" or co + cs > fs:
+        bad.append("加密末端 0x%x ≠ __TEXT 段尾 0x%x" % (co + cs, fs))
 if ci != 0:
     bad.append("cryptid=%d（应为 0）" % ci)
 if bad:
