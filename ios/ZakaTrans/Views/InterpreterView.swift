@@ -283,7 +283,9 @@ struct InterpreterView: View {
 
         guard let itp = ZKInterpreter.shared() else { error = "同传引擎没启动起来，重开一次试试"; return }
         itp.onLine = { side, source, trans, final in
-            let s = side
+            let s = side ?? "a"
+            let source = source ?? ""
+            let trans = trans ?? ""
             DispatchQueue.main.async {
                 // 增量：先在「正在说」那行里滚
                 if !final {
