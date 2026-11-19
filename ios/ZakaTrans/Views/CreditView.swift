@@ -1,34 +1,29 @@
 import SwiftUI
 
-/// 积分：余额 + 积分规则。充值走弹窗，页面本身不铺档位。
+/// 我的积分：余额 + 积分规则 + 付费协议入口。充值走弹窗，页面本身不铺档位。
 struct CreditView: View {
     @ObservedObject private var cloud = Cloud.shared
     @ObservedObject private var purch = Purchases.shared
-    @Environment(\.dismiss) private var dismiss
 
     @State private var showPurchase = false
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 16) {
+            VStack(spacing: 18) {
                 balanceCard
                 rulesCard
+                agreementRow
             }
             .padding(.horizontal, 16)
-            .padding(.top, 10)
+            .padding(.top, 12)
             .padding(.bottom, 28)
         }
         .background(Theme.bg)
-        .navigationTitle("积分")
+        .navigationTitle("我的积分")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("完成") { dismiss() }
-            }
-        }
         .sheet(isPresented: $showPurchase) {
             PurchaseView()
-                .presentationDetents([.medium, .large])
+                .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
         .task {
@@ -40,21 +35,31 @@ struct CreditView: View {
     // MARK: - 余额
 
     private var balanceCard: some View {
-        VStack(spacing: 16) {
-            VStack(spacing: 6) {
-                Text("当前积分")
+        VStack(spacing: 0) {
+            VStack(spacing: 10) {
+                Text("可用积分")
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.sub)
 
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(Format.credits(cloud.balanceCredits))
-                        .font(.system(size: 48, weight: .bold).monospacedDigit())
+                        .font(.system(size: 52, weight: .bold).monospacedDigit())
                         .foregroundStyle(Theme.ink)
+                        .contentTransition(.numericText())
                     Text("积分")
                         .font(.system(size: 15))
                         .foregroundStyle(Theme.sub)
                 }
+
+                Text("按有效识别内容扣减，静音不计")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.faint)
             }
+            .frame(maxWidth: .infinity)
+            .padding(.top, 26)
+            .padding(.bottom, 22)
+
+            Rectangle().fill(Theme.line).frame(height: 0.5)
 
             Button {
                 showPurchase = true
@@ -62,18 +67,21 @@ struct CreditView: View {
                 Text("充值")
             }
             .buttonStyle(PrimaryButtonStyle())
+            .padding(16)
         }
-        .frame(maxWidth: .infinity)
-        .card(padding: 24)
+        .background(Theme.card)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+        .shadow(color: Color.black.opacity(0.04), radius: 12, y: 4)
     }
 
     // MARK: - 规则
 
     private var rulesCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 0) {
             Text("积分规则")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(Theme.ink)
+                .padding(.bottom, 14)
 
             rule(
                 index: "1",
@@ -97,7 +105,7 @@ struct CreditView: View {
     }
 
     private var divider: some View {
-        Rectangle().fill(Theme.line).frame(height: 0.5)
+        Rectangle().fill(Theme.line).frame(height: 0.5).padding(.vertical, 12)
     }
 
     private func rule(index: String, title: String, body: String) -> some View {
@@ -110,16 +118,42 @@ struct CreditView: View {
                 .clipShape(Circle())
                 .padding(.top, 1)
 
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(title)
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(Theme.ink)
                 Text(body)
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.sub)
-                    .lineSpacing(3)
+                    .lineSpacing(4)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    // MARK: - 付费协议
+
+    private var agreementRow: some View {
+        NavigationLink {
+            TermsView(kind: .payment)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "doc.text")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(Theme.sub)
+                Text("付费协议")
+                    .font(.system(size: 15))
+                    .foregroundStyle(Theme.ink)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.faint)
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 52)
+            .background(Theme.card)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+        }
+        .buttonStyle(RowButtonStyle())
     }
 }
