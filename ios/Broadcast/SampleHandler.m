@@ -28,6 +28,9 @@
     NSMutableData *_fileAccum;
 
     int _fd;
+    BOOL _everConnected;       // 曾经连上过主 App（连上过才说明用户真的在用）
+    double _disconnectedAt;    // 断开时刻，0 表示当前连着
+    BOOL _autoFinished;        // 已因主 App 消失而自动结束，避免重复调用
     NSInteger _bufs;
     NSInteger _audioFrames;
     NSInteger _dropped;
@@ -100,6 +103,8 @@
         int one = 1;
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
         _fd = fd;
+        _everConnected = YES;
+        _disconnectedAt = 0;
         [ZKStore log:@"ext: tcp connected at buf %ld", (long)_bufs];
         [ZKStore beat:@{@"bufs": @(_bufs), @"conn": @"tcp"}];
     } else {
@@ -134,12 +139,17 @@
         (unsigned char)(seq & 0xff)
     };
     ssize_t n = send(_fd, hdr, 9, MSG_NOSIGNAL);
-    if (n != 9) { close(_fd); _fd = -1; return; }
+    if (n != 9) {
+        close(_fd); _fd = -1;
+        if (_disconnectedAt == 0) _disconnectedAt = [NSDate date].timeIntervalSince1970;
+        return;
+    }
     n = send(_fd, chunk.bytes, chunk.length, MSG_NOSIGNAL);
     if (n != (ssize_t)chunk.length) {
         // 断了就别再攒旧音频，重连后从新音频开始，免得字幕拖后几秒
         close(_fd);
         _fd = -1;
+        if (_disconnectedAt == 0) _disconnectedAt = [NSDate date].timeIntervalSince1970;
         [_lock lock];
         [_pending setLength:0];
         [_lock unlock];
@@ -158,6 +168,27 @@
         if (!s) return;
         if (s->_fd < 0) [s connect];
         [s flushPending];
+
+        // 主 App 被上划杀掉后，录屏扩展进程还活着：红点一直亮、用户以为还在同传，
+        // 实际上音频没人接、服务端也早就结算了。这里自己收尾。
+        // 只有「曾经连上过」才判断，避免用户先点录屏、晚几秒才打开 App 被误停。
+        if (s->_everConnected && s->_fd < 0 && s->_disconnectedAt > 0 && !s->_autoFinished) {
+            double gone = [NSDate date].timeIntervalSince1970 - s->_disconnectedAt;
+            if (gone > 20.0) {
+                s->_autoFinished = YES;
+                [ZKStore log:@"ext: 主 App 已断开 %.0fs，自动结束广播", gone];
+                [ZKStore beat:@{@"bufs": @(s->_bufs), @"conn": @"app_gone"}];
+                if (s->_beatSrc) { dispatch_source_cancel(s->_beatSrc); s->_beatSrc = nil; }
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [s finishBroadcastWithError:[NSError errorWithDomain:@"com.zakatrans.app.ext"
+                                                                    code:4101
+                                                                userInfo:@{NSLocalizedDescriptionKey:
+                                                                               @"主 App 已关闭，录屏已停止"}]];
+                });
+                return;
+            }
+        }
+
         s->_ticks++;
         if (s->_ticks % 25 != 0) return;
         [ZKStore beat:@{@"bufs": @(s->_bufs),

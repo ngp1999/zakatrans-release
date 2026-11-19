@@ -5,6 +5,7 @@ struct WalletView: View {
     @ObservedObject private var purchases = Purchases.shared
     @Environment(\.dismiss) private var dismiss
     @State private var items: [Cloud.LedgerItem] = []
+    @State private var sessions: [Cloud.UsageSession] = []
 
     var body: some View {
         ZStack {
@@ -13,6 +14,7 @@ struct WalletView: View {
                 VStack(spacing: 16) {
                     balanceCard
                     productCard
+                    usageCard
                     historyCard
                     Text("额度按模型接口返回的有效 Token 数量扣减，与开启时长相无关。\n识别与翻译由服务端转发完成，凭据不下发到设备。")
                         .font(.system(size: 11))
@@ -34,11 +36,13 @@ struct WalletView: View {
             await cloud.refresh()
             await purchases.load()
             items = await cloud.ledger()
+            sessions = await cloud.sessions()
         }
         .onChange(of: purchases.message) { _ in
             Task {
                 await cloud.refresh()
                 items = await cloud.ledger()
+                sessions = await cloud.sessions()
             }
         }
     }
@@ -109,13 +113,72 @@ struct WalletView: View {
         .card()
     }
 
+    /// 每一次「开始 → 停止」都会留一条：什么时候开始、听了多久、扣了多少。
+    private var usageCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("使用记录")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.ink)
+                Spacer()
+                if !sessions.isEmpty {
+                    Text("\(sessions.count) 次")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.sub)
+                }
+            }
+
+            if sessions.isEmpty {
+                Text("还没有使用记录。开始一次同传并停止后，这里会显示每次的时长和扣费。")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.sub)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ForEach(sessions.prefix(30)) { s in
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 6) {
+                                Text(s.startedAt.formatted(date: .numeric, time: .shortened))
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(Theme.ink)
+                                if s.isEstimated {
+                                    Text("估算")
+                                        .font(.system(size: 10))
+                                        .foregroundStyle(Theme.sub)
+                                        .padding(.horizontal, 5).padding(.vertical, 1)
+                                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.line))
+                                }
+                            }
+                            Text("\(s.durationText) · \(s.reasonText)")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Theme.sub)
+                        }
+                        Spacer()
+                        VStack(alignment: .trailing, spacing: 3) {
+                            Text(s.billed > 0 ? "-\(Purchases.format(s.billed))" : "0")
+                                .font(.system(size: 14, weight: .medium).monospacedDigit())
+                                .foregroundStyle(Theme.ink)
+                            Text("token").font(.system(size: 10)).foregroundStyle(Theme.sub)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                    if s.id != sessions.prefix(30).last?.id {
+                        Divider().overlay(Theme.line)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card()
+    }
+
     private var historyCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("明细")
+            Text("额度流水")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Theme.ink)
             if items.isEmpty {
-                Text("还没有记录")
+                Text("还没有额度流水")
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.sub)
             } else {

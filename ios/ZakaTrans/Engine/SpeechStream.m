@@ -91,6 +91,9 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
     _chunksOut = 0;
     _asrState = @"启动中";
     _fileOffset = 0;
+    // 上一场如果 App 被划掉、录屏扩展还在跑，会把音频继续写进共享文件。
+    // 新的一场开始时先清掉，绝不能让旧音频在这一场里补传给上游——那会凭空多扣钱。
+    [ZKStore resetPCM];
     _fileMode = NO;
     _fedFrames = 0;
     _lostFrames = 0;

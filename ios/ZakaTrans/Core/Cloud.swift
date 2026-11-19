@@ -100,10 +100,12 @@ final class Cloud: ObservableObject {
         }
     }
 
+    /// 明细（额度流水）。查询串不参与签名——签名串里带 ?limit=50 会和服务端对不上，
+    /// 之前明细页一直是空的，就是这个原因。
     func ledger(limit: Int = 50) async -> [LedgerItem] {
         guard !token.isEmpty else { return [] }
         do {
-            let data = try await request(path: "/v1/usage?limit=\(limit)")
+            let data = try await request(path: "/v1/usage", query: "limit=\(limit)")
             guard let d = data as? [String: Any], let items = d["items"] as? [[String: Any]] else { return [] }
             return items.compactMap { row in
                 guard let id = (row["id"] as? NSNumber)?.int64Value else { return nil }
@@ -113,6 +115,66 @@ final class Cloud: ObservableObject {
                     delta: (row["delta"] as? NSNumber)?.int64Value ?? 0,
                     balanceAfter: (row["balance_after"] as? NSNumber)?.int64Value ?? 0,
                     at: Date(timeIntervalSince1970: (row["created_at"] as? NSNumber)?.doubleValue ?? 0)
+                )
+            }
+        } catch {
+            return []
+        }
+    }
+
+    // MARK: - 使用记录（每次开始到停止一条）
+
+    struct UsageSession: Identifiable {
+        let id: String
+        let startedAt: Date
+        let endedAt: Date?
+        let audioMs: Int64
+        let upstreamTokens: Int64
+        let billed: Int64
+        let endReason: String
+
+        var durationText: String {
+            let s = Double(audioMs) / 1000.0
+            if s < 60 { return String(format: "%.0f 秒", s) }
+            let m = Int(s) / 60, r = Int(s) % 60
+            return r == 0 ? "\(m) 分" : "\(m) 分 \(r) 秒"
+        }
+
+        /// 上游没返回用量的会话，扣费是按音频折算的，界面上标一下，别让人以为数错了
+        var isEstimated: Bool { upstreamTokens == 0 && billed > 0 }
+
+        var reasonText: String {
+            switch endReason {
+            case "client_finish": return "主动停止"
+            case "client_closed": return "连接断开"
+            case "insufficient_balance": return "额度用完"
+            case "session_cap": return "达单次上限"
+            case "session_timeout": return "达时长上限"
+            case "upstream_failed", "upstream_send_failed": return "识别服务异常"
+            case "audio_flood": return "异常音频已拦截"
+            case "": return "已结束"
+            default: return endReason
+            }
+        }
+    }
+
+    func sessions(limit: Int = 100) async -> [UsageSession] {
+        guard !token.isEmpty else { return [] }
+        do {
+            let data = try await request(path: "/v1/sessions", query: "limit=\(limit)")
+            guard let d = data as? [String: Any], let items = d["items"] as? [[String: Any]] else { return [] }
+            return items.compactMap { row in
+                guard let sid = row["id"] as? String else { return nil }
+                let start = (row["created_at"] as? NSNumber)?.doubleValue ?? 0
+                let end = (row["ended_at"] as? NSNumber)?.doubleValue ?? 0
+                return UsageSession(
+                    id: sid,
+                    startedAt: Date(timeIntervalSince1970: start),
+                    endedAt: end > 0 ? Date(timeIntervalSince1970: end) : nil,
+                    audioMs: (row["audio_ms"] as? NSNumber)?.int64Value ?? 0,
+                    upstreamTokens: (row["upstream_tokens"] as? NSNumber)?.int64Value ?? 0,
+                    billed: (row["billed_tokens"] as? NSNumber)?.int64Value ?? 0,
+                    endReason: row["end_reason"] as? String ?? ""
                 )
             }
         } catch {
@@ -146,12 +208,14 @@ final class Cloud: ObservableObject {
         }
     }
 
-    private func request(path: String, body: [String: Any]? = nil) async throws -> Any {
-        try await rawRequest(path: path, body: body, auth: true)
+    private func request(path: String, query: String? = nil, body: [String: Any]? = nil) async throws -> Any {
+        try await rawRequest(path: path, query: query, body: body, auth: true)
     }
 
-    private func rawRequest(path: String, body: [String: Any]?, auth: Bool) async throws -> Any {
-        guard let url = URL(string: Self.baseURL + path) else { throw CloudError.badResponse }
+    private func rawRequest(path: String, query: String? = nil, body: [String: Any]?, auth: Bool) async throws -> Any {
+        var full = Self.baseURL + path
+        if let q = query, !q.isEmpty { full += "?" + q }
+        guard let url = URL(string: full) else { throw CloudError.badResponse }
         var req = URLRequest(url: url)
         req.httpMethod = body == nil ? "GET" : "POST"
         req.timeoutInterval = 20
