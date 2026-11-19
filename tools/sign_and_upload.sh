@@ -60,6 +60,58 @@ log "2/9 解包 ipa"
 mkdir -p "$WORK/payload"
 unzip -q "$IPA" -d "$WORK/payload"
 
+APP="$(ls -d "$WORK"/payload/Payload/*.app 2>/dev/null | head -1 || true)"
+[ -n "$APP" ] || fail "ipa 结构不对：里面没有 Payload/*.app"
+
+# ── 2-0. 可执行文件版式 ────────────────────────────────────────
+# 包里的两个二进制已经按苹果链接器（ld64）的版式排好了：
+#   · 加载命令独占第 0 页，正文从 0x4000 之后开始
+#   · LC_ENCRYPTION_INFO_64 的 cryptoff/cryptsize 按 ld64 口径算，末端与 __TEXT 段尾齐平
+#   · __TEXT / __DATA 的 vmsize 都是 16K 整页
+# 这里只做一次核对，不合规就当场停下（不再拿 .o 重链——那批 .o 是重写界面的
+# 那套源码，不能用来替换完整功能版的程序）。
+log "2-0/9 核对可执行文件版式"
+python3 tools/check_ipa.py --version >/dev/null 2>&1 || true
+for BIN in "$APP/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")" \
+           $(ls "$APP"/PlugIns/*.appex/* 2>/dev/null | grep -v Info.plist | grep -v PkgInfo || true); do
+  [ -f "$BIN" ] || continue
+  python3 - "$BIN" <<'PYBIN' || fail "可执行文件版式不对：$BIN"
+import struct, sys
+p = sys.argv[1]
+d = open(p, "rb").read()
+if struct.unpack("<I", d[:4])[0] != 0xFEEDFACF:
+    sys.exit(0)
+ncmds = struct.unpack("<I", d[16:20])[0]
+off, text, enc = 32, None, None
+for _ in range(ncmds):
+    cmd, size = struct.unpack("<II", d[off:off + 8])
+    if cmd == 0x19 and d[off + 8:off + 24].rstrip(b"\0") == b"__TEXT":
+        text = struct.unpack("<QQQQ", d[off + 24:off + 56])
+    elif cmd == 0x2E:
+        enc = struct.unpack("<III", d[off + 8:off + 20])
+    off += size
+if not text or not enc:
+    print("  缺 __TEXT 段或 LC_ENCRYPTION_INFO_64")
+    sys.exit(1)
+vm, vs, fo, fs = text
+co, cs, ci = enc
+bad = []
+if fs % 0x4000 or vs % 0x4000:
+    bad.append("__TEXT 不是整页（filesize=0x%x vmsize=0x%x）" % (fs, vs))
+if co != 0x4000:
+    bad.append("cryptoff=0x%x（应为 0x4000）" % co)
+if co + cs != fs:
+    bad.append("加密末端 0x%x ≠ __TEXT 段尾 0x%x" % (co + cs, fs))
+if ci != 0:
+    bad.append("cryptid=%d（应为 0）" % ci)
+if bad:
+    print("  " + "；".join(bad))
+    sys.exit(1)
+print("  %s：版式 OK（crypt [0x%x,+0x%x]，段尾 0x%x）"
+      % (p.rsplit("/", 1)[-1], co, cs, fs))
+PYBIN
+done
+
 # ── 2a. 包结构规范化 ──────────────────────────────────────────
 # 苹果会因为这几样直接拒，而且报错各不相同，看着像一堆问题其实是一类：
 #   · 缺 LC_ENCRYPTION_INFO_64              → 'encryption info ... missing or invalid'
@@ -71,8 +123,6 @@ unzip -q "$IPA" -d "$WORK/payload"
 log "2a/9 规范化包结构"
 python3 tools/check_ipa.py --fix-dir "$WORK/payload/Payload" || fail "包结构规范化失败。"
 
-APP="$(ls -d "$WORK"/payload/Payload/*.app 2>/dev/null | head -1 || true)"
-[ -n "$APP" ] || fail "ipa 结构不对：里面没有 Payload/*.app"
 APPEX="$(ls -d "$APP"/PlugIns/*.appex 2>/dev/null | head -1 || true)"
 
 APP_ID_FROM_PLIST="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")"
