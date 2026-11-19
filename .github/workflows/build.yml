@@ -68,6 +68,16 @@ jobs:
           set -euo pipefail
           python3 ios/tools/ensure_capabilities.py
 
+      - name: 清理多余的分发证书
+        continue-on-error: true
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet --disable-pip-version-check cryptography || true
+          python3 ios/tools/revoke_extra_certs.py
+
       - name: 生成工程
         working-directory: ios
         run: |
