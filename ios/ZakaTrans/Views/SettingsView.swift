@@ -44,7 +44,7 @@ struct SettingsView: View {
                 .pickerStyle(.menu)
                 .onChange(of: sourceLang) { v in
                     ZKStore.setSetting("asrlang", v: v)
-                    ZKSpeechStream.shared().reloadLocale()
+                    ZKSpeechStream.shared()!.reloadLocale()
                 }
             }
             Divider().overlay(Theme.line)
@@ -55,7 +55,7 @@ struct SettingsView: View {
                 .pickerStyle(.menu)
                 .onChange(of: destLang) { v in
                     ZKStore.setSetting("dstlang", v: v)
-                    ZKSpeechStream.shared().reloadLocale()
+                    ZKSpeechStream.shared()!.reloadLocale()
                 }
             }
         }

@@ -36,12 +36,12 @@ final class AppState: ObservableObject {
     // MARK: - 引擎回调
 
     private func bindEngine() {
-        let s = ZKSpeechStream.shared()
+        let s = ZKSpeechStream.shared()!
         s.onPartial = { [weak self] stable, unstable in
             guard let self else { return }
             let t = (stable ?? "") + (unstable ?? "")
             self.liveSource = t
-            ZKPip.shared().setLiveEn(t, zh: self.liveTrans)
+            ZKPip.shared()!.setLiveEn(t, zh: self.liveTrans)
         }
         s.onSegment = { [weak self] text, _ in
             guard let self else { return }
@@ -50,7 +50,7 @@ final class AppState: ObservableObject {
         s.onTransPartial = { [weak self] delta in
             guard let self else { return }
             self.liveTrans += delta ?? ""
-            ZKPip.shared().setLiveEn(self.liveSource, zh: self.liveTrans)
+            ZKPip.shared()!.setLiveEn(self.liveSource, zh: self.liveTrans)
         }
         s.onTransSegment = { [weak self] full in
             guard let self else { return }
@@ -58,7 +58,7 @@ final class AppState: ObservableObject {
             let en = self.liveSource
             if !zh.isEmpty {
                 self.lines.append(SubtitleLine(source: en, trans: zh))
-                ZKPip.shared().appendLineEn(en, zh: zh)
+                ZKPip.shared()!.appendLineEn(en, zh: zh)
             }
             self.liveTrans = ""
             self.liveSource = ""
@@ -79,8 +79,8 @@ final class AppState: ObservableObject {
             alert = "额度不足，先到「额度」页买一份再开始。"
             return
         }
-        if let anchor = anchorView, anchor.window != nil, !ZKPip.shared().isActive {
-            ZKPip.shared().startInView(anchor)
+        if let anchor = anchorView, anchor.window != nil, !ZKPip.shared()!.isActive() {
+            ZKPip.shared()!.start(in: anchor)
             pipReady = true
         }
         // 每次开新的一场，字幕不会串上一次的
@@ -89,16 +89,16 @@ final class AppState: ObservableObject {
         lines.removeAll()
         liveSource = ""
         liveTrans = ""
-        ZKSpeechStream.shared().start()
+        ZKSpeechStream.shared()!.start()
         running = true
         status = "等待系统录屏开始"
         showBroadcastPicker = true
     }
 
     func stop() {
-        ZKSpeechStream.shared().stop()
-        if ZKPip.shared().isActive {
-            ZKPip.shared().stop()
+        ZKSpeechStream.shared()!.stop()
+        if ZKPip.shared()!.isActive() {
+            ZKPip.shared()!.stop()
         }
         pipReady = false
         running = false
