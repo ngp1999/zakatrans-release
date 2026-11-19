@@ -1,39 +1,45 @@
 import SwiftUI
 
-/// 「我的」：账号、积分、字幕设置、对话记录。
+/// 「我的」：账号、积分、字幕设置、对话记录、协议。
 /// 所有数据都在云端，换手机登录同一个 Apple ID 就自动回来。
 struct ProfileView: View {
     @ObservedObject private var cloud = Cloud.shared
     @ObservedObject private var app = AppState.shared
-    @State private var showPurchase = false
     @State private var showLogout = false
+
+    private var version: String {
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? ""
+        return b.isEmpty ? v : "\(v) (\(b))"
+    }
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 18) {
+                VStack(spacing: 16) {
                     accountCard
-                    creditCard
+                    creditRow
                     menuGroup
                     aboutGroup
+                    Text("版本 \(version)")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.faint)
+                        .padding(.top, 6)
+                        .padding(.bottom, 10)
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 10)
-                .padding(.bottom, 28)
             }
             .background(Theme.bg)
             .navigationTitle("我的")
             .navigationBarTitleDisplayMode(.large)
             .task { await cloud.refresh() }
         }
-        .sheet(isPresented: $showPurchase) {
-            NavigationStack { PurchaseView() }
-        }
         .alert("退出登录？", isPresented: $showLogout) {
             Button("取消", role: .cancel) {}
             Button("退出", role: .destructive) { cloud.logout() }
         } message: {
-            Text("退出后重新用 Apple ID 登录，额度、记录和设置都会回来。")
+            Text("重新用 Apple ID 登录后，额度和记录都还在。")
         }
     }
 
@@ -41,123 +47,81 @@ struct ProfileView: View {
 
     private var accountCard: some View {
         HStack(spacing: 14) {
-            ZStack {
-                Circle()
-                    .fill(LinearGradient(colors: [Theme.accent, Theme.accent.opacity(0.7)],
-                                         startPoint: .topLeading, endPoint: .bottomTrailing))
-                    .frame(width: 56, height: 56)
-                Text(cloud.profile?.initials ?? "Z")
-                    .font(.system(size: 24, weight: .semibold))
-                    .foregroundStyle(.white)
-            }
+            // 系统默认人像：不自己拼头像，也不用首字母色块
+            Image(systemName: "person.crop.circle.fill")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 54, height: 54)
+                .foregroundStyle(Color(uiColor: .systemGray3))
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(cloud.profile?.displayName ?? "Zaka 用户")
+                Text(cloud.profile?.displayName ?? "语幕用户")
                     .font(.system(size: 19, weight: .semibold))
                     .foregroundStyle(Theme.ink)
                 HStack(spacing: 5) {
-                    Image(systemName: "apple.logo")
-                        .font(.system(size: 10))
+                    Image(systemName: "apple.logo").font(.system(size: 10))
                     Text(cloud.profile?.provider == "apple" ? "通过 Apple 登录" : "设备账号")
                         .font(.system(size: 12))
                 }
                 .foregroundStyle(Theme.sub)
-
-                if let email = cloud.profile?.email, !email.isEmpty {
-                    Text(email)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.faint)
-                        .lineLimit(1)
-                }
             }
             Spacer(minLength: 0)
         }
         .card(padding: 18)
     }
 
-    // MARK: - 积分
+    // MARK: - 积分（一行，点进去看明细）
 
-    private var creditCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("积分余额")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Theme.sub)
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(Format.credits(cloud.balanceCredits))
-                            .font(.system(size: 38, weight: .bold).monospacedDigit())
-                            .foregroundStyle(Theme.ink)
-                        Text("积分")
-                            .font(.system(size: 14))
-                            .foregroundStyle(Theme.sub)
-                    }
-                }
+    private var creditRow: some View {
+        NavigationLink {
+            CreditView()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 28, height: 28)
+                    .background(Theme.accent)
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                Text("积分")
+                    .font(.system(size: 16))
+                    .foregroundStyle(Theme.ink)
                 Spacer()
-                Button {
-                    showPurchase = true
-                } label: {
-                    Text("充值")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 18)
-                        .frame(height: 38)
-                        .background(Theme.accent)
-                        .clipShape(Capsule())
-                }
-                .buttonStyle(.plain)
+                Text(Format.credits(cloud.balanceCredits))
+                    .font(.system(size: 16, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(Theme.ink)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.faint)
             }
-
-            HStack(spacing: 0) {
-                miniStat("今日消耗", "\(Format.credits(cloud.todayUsedCredits))")
-                Rectangle().fill(Theme.line).frame(width: 0.5, height: 26)
-                miniStat("可用时长", estimateHours)
-            }
-            .padding(.top, 2)
-
-            Text("1 元 = 10 积分 · 1400 积分 = 100 万用量")
-                .font(.system(size: 11))
-                .foregroundStyle(Theme.faint)
+            .padding(.horizontal, 16)
+            .frame(height: 54)
+            .background(Theme.card)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
         }
-        .card(padding: 18)
-    }
-
-    /// 按每分钟约 1500 token 粗估还能用多久（只做参考，实际按上游真实用量）
-    private var estimateHours: String {
-        let minutes = cloud.balanceTokens / 1500
-        if minutes < 60 { return "\(max(0, minutes)) 分钟" }
-        return String(format: "%.1f 小时", Double(minutes) / 60.0)
-    }
-
-    private func miniStat(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(label).font(.system(size: 11)).foregroundStyle(Theme.sub)
-            Text(value).font(.system(size: 15, weight: .medium)).foregroundStyle(Theme.ink)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .buttonStyle(RowButtonStyle())
     }
 
     // MARK: - 菜单
 
     private var menuGroup: some View {
         VStack(spacing: 0) {
-            navRow(icon: "textformat.size", title: "字幕设置", tint: .blue,
-                   detail: subtitleSummary) {
+            navRow(icon: "textformat.size", title: "字幕设置", tint: .blue, detail: subtitleSummary) {
                 SubtitleSettingsView()
             }
             divider
-            navRow(icon: "clock.arrow.circlepath", title: "对话记录", tint: .orange,
-                   detail: "每场都有") {
+            navRow(icon: "clock.arrow.circlepath", title: "对话记录", tint: .orange, detail: "") {
                 HistoryView()
             }
             divider
-            navRow(icon: "speaker.wave.2", title: "输出音频", tint: .purple,
-                   detail: app.prefs.tts ? "已开启" : "已关闭", isToggle: true) {
-                EmptyView()
-            } action: {
+            Button {
                 app.updatePrefs { $0.tts.toggle() }
                 if !app.prefs.tts { Speaker.shared.stop() }
+            } label: {
+                rowContent(icon: "speaker.wave.2", title: "输出音频", tint: .purple,
+                           detail: app.prefs.tts ? "已开启" : "已关闭", chevron: false)
             }
+            .buttonStyle(RowButtonStyle())
         }
         .background(Theme.card)
         .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
@@ -169,28 +133,19 @@ struct ProfileView: View {
 
     private var subtitleSummary: String {
         let mode = SubtitlePrefs.modeOptions.first { $0.0 == app.prefs.mode }?.1 ?? "双语"
-        return "\(Int(app.prefs.size))pt · \(mode)"
+        return "\(Int(app.prefs.size)) · \(mode)"
     }
 
     @ViewBuilder
-    private func navRow<Destination: View>(icon: String, title: String, tint: Color,
-                                           detail: String, isToggle: Bool = false,
-                                           @ViewBuilder destination: () -> Destination,
-                                           action: (() -> Void)? = nil) -> some View {
-        if let action {
-            Button(action: action) {
-                rowContent(icon: icon, title: title, tint: tint, detail: detail, isToggle: isToggle)
-            }
-            .buttonStyle(RowButtonStyle())
-        } else {
-            NavigationLink(destination: destination()) {
-                rowContent(icon: icon, title: title, tint: tint, detail: detail, isToggle: false)
-            }
-            .buttonStyle(RowButtonStyle())
+    private func navRow<Destination: View>(icon: String, title: String, tint: Color, detail: String,
+                                           @ViewBuilder destination: () -> Destination) -> some View {
+        NavigationLink(destination: destination()) {
+            rowContent(icon: icon, title: title, tint: tint, detail: detail, chevron: true)
         }
+        .buttonStyle(RowButtonStyle())
     }
 
-    private func rowContent(icon: String, title: String, tint: Color, detail: String, isToggle: Bool) -> some View {
+    private func rowContent(icon: String, title: String, tint: Color, detail: String, chevron: Bool) -> some View {
         HStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.system(size: 14, weight: .semibold))
@@ -200,10 +155,10 @@ struct ProfileView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
             Text(title).font(.system(size: 16)).foregroundStyle(Theme.ink)
             Spacer()
-            if isToggle {
+            if !detail.isEmpty {
                 Text(detail).font(.system(size: 14)).foregroundStyle(Theme.sub)
-            } else {
-                Text(detail).font(.system(size: 14)).foregroundStyle(Theme.sub)
+            }
+            if chevron {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Theme.faint)
@@ -218,23 +173,15 @@ struct ProfileView: View {
 
     private var aboutGroup: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("版本").font(.system(size: 15)).foregroundStyle(Theme.ink)
-                Spacer()
-                Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "-")
-                    .font(.system(size: 14).monospacedDigit())
-                    .foregroundStyle(Theme.sub)
+            NavigationLink { TermsView(kind: .terms) } label: {
+                plainRow("用户协议")
             }
-            .padding(.horizontal, 16).frame(height: 48)
+            .buttonStyle(RowButtonStyle())
             divider
-            HStack {
-                Text("账号 ID").font(.system(size: 15)).foregroundStyle(Theme.ink)
-                Spacer()
-                Text(String(cloud.accountID.prefix(10)))
-                    .font(.system(size: 12).monospaced())
-                    .foregroundStyle(Theme.sub)
+            NavigationLink { TermsView(kind: .privacy) } label: {
+                plainRow("隐私政策")
             }
-            .padding(.horizontal, 16).frame(height: 48)
+            .buttonStyle(RowButtonStyle())
             divider
             Button { showLogout = true } label: {
                 HStack {
@@ -248,5 +195,17 @@ struct ProfileView: View {
         }
         .background(Theme.card)
         .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+    }
+
+    private func plainRow(_ title: String) -> some View {
+        HStack {
+            Text(title).font(.system(size: 15)).foregroundStyle(Theme.ink)
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.faint)
+        }
+        .padding(.horizontal, 16).frame(height: 48)
+        .contentShape(Rectangle())
     }
 }
