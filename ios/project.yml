@@ -16,6 +16,10 @@ settings:
     IPHONEOS_DEPLOYMENT_TARGET: "16.0"
     SWIFT_OPTIMIZATION_LEVEL: "-O"
     GCC_OPTIMIZATION_LEVEL: "s"
+    # 必须真签名。留空 identity 或 Manual 会让 Xcode 直接跳过签名，
+    # 结果就是二进制里没有任何 entitlement（Apple 登录报 1000、App Group 失效）。
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: "Apple Distribution"
 
 targets:
   ZakaTrans:
@@ -33,9 +37,9 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
-        CODE_SIGN_STYLE: Manual
-        CODE_SIGN_IDENTITY: ""
-        DEVELOPMENT_TEAM: ""
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "Apple Distribution"
+        DEVELOPMENT_TEAM: "9VSZ8M2JL5"
     dependencies:
       - target: Broadcast
         embed: true
@@ -54,6 +58,6 @@ targets:
         PRODUCT_NAME: Broadcast
         INFOPLIST_FILE: Broadcast/Info.plist
         CODE_SIGN_ENTITLEMENTS: Broadcast/Broadcast.entitlements
-        CODE_SIGN_STYLE: Manual
-        CODE_SIGN_IDENTITY: ""
-        DEVELOPMENT_TEAM: ""
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "Apple Distribution"
+        DEVELOPMENT_TEAM: "9VSZ8M2JL5"
