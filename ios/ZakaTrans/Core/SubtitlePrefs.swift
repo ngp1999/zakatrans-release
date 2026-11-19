@@ -17,12 +17,16 @@ struct SubtitlePrefs: Codable, Equatable {
     var background: String = "black"
     /// 语言模式：bilingual（双语）| zh（仅中文）| source（仅原文）
     var mode: String = "bilingual"
-    /// 画中画比例：4:3（默认大窗）| 21:9（宽横条）
-    var pip: String = "4:3"
+    /// 画中画窗口大小：L 大（4:3 480×360）| M 中（16:9 576×324）| S 小（21:9 840×360）
+    var pip: String = "L"
     /// 输出音频（把译文读出来）
     var tts: Bool = false
     /// 朗读语速 0.4~0.62（0.5 是系统正常语速）
-    var speechRate: Double = 0.54
+    var speechRate: Double = 0.58
+    /// 朗读时把别的 App 声音压低多少（0 = 不压，100 = 系统最大压低量）
+    var duckLevel: Double = 60
+    /// 朗读音色：空 = 跟随系统中文默认；否则是 AVSpeechSynthesisVoice.identifier
+    var voiceId: String = ""
     /// 原文语言：auto = 让模型自己识别
     var sourceLang: String = "auto"
     /// 译文语言：固定中文
@@ -46,11 +50,16 @@ struct SubtitlePrefs: Codable, Equatable {
         speechRate = try c.decodeIfPresent(Double.self, forKey: .speechRate) ?? d.speechRate
         sourceLang = try c.decodeIfPresent(String.self, forKey: .sourceLang) ?? d.sourceLang
         destLang = try c.decodeIfPresent(String.self, forKey: .destLang) ?? d.destLang
+        duckLevel = try c.decodeIfPresent(Double.self, forKey: .duckLevel) ?? d.duckLevel
+        voiceId = try c.decodeIfPresent(String.self, forKey: .voiceId) ?? d.voiceId
 
-        // 旧值映射：以前的 bar/standard、半透明黑/浅色/无背景
-        if pip == "bar" { pip = "4:3" }
-        else if pip == "standard" { pip = "4:3" }
-        else if pip != "21:9" && pip != "4:3" { pip = "4:3" }
+        // 旧值映射：以前是 4:3 / 21:9 / bar 两档，现在换成大中小三档
+        switch pip {
+        case "L", "M", "S": break
+        case "21:9", "bar": pip = "S"
+        case "16:9": pip = "M"
+        default: pip = "L"
+        }
 
         switch background {
         case "dark", "solid": background = "black"
@@ -91,6 +100,8 @@ struct SubtitlePrefs: Codable, Equatable {
             "pip_style": pip,
             "tts": tts,
             "speech_rate": speechRate,
+            "duck_level": duckLevel,
+            "voice_id": voiceId,
             "source_lang": sourceLang,
             "dest_lang": destLang,
         ]
@@ -106,8 +117,14 @@ struct SubtitlePrefs: Codable, Equatable {
         }
         if let v = dict["subtitle_mode"] as? String { p.mode = v }
         if let v = dict["pip_style"] as? String {
-            p.pip = (v == "bar" || v == "21:9") ? "21:9" : "4:3"
+            switch v {
+            case "M", "16:9": p.pip = "M"
+            case "S", "21:9", "bar": p.pip = "S"
+            default: p.pip = "L"
+            }
         }
+        if let v = dict["duck_level"] as? NSNumber { p.duckLevel = v.doubleValue }
+        if let v = dict["voice_id"] as? String { p.voiceId = v }
         if let v = dict["tts"] as? Bool { p.tts = v }
         if let v = dict["speech_rate"] as? NSNumber { p.speechRate = v.doubleValue }
         if let v = dict["source_lang"] as? String { p.sourceLang = v }
@@ -183,9 +200,19 @@ struct SubtitlePrefs: Codable, Equatable {
         ("bilingual", "双语"), ("zh", "仅中文"), ("source", "仅原文"),
     ]
 
+    /// 窗口三档：选哪个，画中画开出来就是多大
     static let pipOptions: [(String, String)] = [
-        ("4:3", "4:3"), ("21:9", "21:9"),
+        ("L", "大"), ("M", "中"), ("S", "小"),
     ]
+
+    /// 每档的实际尺寸，设置页拿来做说明
+    static func pipSizeText(_ v: String) -> String {
+        switch v {
+        case "M": return "16:9"
+        case "S": return "21:9 宽条"
+        default: return "4:3"
+        }
+    }
 
     static let sourceLanguages: [(String, String)] = [
         ("auto", "自动识别"),
