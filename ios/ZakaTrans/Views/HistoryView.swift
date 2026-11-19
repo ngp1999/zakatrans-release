@@ -15,15 +15,15 @@ struct HistoryView: View {
                 emptyState
             } else {
                 List {
-                    ForEach(grouped, id: \.0) { day, rows in
+                    ForEach(grouped, id: \.0) { group in
                         Section {
-                            ForEach(rows) { s in
+                            ForEach(group.1) { s in
                                 NavigationLink(destination: SessionDetailView(session: s)) {
                                     row(s)
                                 }
                             }
                         } header: {
-                            Text(day)
+                            Text(group.0)
                         }
                     }
                 }
@@ -37,54 +37,87 @@ struct HistoryView: View {
         .task { await load() }
     }
 
+    /// 按天分组：标题是「今天 / 昨天 / 11月19日 周三」
     private var grouped: [(String, [Cloud.UsageSession])] {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "zh_CN")
-        f.dateFormat = "M月d日"
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "zh_CN")
+        df.dateFormat = "yyyy-MM-dd"
+
         var order: [String] = []
         var map: [String: [Cloud.UsageSession]] = [:]
         for s in items {
-            let k = f.string(from: s.startedAt)
+            let k = df.string(from: s.startedAt)
             if map[k] == nil { order.append(k) }
             map[k, default: []].append(s)
         }
-        return order.map { ($0, map[$0] ?? []) }
+        return order.map { key in
+            (Self.dayTitle(key), map[key] ?? [])
+        }
+    }
+
+    static func dayTitle(_ key: String) -> String {
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "zh_CN")
+        df.dateFormat = "yyyy-MM-dd"
+        guard let d = df.date(from: key) else { return key }
+
+        let cal = Calendar.current
+        if cal.isDateInToday(d) { return "今天" }
+        if cal.isDateInYesterday(d) { return "昨天" }
+
+        let out = DateFormatter()
+        out.locale = Locale(identifier: "zh_CN")
+        out.dateFormat = cal.component(.year, from: d) == cal.component(.year, from: Date())
+            ? "M月d日 EEEE"
+            : "yyyy年M月d日 EEEE"
+        return out.string(from: d)
     }
 
     private func row(_ s: Cloud.UsageSession) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack {
-                Text(Format.date(s.startedAt))
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(Theme.ink)
-                Spacer()
-                Text("\(s.creditsText) 积分")
-                    .font(.system(size: 13, weight: .medium).monospacedDigit())
-                    .foregroundStyle(Theme.accent)
-            }
-            HStack(spacing: 8) {
-                Label(s.durationText, systemImage: "clock")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.sub)
-                if s.hasSummary {
-                    Spacer()
-                    Text("已总结")
-                        .font(.system(size: 10))
+        HStack(alignment: .top, spacing: 12) {
+            Text(Self.timeText(s.startedAt))
+                .font(.system(size: 16, weight: .semibold).monospacedDigit())
+                .foregroundStyle(Theme.ink)
+                .frame(width: 52, alignment: .leading)
+                .padding(.top, 1)
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 10) {
+                    Label(s.durationText, systemImage: "clock")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.sub)
+
+                    Text("\(s.creditsText) 积分")
+                        .font(.system(size: 12, weight: .medium).monospacedDigit())
                         .foregroundStyle(Theme.accent)
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Theme.accentSoft)
-                        .clipShape(Capsule())
+
+                    if s.hasSummary {
+                        Text("已总结")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Theme.accent)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Theme.accentSoft)
+                            .clipShape(Capsule())
+                    }
+                }
+
+                if let sum = s.summary, !sum.isEmpty {
+                    Text(sum.replacingOccurrences(of: "\n", with: " "))
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.sub)
+                        .lineLimit(2)
                 }
             }
-            if let sum = s.summary, !sum.isEmpty {
-                Text(sum.replacingOccurrences(of: "\n", with: " "))
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.sub)
-                    .lineLimit(2)
-                    .padding(.top, 1)
-            }
+            Spacer(minLength: 0)
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 3)
+    }
+
+    static func timeText(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "zh_CN")
+        f.dateFormat = "HH:mm"
+        return f.string(from: d)
     }
 
     private var emptyState: some View {
@@ -140,7 +173,7 @@ struct SessionDetailView: View {
     }
 
     private var metaCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text(Format.date(session.startedAt))
                     .font(.system(size: 17, weight: .semibold))
@@ -150,7 +183,7 @@ struct SessionDetailView: View {
                     .font(.system(size: 15, weight: .semibold).monospacedDigit())
                     .foregroundStyle(Theme.accent)
             }
-            HStack(spacing: 14) {
+            HStack(spacing: 16) {
                 Label(session.durationText, systemImage: "clock")
                 Label("\(detail?.lines.count ?? 0) 句", systemImage: "text.bubble")
             }
