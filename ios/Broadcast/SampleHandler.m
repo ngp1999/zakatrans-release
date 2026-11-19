@@ -34,6 +34,7 @@
     NSInteger _bufs;
     NSInteger _audioFrames;
     NSInteger _dropped;
+    NSInteger _ttsSkip;
     NSInteger _ticks;
     double _startedAt;
     unsigned long long _pendingStart;   // pending 里第一帧的累计帧号（给主 App 做完整性校验）
@@ -52,6 +53,7 @@
     _bufs = 0;
     _audioFrames = 0;
     _dropped = 0;
+    _ttsSkip = 0;
     _startedAt = [NSDate date].timeIntervalSince1970;
 
     [ZKStore resetPCM];
@@ -73,7 +75,7 @@
 }
 
 - (void)broadcastFinished {
-    [ZKStore log:@"=== ext finished === bufs=%ld frames=%ld drop=%ld", (long)_bufs, (long)_audioFrames, (long)_dropped];
+    [ZKStore log:@"=== ext finished === bufs=%ld frames=%ld drop=%ld ttsSkip=%ld", (long)_bufs, (long)_audioFrames, (long)_dropped, (long)_ttsSkip];
     [ZKStore beat:@{@"bufs": @(_bufs), @"conn": @"finished"}];
     if (_beatSrc) { dispatch_source_cancel(_beatSrc); _beatSrc = nil; }
     if (_fd >= 0) { close(_fd); _fd = -1; }
@@ -227,6 +229,17 @@
 
 - (void)processSampleBuffer:(CMSampleBufferRef)sampleBuffer withType:(RPSampleBufferType)bufferType {
     if (bufferType != RPSampleBufferTypeAudioApp) return;
+
+    // 朗读门：App 正在用系统语音念字幕时，录到的混音里就有我们自己的声音。
+    // 送进上游会被当成对方说话再翻一遍——文本重复、句子被切断、还白烧 token，所以这段直接丢。
+    NSString *gate = [ZKStore setting:@"tts_gate"];
+    if (gate.length) {
+        double until = gate.doubleValue;
+        if (until > 0 && [[NSDate date] timeIntervalSince1970] < until) {
+            _ttsSkip++;
+            return;
+        }
+    }
 
     CMFormatDescriptionRef fd = CMSampleBufferGetFormatDescription(sampleBuffer);
     if (!fd) return;
