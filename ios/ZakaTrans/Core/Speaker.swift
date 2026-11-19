@@ -252,7 +252,9 @@ private extension Speaker {
         }
         return AVSpeechSynthesisVoice(language: "zh-CN")
     }
+}
 
+extension Speaker {
     /// 可选的中文音色（给设置页列出来）
     static func zhVoices() -> [AVSpeechSynthesisVoice] {
         AVSpeechSynthesisVoice.speechVoices()
@@ -261,5 +263,5 @@ private extension Speaker {
                 if a.quality.rawValue != b.quality.rawValue { return a.quality.rawValue > b.quality.rawValue }
                 return a.name < b.name
             }
-    }
+}
 }
