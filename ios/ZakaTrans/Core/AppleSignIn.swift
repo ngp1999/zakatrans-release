@@ -77,9 +77,15 @@ extension AppleSignIn: ASAuthorizationControllerDelegate {
 
 extension AppleSignIn: ASAuthorizationControllerPresentationContextProviding {
     nonisolated func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
-        let scene = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .first { $0.activationState == .foregroundActive }
-        return scene?.keyWindow ?? ASPresentationAnchor()
+        // 这个回调一定在主线程来，但协议声明是 nonisolated，这里显式声明一下，
+        // 免得 Swift 并发的静态检查在运行时给一个不确定的结果。
+        MainActor.assumeIsolated {
+            let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            let active = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+            if let w = active?.windows.first(where: { $0.isKeyWindow }) ?? active?.windows.first {
+                return w
+            }
+            return ASPresentationAnchor()
+        }
     }
 }
