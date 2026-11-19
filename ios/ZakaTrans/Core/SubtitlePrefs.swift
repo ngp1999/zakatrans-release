@@ -50,7 +50,9 @@ struct SubtitlePrefs: Codable, Equatable {
         // 新键读不到时退回上一個版本的存档，尽量不丢设置
         for k in [key, "zt_subtitle_prefs_v2"] {
             if let data = UserDefaults.standard.data(forKey: k),
-               let v = try? JSONDecoder().decode(SubtitlePrefs.self, from: data) {
+               var v = try? JSONDecoder().decode(SubtitlePrefs.self, from: data) {
+                // 旧版本的默认字号是 19，新版统一到 20；手动调过的其它值保持不动
+                if v.size == 19 { v.size = 20 }
                 return v
             }
         }
