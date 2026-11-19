@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""发布构建前清理多余的 iOS 分发证书。
+"""发布构建前清空签名证书。
 
 自动签名每跑一次 CI 可能签出一张新证书,苹果账号分发证书上限 3 张,
 签满之后归档会直接失败(cannot create a new certificate)。
@@ -66,18 +66,19 @@ def main() -> int:
         print(f"列证书失败 {status}: {data}")
         return 0
     certs = data.get("data", [])
-    dist = [c for c in certs if c["attributes"].get("certificateType") in ("DISTRIBUTION", "IOS_DISTRIBUTION")]
-    dist.sort(key=lambda c: c["attributes"].get("expirationDate") or "", reverse=True)
-    print(f"分发证书 {len(dist)} 张")
-    for c in dist:
+    # 每种证书各限 3 张。CI 每次都拿不到旧证书的私钥,Xcode 只能新签一张,
+    # 攒满 3 张之后归档必定失败。所以在归档前把开发/分发证书全部清掉,让这次从零签一张。
+    target = ("DISTRIBUTION", "IOS_DISTRIBUTION", "DEVELOPMENT", "IOS_DEVELOPMENT")
+    victims = [c for c in certs if c["attributes"].get("certificateType") in target]
+    print(f"可清理证书 {len(victims)} 张")
+    for c in victims:
         a = c["attributes"]
-        print(f"  {a.get('displayName')} 到期 {a.get('expirationDate')} id={c['id']}")
-    if len(dist) <= 1:
-        print("不需要清理")
-        return 0
-    for c in dist[1:]:
-        code, _ = call("DELETE", f"/v1/certificates/{c['id']}")
+        print(f"  {a.get('certificateType')} {a.get('displayName')} 到期 {a.get('expirationDate')}")
+    for c in victims:
+        code, body = call("DELETE", f"/v1/certificates/{c['id']}")
         print(f"吊销 {c['attributes'].get('displayName')} -> {code}")
+        if code != 204:
+            print(body)
     return 0
 
 
