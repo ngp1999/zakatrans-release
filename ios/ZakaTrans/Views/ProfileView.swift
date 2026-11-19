@@ -17,10 +17,17 @@ struct ProfileView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 16) {
+                VStack(spacing: 14) {
                     accountCard
                     creditRow
+
+                    SectionLabel("翻译设置")
                     menuGroup
+
+                    SectionLabel("数据与支持")
+                    dataGroup
+
+                    SectionLabel("关于")
                     aboutGroup
                     Text("版本 \(version)")
                         .font(.system(size: 12))
@@ -104,7 +111,7 @@ struct ProfileView: View {
                     .frame(width: 28, height: 28)
                     .background(Theme.accent)
                     .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                Text("积分")
+                Text("我的积分")
                     .font(.system(size: 16))
                     .foregroundStyle(Theme.ink)
                 Spacer()
@@ -131,24 +138,25 @@ struct ProfileView: View {
                 SubtitleSettingsView()
             }
             divider
-            navRow(icon: "clock.arrow.circlepath", title: "对话记录", tint: .orange) {
-                HistoryView()
+            navRow(icon: "speaker.wave.2", title: "朗读设置", tint: .purple) {
+                AudioOutputView()
             }
-            divider
-            Button {
-                withAnimation(.easeOut(duration: 0.18)) {
-                    app.updatePrefs { $0.tts.toggle() }
-                }
-                if !app.prefs.tts { Speaker.shared.stop() }
+        }
+        .background(Theme.card)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+    }
+
+    // MARK: - 数据与支持
+
+    private var dataGroup: some View {
+        VStack(spacing: 0) {
+            NavigationLink {
+                HistoryView()
             } label: {
-                rowContent(icon: "speaker.wave.2", title: "输出音频",
-                           tint: .purple, detail: app.prefs.tts ? "开" : "关", chevron: false)
+                rowContent(icon: "clock.arrow.circlepath", title: "对话记录",
+                           tint: .orange, detail: "云端保留 30 天", chevron: true)
             }
             .buttonStyle(RowButtonStyle())
-            divider
-            navRow(icon: "questionmark.circle", title: "使用帮助", tint: .gray) {
-                HelpView()
-            }
         }
         .background(Theme.card)
         .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
@@ -313,7 +321,7 @@ struct HelpView: View {
                 ])
                 section("字幕与朗读", [
                     "字号、文字颜色、背景颜色、双语/仅中文都在「字幕样式」里调。",
-                    "打开「输出音频」后，翻译结果会用系统语音念出来，同时会压低其他 App 的音量。",
+                    "打开「音频输出」后，翻译结果会用系统语音念出来，同时会压低其他 App 的音量。",
                 ])
                 section("积分", [
                     "按识别到的有效内容计费，静音不消耗。",
