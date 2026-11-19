@@ -48,7 +48,7 @@ struct SubtitlePrefs: Codable, Equatable {
         destLang = try c.decodeIfPresent(String.self, forKey: .destLang) ?? d.destLang
 
         // 旧值映射：以前的 bar/standard、半透明黑/浅色/无背景
-        if pip == "bar" { pip = "21:9" }
+        if pip == "bar" { pip = "4:3" }
         else if pip == "standard" { pip = "4:3" }
         else if pip != "21:9" && pip != "4:3" { pip = "4:3" }
 
