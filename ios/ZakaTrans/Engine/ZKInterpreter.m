@@ -64,9 +64,6 @@ static NSString *ZKShort(NSString *bcp) {
     return r.location == NSNotFound ? bcp : [bcp substringToIndex:r.location];
 }
 
-@interface ZKInterpreter () <AVAudioConverterDelegate>
-@end
-
 @implementation ZKInterpreter {
     ZKDoubaoAST *_toOther;   // 我 → 对方
     ZKDoubaoAST *_toMine;    // 对方 → 我
@@ -114,7 +111,7 @@ static NSString *ZKShort(NSString *bcp) {
     NSError *err = nil;
     AVAudioSession *s = [AVAudioSession sharedInstance];
     [s setCategory:AVAudioSessionCategoryPlayAndRecord
-              mode:AVAudioSessionMode_VoiceChat
+              mode:AVAudioSessionModeVoiceChat
            options:AVAudioSessionCategoryOptionDefaultToSpeaker | AVAudioSessionCategoryOptionAllowBluetooth
              error:&err];
     [s setActive:YES error:&err];
