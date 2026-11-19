@@ -40,7 +40,10 @@ final class BroadcastTrigger: ObservableObject {
 struct PipAnchor: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
         let v = UIView(frame: .zero)
-        v.isHidden = true
+        // 不能 isHidden：画中画在 App 内启动时，系统要求锚点视图真的在屏上（可见但几乎透明），
+        // 隐藏的视图会让 isPictureInPicturePossible 变 false —— 这就是「有时画中画不出来」的原因
+        v.isHidden = false
+        v.alpha = 0.01
         v.isUserInteractionEnabled = false
         DispatchQueue.main.async {
             AppState.shared.anchorView = v
