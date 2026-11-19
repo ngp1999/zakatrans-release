@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import AVFoundation
 
 /// 全局状态：把 SwiftUI 界面和底下的原生引擎连起来。
 ///
@@ -21,6 +22,11 @@ final class AppState: ObservableObject {
     @Published var pipOn: Bool = (UserDefaults.standard.object(forKey: "zt_pip_on") as? Bool) ?? true
     @Published var pipActive = false
 
+    /// 默认头像（本机保存，四种底色，男女都有）
+    @Published var avatarIndex: Int = UserDefaults.standard.integer(forKey: "zt_avatar") {
+        didSet { UserDefaults.standard.set(avatarIndex, forKey: "zt_avatar") }
+    }
+
     struct SubtitleLine: Identifiable, Equatable {
         let id = UUID()
         let source: String
@@ -28,7 +34,9 @@ final class AppState: ObservableObject {
         let at = Date()
     }
 
-    /// 画中画需要一个真实的 UIView 当锚点
+    /// 画中画需要一个真实的 UIView 当锚点。
+    /// 这个视图挂在 MainView 最外层（不是某个页面里），切 Tab、开抽屉都不会让它离开窗口——
+    /// 一离开窗口系统就会把画中画收掉，这也是之前「回桌面就没了」的一半原因。
     weak var anchorView: UIView?
 
     private var broadcastTimer: Timer?
@@ -38,12 +46,15 @@ final class AppState: ObservableObject {
     private var pipRequested = false
 
     /// 同一句最终译文可能被回调推两次，这里做去重
-    private var lastFinalKey = ""
-    private var lastFinalAt = Date.distantPast
+    private var recentFinalKeys: [String] = []
+
+    /// 后台保活：没有它，App 一回桌面就被挂起，画中画里字幕会停在那儿不动
+    private let keeper = SilentKeeper()
 
     private init() {
         bindEngine()
         applyPrefsToEngine()
+        bindLifecycle()
     }
 
     // MARK: - 引擎回调
@@ -70,16 +81,18 @@ final class AppState: ObservableObject {
             let zh = (full ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let src = self.liveSource.trimmingCharacters(in: .whitespacesAndNewlines)
             if !zh.isEmpty {
-                // 去重：同一句（原文+译文一样）短时间内只收一次
-                let key = src + "\u{1}" + zh
-                let now = Date()
-                if key == self.lastFinalKey && now.timeIntervalSince(self.lastFinalAt) < 4 {
+                // 去重：同一句（原文+译文）短时间内只收一次。
+                // 只跟上一句比不够——中间夹一句别的，同一句照样会再冒出来一遍。
+                let key = Speaker.key(src) + "\u{1}" + Speaker.key(zh)
+                if self.recentFinalKeys.contains(key) {
                     self.liveTrans = ""
                     self.liveSource = ""
                     return
                 }
-                self.lastFinalKey = key
-                self.lastFinalAt = now
+                self.recentFinalKeys.append(key)
+                if self.recentFinalKeys.count > 40 {
+                    self.recentFinalKeys.removeFirst(self.recentFinalKeys.count - 40)
+                }
 
                 self.lines.append(SubtitleLine(source: src, trans: zh))
                 if self.lines.count > 200 { self.lines.removeFirst(self.lines.count - 200) }
@@ -91,11 +104,44 @@ final class AppState: ObservableObject {
         }
         s.onDiag = { [weak self] d in
             guard let self, let d, !d.isEmpty else { return }
-            // 只保留对用户有意义的运行状态，不把内部诊断串刷到界面上
             if d.contains("连接") || d.contains("监听") || d.contains("启动") {
                 self.status = self.running ? "正在听" : "未开始"
             }
         }
+    }
+
+    // MARK: - 前后台
+
+    private func bindLifecycle() {
+        let c = NotificationCenter.default
+        c.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.onWillBackground() }
+        }
+        c.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.onForeground() }
+        }
+    }
+
+    /// 要进后台了：画中画必须在还处于前台时起来。
+    /// 系统不允许在后台启动 PiP，所以这里是最后一个机会窗口。
+    private func onWillBackground() {
+        guard running, pipOn else { return }
+        keeper.start()
+        if !ZKPip.shared()!.isActive() {
+            pipRequested = true
+            startPipIfPossible()
+        }
+    }
+
+    /// 回到前台：画中画不该因为切出去就消失，没了就补起来
+    private func onForeground() {
+        guard running else { return }
+        keeper.start()
+        if pipOn && broadcastSeen && !ZKPip.shared()!.isActive() {
+            pipRequested = true
+            startPipIfPossible()
+        }
+        pipActive = ZKPip.shared()!.isActive()
     }
 
     /// 把当前的样式设置推给画中画和引擎
@@ -141,15 +187,20 @@ final class AppState: ObservableObject {
         // 每次开新的一场，字幕不会串上一次的
         ZKStore.beginNewSession()
         ZKStore.clearLines()
+        // 清掉上一次的停止标记，否则录屏扩展刚起来就被判定"该结束了"
+        ZKStore.setSetting("broadcast_stop", v: nil)
+
         lines.removeAll()
         liveSource = ""
         liveTrans = ""
-        lastFinalKey = ""
+        recentFinalKeys.removeAll()
         broadcastSeen = false
         pipRequested = false
         sessionStartAt = Date().timeIntervalSince1970
 
+        Speaker.shared.resume()
         ZKSpeechStream.shared()!.start()
+        keeper.start()
         running = true
         status = "等待录屏"
         startWatchingBroadcast()
@@ -158,9 +209,14 @@ final class AppState: ObservableObject {
     func stop() {
         stopWatching()
         ZKSpeechStream.shared()!.stop()
+        // 停止后迟到的翻译回调不许再念
         Speaker.shared.stop()
         // 停止就一定要关：之前 stop 后系统窗口偶尔还挂着，就是因为只调了 stop 没清引用
         ZKPip.shared()!.stop()
+        // 系统录屏（屏幕广播）ReplayKit 没有提供"从 App 停止"的接口，
+        // 但扩展会读这个时间戳，读到就自己结束——红点跟着消失，不用用户再去点。
+        ZKStore.setSetting("broadcast_stop", v: String(format: "%.0f", Date().timeIntervalSince1970 + 1))
+        keeper.stop()
         pipRequested = false
         pipActive = false
         running = false
@@ -173,7 +229,7 @@ final class AppState: ObservableObject {
     /// 用户点了系统录屏面板之后，扩展会写心跳；轮询到就说明真的开始录了
     private func startWatchingBroadcast() {
         stopWatching()
-        broadcastTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+        broadcastTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.checkBroadcast() }
         }
         // 画中画是否真的起来了，系统不给同步返回值，只能每秒对一次
@@ -205,10 +261,11 @@ final class AppState: ObservableObject {
         broadcastTimer?.invalidate()
         broadcastTimer = nil
 
-        // 选完广播再开画中画：这时 App 可能还在前台，系统也允许 App 内直接浮出
+        // 选完广播再开画中画：这时 App 可能还在前台，系统也允许 App 内直接浮出。
+        // 间隔压到 0.15s——用户选完广播很可能马上就按 Home，慢一点就来不及了。
         guard pipOn else { return }
         pipRequested = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             self?.startPipIfPossible()
         }
     }
@@ -217,7 +274,7 @@ final class AppState: ObservableObject {
         guard running, pipRequested, pipOn else { return }
         guard let anchor = anchorView, anchor.window != nil else {
             // 锚点还没上屏，200ms 后再试一次（切 Tab 回来、刚启动时会发生）
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
                 self?.startPipIfPossible()
             }
             return
@@ -255,5 +312,50 @@ final class AppState: ObservableObject {
     /// 本次会话已经说过的内容（本地，用于停止后立即展示，不等服务端）
     var localTranscript: [(String, String)] {
         lines.map { ($0.source, $0.trans) }
+    }
+}
+
+// MARK: - 后台保活
+
+/// 播一段完全听不见的音频，让 App 在后台保持运行。
+///
+/// 为什么需要：画中画的画面由系统渲染，但里面的字幕是 App 自己更新 UIView 的。
+/// App 一旦被挂起，字幕就停在最后一帧——用户看到的就是「回到桌面后画中画卡住了」。
+/// 有后台音频权限时，只要真的在出声（哪怕音量是 0），App 就不会被挂起。
+@MainActor
+final class SilentKeeper {
+    private var engine: AVAudioEngine?
+    private var player: AVAudioPlayerNode?
+
+    func start() {
+        if engine != nil { return }
+        let s = AVAudioSession.sharedInstance()
+        try? s.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+        try? s.setActive(true)
+
+        let e = AVAudioEngine()
+        let p = AVAudioPlayerNode()
+        guard let fmt = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1) else { return }
+        e.attach(p)
+        e.connect(p, to: e.mainMixerNode, format: fmt)
+        e.mainMixerNode.outputVolume = 0     // 真静音，用户听不到
+        do {
+            try e.start()
+        } catch {
+            return
+        }
+        guard let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: 44100) else { return }
+        buf.frameLength = 44100
+        p.scheduleBuffer(buf, at: nil, options: .loops, completionHandler: nil)
+        p.play()
+        engine = e
+        player = p
+    }
+
+    func stop() {
+        player?.stop()
+        engine?.stop()
+        player = nil
+        engine = nil
     }
 }
