@@ -25,10 +25,10 @@ static const CGFloat ZK_EN_SIZE = 13.0;
 static CGFloat gZhSize = 20.0;
 static CGFloat gEnSize = 13.0;
 static UIColor *gTextColor = nil;
-static NSString *gMode = @"bilingual";     // bilingual | zh | source
-static NSString *gBackground = @"dark";    // none | dark | solid | light
-static CGSize gPipSize = {800, 340};       // bar：宽横条（约 2.35:1），铺满屏宽也放得下一整句
-static BOOL gPipBar = YES;
+static NSString *gMode = @"bilingual";         // bilingual | zh | source
+static NSString *gBackground = @"black";       // 7 种实色背景，见 ZKBackgroundColor()
+static CGSize gPipSize = {480, 360};           // 4:3 大窗（默认）
+static NSString *gPipRatio = @"4:3";           // 4:3 | 21:9
 static const CGFloat ZK_PARA_GAP = 14.0;      // 句与句之间的空档
 static const CGFloat ZK_MAX_BLOCKS = 120.0;   // 历史句上限（正常一场对话到不了）
 
@@ -89,15 +89,20 @@ static const CGFloat ZK_SPRING_W_BIG = 13.0;
 // 属性字典建一次就够：每帧 new 一个 ParagraphStyle + 字典是白扔的内存和 CPU
 // 每次按当前设置生成（字幕设置改了要立刻生效，所以不能 dispatch_once 缓存死）
 // 浅色底上白字看不见：统一在这里把「白/浅色」翻成深色，两边（App 内和画中画）口径一致
+// 浅色底上把彩色文字压暗（保留色相），深色底上直接用原色。
+// App 内字幕用的是同一套口径，两边看起来才是一回事。
+static BOOL ZKLightBackground(void) {
+    return [gBackground isEqualToString:@"paper"];
+}
+
 static UIColor *ZKMainColor(void) {
     UIColor *c = gTextColor ?: [UIColor whiteColor];
-    if ([gBackground isEqualToString:@"light"]) {
-        CGFloat r = 0, g = 0, b = 0, a = 0;
-        if ([c getRed:&r green:&g blue:&b alpha:&a] && (r + g + b) / 3.0 > 0.72) {
-            return [UIColor colorWithWhite:0.10 alpha:1];
-        }
+    if (!ZKLightBackground()) return c;
+    CGFloat h = 0, s = 0, b = 0, a = 0;
+    if ([c getHue:&h saturation:&s brightness:&b alpha:&a]) {
+        return [UIColor colorWithHue:h saturation:MIN(1.0, s * 0.85 + 0.12) brightness:0.32 alpha:1];
     }
-    return c;
+    return [UIColor colorWithWhite:0.10 alpha:1];
 }
 
 static NSDictionary *ZKZhAttrs(void) {
@@ -117,20 +122,37 @@ static NSDictionary *ZKEnAttrs(void) {
     p.lineSpacing = 1.0;
     p.lineBreakMode = NSLineBreakByWordWrapping;
     p.alignment = NSTextAlignmentLeft;
-    // 原文比译文暗一档：同一底色下按 70% 亮度走，纯白时是浅灰
+    // 原文比译文暗一档（62%），不抢主字幕
     return @{
         NSFontAttributeName: [UIFont systemFontOfSize:gEnSize],
-        NSForegroundColorAttributeName: [ZKMainColor() colorWithAlphaComponent:0.72],
+        NSForegroundColorAttributeName: [ZKMainColor() colorWithAlphaComponent:0.62],
         NSParagraphStyleAttributeName: p,
     };
 }
 
-/// 字幕底色：none 全透明、dark 半透明黑、solid 纯黑、light 浅色
+/// 字幕底色：7 种实色。
+/// 画中画的容器没有真正的透明通道，所以不做「半透明 / 无背景」——
+/// 那两档在系统窗口里和纯黑一样，做了等于没做，不如全部给成能选的颜色。
 static UIColor *ZKBackgroundColor(void) {
-    if ([gBackground isEqualToString:@"none"])  return [UIColor clearColor];
-    if ([gBackground isEqualToString:@"solid"]) return [UIColor blackColor];
-    if ([gBackground isEqualToString:@"light"]) return [UIColor colorWithWhite:0.96 alpha:1.0];
-    return [UIColor colorWithWhite:0 alpha:0.86];
+    static NSDictionary *map = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        map = @{
+            @"black":    [UIColor colorWithRed:0.00 green:0.00 blue:0.00 alpha:1],
+            @"graphite": [UIColor colorWithRed:0.11 green:0.11 blue:0.12 alpha:1],
+            @"navy":     [UIColor colorWithRed:0.04 green:0.10 blue:0.20 alpha:1],
+            @"forest":   [UIColor colorWithRed:0.05 green:0.14 blue:0.10 alpha:1],
+            @"wine":     [UIColor colorWithRed:0.16 green:0.05 blue:0.08 alpha:1],
+            @"indigo":   [UIColor colorWithRed:0.10 green:0.07 blue:0.18 alpha:1],
+            @"paper":    [UIColor colorWithRed:0.95 green:0.95 blue:0.96 alpha:1],
+            // 老值兜底
+            @"dark":     [UIColor blackColor],
+            @"solid":    [UIColor blackColor],
+            @"none":     [UIColor blackColor],
+            @"light":    [UIColor colorWithRed:0.95 green:0.95 blue:0.96 alpha:1],
+        };
+    });
+    return map[gBackground] ?: [UIColor blackColor];
 }
 
 // 这个视图只做"内容画在固定位置上"，位置由外层滚动统一控制。
@@ -195,7 +217,8 @@ static UIColor *ZKBackgroundColor(void) {
     CGFloat padTop = first ? 0 : ZK_PARA_GAP;
 
     // 底色由「背景」统一控制，文字本身只带一层很淡的阴影（浅色/纯黑底上不显脏）
-    BOOL needShadow = [gBackground isEqualToString:@"none"];
+    // 背景一律实色，文字自带足够对比，不需要投影
+    BOOL needShadow = NO;
     for (UILabel *l in @[self.zhLabel, self.enLabel]) {
         l.backgroundColor = [UIColor clearColor];
         l.layer.cornerRadius = 0;
@@ -416,6 +439,7 @@ static UIColor *ZKBackgroundColor(void) {
     CGFloat _lastLayoutW;
     CGFloat _lastLayoutH;
     NSString *_lastKey;
+    NSMutableArray<NSString *> *_recentKeys;
     CADisplayLink *_link;
     CGFloat _targetY;
     CFTimeInterval _lastTickAt;
@@ -468,6 +492,15 @@ static UIColor *ZKBackgroundColor(void) {
     _link = [CADisplayLink displayLinkWithTarget:self selector:@selector(onFrame:)];
     _link.paused = YES;
     [_link addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+
+    // 刚浮出来的那一下：字幕区从下方轻轻滑上来。
+    // 用 CABasicAnimation 且 model 值保持原位——万一后台被降频不播，画面也不会卡在偏移处。
+    CABasicAnimation *rise = [CABasicAnimation animationWithKeyPath:@"transform.translation.y"];
+    rise.fromValue = @(20.0);
+    rise.toValue = @(0.0);
+    rise.duration = 0.36;
+    rise.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
+    [self.stream.layer addAnimation:rise forKey:@"zkrise"];
 }
 
 - (void)onFrame:(CADisplayLink *)link {
@@ -610,6 +643,7 @@ static UIColor *ZKBackgroundColor(void) {
 - (void)rebuildFromLines:(NSArray *)lines {
     _snapNext = YES;
     _lastKey = nil;
+    [_recentKeys removeAllObjects];
     self.placeholder.hidden = ([lines isKindOfClass:[NSArray class]] && lines.count > 0);
     [self.scroll setContentOffset:CGPointZero animated:NO];
     [self.stream rebuildWithLines:lines];
@@ -621,7 +655,7 @@ static UIColor *ZKBackgroundColor(void) {
 
 - (void)refreshStyle {
     self.view.backgroundColor = ZKBackgroundColor();
-    self.placeholder.textColor = [gBackground isEqualToString:@"light"]
+    self.placeholder.textColor = ZKLightBackground()
         ? [UIColor colorWithWhite:0.35 alpha:1]
         : [UIColor colorWithWhite:1.0 alpha:0.55];
     _lastLayoutW = 0;
@@ -642,9 +676,14 @@ static UIColor *ZKBackgroundColor(void) {
     if (![z isKindOfClass:[NSString class]]) z = @"";
     if (!e.length && !z.length) return;
     [self hidePlaceholder];
-    // 同一句重复推上来（断线重连、重复回调）就不再落一块，避免画中画里出现两遍
+    // 同一句重复推上来（断线重连、上游重复回调）就不再落一块。
+    // 只跟上一句比是不够的：中间夹了别的句子之后，同一句照样会再出现一遍，
+    // 所以保留最近 24 句的指纹。
     NSString *key = [NSString stringWithFormat:@"%@|%@", e, z];
-    if (_lastKey && [key isEqualToString:_lastKey]) return;
+    if (!_recentKeys) _recentKeys = [NSMutableArray array];
+    if ([_recentKeys containsObject:key]) return;
+    [_recentKeys addObject:key];
+    if (_recentKeys.count > 24) [_recentKeys removeObjectAtIndex:0];
     _lastKey = key;
 
     if (self.scroll.bounds.size.width < 1) {
@@ -706,10 +745,12 @@ static __weak id gActiveSub = nil;
     }
     NSString *color = p[@"color"];
     if ([color isKindOfClass:[NSString class]]) {
-        if ([color isEqualToString:@"yellow"])      gTextColor = [UIColor colorWithRed:1.00 green:0.85 blue:0.30 alpha:1];
-        else if ([color isEqualToString:@"cyan"])   gTextColor = [UIColor colorWithRed:0.40 green:0.90 blue:0.95 alpha:1];
-        else if ([color isEqualToString:@"green"])  gTextColor = [UIColor colorWithRed:0.55 green:0.95 blue:0.65 alpha:1];
-        else if ([color isEqualToString:@"black"])  gTextColor = [UIColor blackColor];
+        if ([color isEqualToString:@"yellow"])      gTextColor = [UIColor colorWithRed:1.00 green:0.84 blue:0.25 alpha:1];
+        else if ([color isEqualToString:@"cyan"])   gTextColor = [UIColor colorWithRed:0.30 green:0.88 blue:0.96 alpha:1];
+        else if ([color isEqualToString:@"green"])  gTextColor = [UIColor colorWithRed:0.44 green:0.94 blue:0.56 alpha:1];
+        else if ([color isEqualToString:@"orange"]) gTextColor = [UIColor colorWithRed:1.00 green:0.64 blue:0.28 alpha:1];
+        else if ([color isEqualToString:@"pink"])   gTextColor = [UIColor colorWithRed:1.00 green:0.58 blue:0.76 alpha:1];
+        else if ([color isEqualToString:@"blue"])   gTextColor = [UIColor colorWithRed:0.42 green:0.70 blue:1.00 alpha:1];
         else                                        gTextColor = [UIColor whiteColor];
     }
     NSString *bg = p[@"background"];
@@ -719,13 +760,14 @@ static __weak id gActiveSub = nil;
 
     NSString *pip = p[@"pip"];
     if ([pip isKindOfClass:[NSString class]]) {
-        gPipBar = [pip isEqualToString:@"bar"];
-        // 横条：约 2.35:1。窗口拉到最宽时高度也够放两行，
-        // 一句中文在最大宽度下基本一行放完，不会再被上下裁掉。
-        gPipSize = gPipBar ? CGSizeMake(800, 340) : CGSizeMake(460, 340);
+        // 两个比例：4:3 是大窗（默认），21:9 是铺满屏宽的横条。
+        // 长句在 21:9 下按屏宽排版，一行放得下更多字，不会上下被裁。
+        BOOL wide = [pip isEqualToString:@"21:9"] || [pip isEqualToString:@"bar"];
+        gPipRatio = wide ? @"21:9" : @"4:3";
+        gPipSize = wide ? CGSizeMake(840, 360) : CGSizeMake(480, 360);
     }
-    [ZKStore log:@"pip style size=%.0f color=%@ bg=%@ mode=%@ pip=%@",
-        gZhSize, color ?: @"", gBackground, gMode, pip ?: @""];
+    [ZKStore log:@"pip style size=%.0f color=%@ bg=%@ mode=%@ ratio=%@",
+        gZhSize, color ?: @"", gBackground, gMode, gPipRatio];
     if (gActiveSub) [(id)gActiveSub performSelector:@selector(refreshStyle)];
 }
 
