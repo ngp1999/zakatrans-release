@@ -58,5 +58,16 @@ struct MainView: View {
                 .tag(1)
         }
         .tint(Theme.accent)
+        // 画中画的锚点必须挂在整个 App 的最外层，而不是某个页面里：
+        // 锚点一离开窗口，系统就会把画中画收掉——切 Tab、进后台都属于这种情况。
+        // 系统录屏面板也放这里，首页的按钮只是"借"它的点击。
+        .overlay(
+            ZStack {
+                PipAnchor().frame(width: 1, height: 1)
+                BroadcastPicker().frame(width: 60, height: 60)
+            }
+            .opacity(0.01)
+            .allowsHitTesting(false)
+        )
     }
 }
