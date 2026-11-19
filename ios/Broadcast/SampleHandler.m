@@ -189,6 +189,29 @@
             }
         }
 
+        // 用户在 App 里点了「停止」：主 App 不能直接停掉系统录屏（ReplayKit 没有这个 API），
+        // 但它会把停止时间写进共享设置，扩展在这里读到就自己收尾，红点立刻消失。
+        // 只认「本次广播开始之后」的停止标记，上一次会话残留的不会误停。
+        if (!s->_autoFinished) {
+            NSString *stopAt = [ZKStore setting:@"broadcast_stop"];
+            if (stopAt.length) {
+                double t = stopAt.doubleValue;
+                if (t > s->_startedAt) {
+                    s->_autoFinished = YES;
+                    [ZKStore log:@"ext: 主 App 要求停止（%.0f）", t];
+                    [ZKStore beat:@{@"bufs": @(s->_bufs), @"conn": @"app_stop"}];
+                    if (s->_beatSrc) { dispatch_source_cancel(s->_beatSrc); s->_beatSrc = nil; }
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [s finishBroadcastWithError:[NSError errorWithDomain:@"com.zakatrans.app.ext"
+                                                                        code:4102
+                                                                    userInfo:@{NSLocalizedDescriptionKey:
+                                                                                   @"已停止实时翻译"}]];
+                    });
+                    return;
+                }
+            }
+        }
+
         s->_ticks++;
         if (s->_ticks % 25 != 0) return;
         [ZKStore beat:@{@"bufs": @(s->_bufs),
