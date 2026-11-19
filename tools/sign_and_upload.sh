@@ -72,7 +72,7 @@ if [ -f "ios/project.yml" ] && [ "${SKIP_BUILD:-0}" != "1" ]; then
   rm -rf build/Payload && mkdir -p build/Payload
   cp -R "$APP_PATH" build/Payload/
   ( cd build && ditto -c -k --sequesterRsrc --keepParent Payload "../$IPA" )
-  log "编译完成：$IPA（$(du -h "$IPA" | cut -f1)）"
+  log "编译完成：${IPA}（$(du -h "$IPA" | cut -f1)）"
 fi
 
 [ -f "$CERT_P12" ] || fail "找不到签名证书：$CERT_P12"
@@ -720,7 +720,7 @@ if [ -n "$SWINFO" ]; then
       fail "苹果的分析器在包里没看到 CFBundleIconName —— 这样传上去必报缺图标。上面是它实际抽到的东西。"
     fi
   else
-    log "⚠ 分析器没产出可用的描述文件（退出码 $SW），跳过这一步"
+    log "⚠ 分析器没产出可用的描述文件（退出码 ${SW}），跳过这一步"
     sed 's/^/    /' "$WORK/swinfo.log" | head -6 || true
   fi
 else
