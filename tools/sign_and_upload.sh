@@ -136,6 +136,17 @@ if bad:
 print("  %s：版式 OK（crypt [0x%x,+0x%x]，段尾 0x%x）"
       % (p.rsplit("/", 1)[-1], co, cs, fs))
 PYBIN
+  # 寻址巡检：代码里的每一条 adrp(+add/ldr) 算出来的地址必须落在映像的节里。
+  # 真实事故（2026-11-19）：正文被挪了 0x3100、数据段没挪，68% 的引用指到映像外面，
+  # 包能传上去、TestFlight 也装得上，但一打开就崩（SIGBUS / PC alignment）。
+  if [ -f tools/macho_layout.py ]; then
+    AUD="$(python3 tools/macho_layout.py --audit "$BIN" 2>/dev/null || true)"
+    echo "    寻址巡检：${AUD:-（没跑起来）}"
+    case "$AUD" in
+      *"落在节外 0 条"*) : ;;
+      *"落在节外 "*) fail "可执行文件寻址错位（装了会一开就崩）：$AUD" ;;
+    esac
+  fi
 done
 
 # ── 2a. 包结构规范化 ──────────────────────────────────────────
