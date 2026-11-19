@@ -35,6 +35,8 @@
     NSInteger _audioFrames;
     NSInteger _dropped;
     NSInteger _ttsSkip;
+    double _gateUntil;
+    double _gateCheckedAt;
     NSInteger _ticks;
     double _startedAt;
     unsigned long long _pendingStart;   // pending 里第一帧的累计帧号（给主 App 做完整性校验）
@@ -232,13 +234,15 @@
 
     // 朗读门：App 正在用系统语音念字幕时，录到的混音里就有我们自己的声音。
     // 送进上游会被当成对方说话再翻一遍——文本重复、句子被切断、还白烧 token，所以这段直接丢。
-    NSString *gate = [ZKStore setting:@"tts_gate"];
-    if (gate.length) {
-        double until = gate.doubleValue;
-        if (until > 0 && [[NSDate date] timeIntervalSince1970] < until) {
-            _ttsSkip++;
-            return;
-        }
+    // 值每 0.3 秒最多读一次：音频回调一秒几十次，每次都去读文件会把采集线程拖卡。
+    double nowSec = [[NSDate date] timeIntervalSince1970];
+    if (nowSec - _gateCheckedAt > 0.3) {
+        _gateCheckedAt = nowSec;
+        _gateUntil = [[ZKStore setting:@"tts_gate"] doubleValue];
+    }
+    if (_gateUntil > nowSec) {
+        _ttsSkip++;
+        return;
     }
 
     CMFormatDescriptionRef fd = CMSampleBufferGetFormatDescription(sampleBuffer);
