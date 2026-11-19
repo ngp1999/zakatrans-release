@@ -66,10 +66,6 @@ struct HistoryView: View {
                 Label(s.durationText, systemImage: "clock")
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.sub)
-                Text("·").foregroundStyle(Theme.faint)
-                Text(s.reasonText)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.sub)
                 if s.hasSummary {
                     Spacer()
                     Text("已总结")
@@ -156,7 +152,6 @@ struct SessionDetailView: View {
             }
             HStack(spacing: 14) {
                 Label(session.durationText, systemImage: "clock")
-                Label(session.reasonText, systemImage: "stop.circle")
                 Label("\(detail?.lines.count ?? 0) 句", systemImage: "text.bubble")
             }
             .font(.system(size: 12))
