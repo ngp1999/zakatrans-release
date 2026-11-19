@@ -49,21 +49,26 @@ if [ -f "ios/project.yml" ] && [ "${SKIP_BUILD:-0}" != "1" ]; then
   set +e
   xcodebuild -project ios/ZakaTrans.xcodeproj \
     -scheme ZakaTrans -configuration Release \
-    -destination 'generic/platform=iOS' \
-    -archivePath build/ZakaTrans.xcarchive \
+    -sdk iphoneos -derivedDataPath build/dd \
     CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
     DEVELOPMENT_TEAM="" ENABLE_BITCODE=NO \
-    > build/xcodebuild.log 2>&1 || XC=$?
+    build > build/xcodebuild.log 2>&1 || XC=$?
   set -e
   if [ "${XC}" -ne 0 ]; then
     echo "---- 编译失败，最后 60 行 ----"
     tail -60 build/xcodebuild.log || true
     echo "---- 报错汇总 ----"
-    grep -nE "error:|error " build/xcodebuild.log | head -30 || true
+    grep -nE "error:|Undefined symbols" build/xcodebuild.log | head -30 || true
     fail "xcodebuild 失败（退出码 ${XC}）"
   fi
-  APP_PATH="build/ZakaTrans.xcarchive/Products/Applications/ZakaTrans.app"
-  [ -d "$APP_PATH" ] || fail "编译产物里没有 ZakaTrans.app"
+  APP_PATH="build/dd/Build/Products/Release-iphoneos/ZakaTrans.app"
+  if [ ! -d "$APP_PATH" ]; then
+    echo "---- 找 .app ----"
+    find build -maxdepth 6 -type d -name "*.app" 2>/dev/null | head -10
+    echo "---- 编译日志末尾 ----"
+    tail -30 build/xcodebuild.log || true
+    fail "编译产物里没有 ZakaTrans.app"
+  fi
   rm -rf build/Payload && mkdir -p build/Payload
   cp -R "$APP_PATH" build/Payload/
   ( cd build && ditto -c -k --sequesterRsrc --keepParent Payload "../$IPA" )
