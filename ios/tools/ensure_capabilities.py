@@ -17,7 +17,10 @@ import json
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+for _p in (_HERE, os.path.normpath(os.path.join(_HERE, "..", "..", "tools"))):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 from asc_provision import Client, api_error_text  # noqa: E402
 
 WANT = ["SIGN_IN_WITH_APPLE"]
