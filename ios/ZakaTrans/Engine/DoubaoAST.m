@@ -47,7 +47,7 @@ static NSString *ZTSign(NSString *token, NSString *method, NSString *path,
     NSString *bodyHash = ZTHex(digest, CC_SHA256_DIGEST_LENGTH);
 
     NSString *message = [NSString stringWithFormat:@"%@\n%@\n%@\n%@\n%@\n%@",
-                         method.uppercased, path, reqID, ts, nonce, bodyHash];
+                         method.uppercaseString, path, reqID, ts, nonce, bodyHash];
     NSData *key = [token dataUsingEncoding:NSUTF8StringEncoding];
     NSData *msg = [message dataUsingEncoding:NSUTF8StringEncoding];
     unsigned char mac[CC_SHA256_DIGEST_LENGTH];
