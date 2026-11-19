@@ -59,7 +59,11 @@ final class Cloud: ObservableObject {
             loggedIn = false
             return
         }
-        _ = await refresh()
+        // 冷启动不等网络：本地有 token 就先认成已登录，界面立刻出来，
+        // 余额/资料在后面补。之前是等 /v1/me 回来才放行，弱网下要干等好几秒。
+        loggedIn = true
+        // 余额/资料在后面补，不挡界面
+        Task { _ = await self.refresh() }
     }
 
     // MARK: - Sign in with Apple
