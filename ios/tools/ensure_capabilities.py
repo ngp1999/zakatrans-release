@@ -49,13 +49,11 @@ def caps_of(c, bid):
 # Sign in with Apple 在后台要额外选一个「配置」（作为主 App ID）。
 # 这一步 API 文档没写清楚，下面按几种可能的写法依次试，全失败就提示手工勾选。
 SETTINGS_VARIANTS = [
-    None,
-    [{"key": "PRIMARY_APP_ID",
-      "options": [{"key": "primaryAppId", "enabled": True}]}],
-    [{"key": "APPLE_ID_AUTH",
-      "options": [{"key": "primaryAppId", "enabled": True}]}],
-    [{"key": "PRIMARY_APP_CONSENT",
-      "options": [{"key": "PRIMARY_APP_ID", "enabled": True}]}],
+    [{"key": "APPLE_ID_AUTH_APP_CONSENT",
+      "options": [{"key": "PRIMARY_APP_CONSENT", "enabled": True}]}],
+    [{"key": "APPLE_ID_AUTH_APP_CONSENT",
+      "options": [{"key": "PRIMARY_APP_CONSENT"}]}],
+    [{"key": "APPLE_ID_AUTH_APP_CONSENT"}],
 ]
 
 
