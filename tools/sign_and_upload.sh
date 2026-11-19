@@ -618,10 +618,13 @@ else
 fi
 
 # 包里本来就带着资源目录（比如包是 Xcode 直接导出的）：那 actool 没跑成也不耽误
-if [ "$CAR_OK" -ne 1 ] && [ -s "$APP/Assets.car" ] \
-   && /usr/libexec/PlistBuddy -c "Print :CFBundleIconName" "$APP/Info.plist" >/dev/null 2>&1; then
+# Xcode 直接编出来的包，Assets.car 是苹果自家 actool 的产物，比拿散图重拼的更可靠。
+# 这里只要包里有它，就补上 CFBundleIconName 直接用，不再纠结上面的重编有没有跑通。
+if [ "$CAR_OK" -ne 1 ] && [ -s "$APP/Assets.car" ]; then
+  /usr/libexec/PlistBuddy -c "Print :CFBundleIconName" "$APP/Info.plist" >/dev/null 2>&1 \
+    || /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AppIcon" "$APP/Info.plist"
   CAR_OK=1
-  log "包里本来就有 Assets.car + CFBundleIconName，用包里这份"
+  log "包里已带 Assets.car（$(du -h "$APP/Assets.car" | cut -f1)），补齐 CFBundleIconName 后用这份"
 fi
 
 if [ "$CAR_OK" -ne 1 ]; then
