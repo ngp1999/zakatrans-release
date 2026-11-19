@@ -57,7 +57,7 @@ struct InterpreterView: View {
         .sheet(isPresented: $showLang) {
             LangPicker(mine: $mine, other: $other) { a, b in
                 mine = a; other = b
-                ZKInterpreter.shared().setMine(a, other: b)
+                ZKInterpreter.shared()?.setMine(a, other: b)
             }
         }
         .alert("提示", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
@@ -281,7 +281,7 @@ struct InterpreterView: View {
         running = true
         state = "连接中"
 
-        let itp = ZKInterpreter.shared()
+        guard let itp = ZKInterpreter.shared() else { error = "同传引擎没启动起来，重开一次试试"; return }
         itp.onLine = { side, source, trans, final in
             let s = side
             DispatchQueue.main.async {
@@ -318,7 +318,7 @@ struct InterpreterView: View {
 
     private func stop() {
         running = false
-        ZKInterpreter.shared().stop()
+        ZKInterpreter.shared()?.stop()
         Speaker.shared.stop()
         state = "未开始"
         liveA = ""; liveB = ""
