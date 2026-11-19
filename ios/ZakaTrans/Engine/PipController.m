@@ -28,7 +28,6 @@ static UIColor *gTextColor = nil;
 static NSString *gMode = @"bilingual";         // bilingual | zh | source
 static NSString *gBackground = @"black";       // 7 种实色背景，见 ZKBackgroundColor()
 static CGSize gPipSize = {480, 360};           // 4:3 大窗（默认）
-static NSString *gPipRatio = @"4:3";           // 4:3 | 21:9
 static const CGFloat ZK_PARA_GAP = 14.0;      // 句与句之间的空档
 static const CGFloat ZK_MAX_BLOCKS = 120.0;   // 历史句上限（正常一场对话到不了）
 
@@ -760,14 +759,21 @@ static __weak id gActiveSub = nil;
 
     NSString *pip = p[@"pip"];
     if ([pip isKindOfClass:[NSString class]]) {
-        // 两个比例：4:3 是大窗（默认），21:9 是铺满屏宽的横条。
-        // 长句在 21:9 下按屏宽排版，一行放得下更多字，不会上下被裁。
-        BOOL wide = [pip isEqualToString:@"21:9"] || [pip isEqualToString:@"bar"];
-        gPipRatio = wide ? @"21:9" : @"4:3";
-        gPipSize = wide ? CGSizeMake(840, 360) : CGSizeMake(480, 360);
+        // 窗口三档，选哪个开出来就是多大：
+        //   L 大 = 4:3 480×360（默认，能看清两行）
+        //   M 中 = 16:9 576×324
+        //   S 小 = 21:9 840×360（最宽最矮，一行铺满屏宽）
+        // 老版本的 4:3 / 21:9 / bar 也认，映射到对应的档
+        if ([pip isEqualToString:@"M"] || [pip isEqualToString:@"16:9"]) {
+            gPipSize = CGSizeMake(576, 324);
+        } else if ([pip isEqualToString:@"S"] || [pip isEqualToString:@"21:9"] || [pip isEqualToString:@"bar"]) {
+            gPipSize = CGSizeMake(840, 360);
+        } else {
+            gPipSize = CGSizeMake(480, 360);
+        }
     }
-    [ZKStore log:@"pip style size=%.0f color=%@ bg=%@ mode=%@ ratio=%@",
-        gZhSize, color ?: @"", gBackground, gMode, gPipRatio];
+    [ZKStore log:@"pip style size=%.0f color=%@ bg=%@ mode=%@ win=%.0fx%.0f",
+        gZhSize, color ?: @"", gBackground, gMode, gPipSize.width, gPipSize.height];
     if (gActiveSub) [(id)gActiveSub performSelector:@selector(refreshStyle)];
 }
 
