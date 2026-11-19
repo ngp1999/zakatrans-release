@@ -307,11 +307,11 @@ struct InterpreterView: View {
             }
         }
         itp.onState = { st in
-            DispatchQueue.main.async { state = st }
+            DispatchQueue.main.async { state = st ?? "" }
         }
         itp.onFail = { why in
             DispatchQueue.main.async {
-                error = why
+                error = why ?? ""
                 stop()
             }
         }
