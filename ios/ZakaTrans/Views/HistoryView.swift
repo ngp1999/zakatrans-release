@@ -24,6 +24,12 @@ struct HistoryView: View {
                             }
                         } header: {
                             Text(group.0)
+                        } footer: {
+                            if group.0 == grouped.last?.0 {
+                                Text("云端只保留最近 30 天的记录，更早的已自动删除。")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(Theme.faint)
+                            }
                         }
                     }
                 }
