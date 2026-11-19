@@ -39,8 +39,6 @@ targets:
     dependencies:
       - target: Broadcast
         embed: true
-    info:
-      path: ZakaTrans/Resources/Info.plist
 
   Broadcast:
     type: app-extension
@@ -59,5 +57,3 @@ targets:
         CODE_SIGN_STYLE: Manual
         CODE_SIGN_IDENTITY: ""
         DEVELOPMENT_TEAM: ""
-    info:
-      path: Broadcast/Info.plist

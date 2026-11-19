@@ -1195,7 +1195,12 @@ def check_macho(path, label):
                 err("%s：__TEXT 段 filesize=0x%x 不是 16K 的整数倍（加密范围末端落在段外，"
                     "苹果报 Mismatched Encryption Extents）。跑 --fix-dir 会按页补齐，数据一个字节不动。"
                     % (label, text_seg.get("filesize", 0)))
-            elif cryptoff + cryptsize != seg_end:
+            elif cryptoff + cryptsize != seg_end and not (
+                    os.environ.get("ALLOW_NATIVE_CRYPT") == "1"
+                    and cryptoff + cryptsize <= seg_end):
+                # ALLOW_NATIVE_CRYPT：包是 Xcode 自家 ld64 编出来的。
+                # 这种情况 cryptsize 只覆盖到最后一个节，比按页补齐的段尾小一截，
+                # 苹果的校验按同一口径算，是接受的。手工改过版式的包不要开这个开关。
                 err("%s：加密范围末端 0x%x 和 __TEXT 段文件末尾 0x%x 差 0x%x 字节，"
                     "苹果报 Mismatched Encryption Extents。跑 --fix-dir 会自动对齐。"
                     % (label, cryptoff + cryptsize, seg_end, abs(cryptoff + cryptsize - seg_end)))

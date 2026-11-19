@@ -39,6 +39,8 @@ ASC_KEY_FILE="${ASC_KEY_FILE:-}"
 # 手工改字节那条路已经证明会崩。编出来的包交给下面的流程重签。
 if [ -f "ios/project.yml" ] && [ "${SKIP_BUILD:-0}" != "1" ]; then
   log "0.4/9 从 SwiftUI 源码编译"
+  # 这个包是 Xcode 自家链接器产物，加密范围按苹果口径本来就不与段尾齐平
+  export ALLOW_NATIVE_CRYPT=1
   if ! command -v xcodegen >/dev/null 2>&1; then
     brew install xcodegen >/dev/null 2>&1 || true
   fi
