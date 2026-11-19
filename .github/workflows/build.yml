@@ -1,13 +1,19 @@
 name: ZakaTrans Build (Xcode)
 
-# 真实 Xcode 编译：xcodegen 生成工程 → 自动签名 → 归档 → 导出 ipa → 上传 TestFlight
+# 真实 Xcode 编译：能力检查 → xcodegen 生成工程 → 自动签名归档 → 导出 ipa → 校验 → 上传 TestFlight
+#
+# 为什么会有「能力检查」这一步：
+# 之前工程里 target 级写着 CODE_SIGN_STYLE: Manual + CODE_SIGN_IDENTITY: ""，
+# Xcode 归档时直接跳过签名，二进制里一个 entitlement 都没有，
+# 结果 TestFlight 上点「通过 Apple 登录」报 ASAuthorizationError 1000。
+# 现在固定真签名，并且上传前用 codesign 读回来核对，缺了就当场失败。
 on:
   workflow_dispatch:
     inputs:
       marketing_version:
-        description: "版本号（如 3.1.0）"
+        description: "版本号（如 3.1.1）"
         required: false
-        default: "3.1.0"
+        default: "3.1.1"
       upload:
         description: "上传到 TestFlight（true/false）"
         required: false
@@ -31,12 +37,6 @@ jobs:
           brew install xcodegen || brew upgrade xcodegen
           xcodegen --version
 
-      - name: 生成工程
-        working-directory: ios
-        run: |
-          xcodegen generate
-          ls -la
-
       - name: 准备 API 密钥
         env:
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
@@ -59,7 +59,21 @@ jobs:
           cp "$KEY" "$HOME/.appstoreconnect/private_keys/"
           echo "ASC_KEY_FILE=$KEY" >> "$GITHUB_ENV"
 
-      - name: 归档（自动签名）
+      - name: 确保 App ID 开好 Sign in with Apple / App Groups
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          python3 ios/tools/ensure_capabilities.py
+
+      - name: 生成工程
+        working-directory: ios
+        run: |
+          xcodegen generate
+          grep -n "CODE_SIGN" ZakaTrans.xcodeproj/project.pbxproj | head -20 || true
+
+      - name: 归档（真签名）
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
@@ -77,12 +91,20 @@ jobs:
             -authenticationKeyPath "$ASC_KEY_FILE" \
             -authenticationKeyID "$ASC_KEY_ID" \
             -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
-            MARKETING_VERSION="${MV:-3.1.0}" \
+            MARKETING_VERSION="${MV:-3.1.1}" \
             CURRENT_PROJECT_VERSION="$BUILD_NO" \
             DEVELOPMENT_TEAM=9VSZ8M2JL5 \
             CODE_SIGN_STYLE=Automatic \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
             archive 2>&1 | tee "$RUNNER_TEMP/archive.log"
           test ${PIPESTATUS[0]} -eq 0
+
+      - name: 校验归档产物里的 entitlement
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/ZakaTrans.xcarchive/Products/Applications/ZakaTrans.app"
+          ls -la "$APP" | head -20
+          python3 ios/tools/verify_entitlements.py "$APP"
 
       - name: 导出 ipa
         env:
@@ -99,6 +121,17 @@ jobs:
             -authenticationKeyID "$ASC_KEY_ID" \
             -authenticationKeyIssuerID "$ASC_ISSUER_ID"
           ls -la "$RUNNER_TEMP/out"
+
+      - name: 校验导出 ipa 里的 entitlement
+        run: |
+          set -euo pipefail
+          IPA="$(ls "$RUNNER_TEMP"/out/*.ipa | head -1)"
+          rm -rf "$RUNNER_TEMP/unzip" && mkdir -p "$RUNNER_TEMP/unzip"
+          unzip -q "$IPA" -d "$RUNNER_TEMP/unzip"
+          APP="$RUNNER_TEMP/unzip/Payload/ZakaTrans.app"
+          python3 ios/tools/verify_entitlements.py "$APP"
+          echo "--- embedded.mobileprovision ---"
+          security cms -D -i "$APP/embedded.mobileprovision" | plutil -convert xml1 -o - - | grep -A3 "Entitlements" | head -40 || true
 
       - name: 上传 TestFlight
         if: ${{ github.event.inputs.upload != 'false' }}
