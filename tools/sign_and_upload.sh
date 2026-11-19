@@ -87,7 +87,7 @@ for _ in range(ncmds):
     cmd, size = struct.unpack("<II", d[off:off + 8])
     if cmd == 0x19 and d[off + 8:off + 24].rstrip(b"\0") == b"__TEXT":
         text = struct.unpack("<QQQQ", d[off + 24:off + 56])
-    elif cmd == 0x2E:
+    elif cmd == 0x2C:
         enc = struct.unpack("<III", d[off + 8:off + 20])
     off += size
 if not text or not enc:
@@ -96,6 +96,32 @@ if not text or not enc:
 vm, vs, fo, fs = text
 co, cs, ci = enc
 bad = []
+# 逐条核每条加载命令的 cmdsize —— 苹果上传时会验，错一条整包退。
+# 真实事故：加密命令写成 0x2E（那是 16 字节的 LC_LINKER_OPTIMIZATION_HINT），
+# 结构却按 24 字节填，苹果回 'invalid load command token, cmdsize 24 Incorrect size'。
+EXPECT = {0x2: 24, 0x3: 16, 0x8: 16, 0xB: 80, 0x1B: 24, 0x1D: 16, 0x1E: 16,
+          0x21: 20, 0x22: 48, 0x80000022: 48, 0x24: 16, 0x25: 16, 0x26: 16,
+          0x28: 24, 0x80000028: 24, 0x29: 16, 0x2A: 16, 0x2C: 24, 0x2E: 16,
+          0x2F: 16, 0x30: 16, 0x31: 40, 0x33: 16, 0x80000033: 16,
+          0x34: 16, 0x80000034: 16}
+cmd_end = 32 + struct.unpack("<I", d[20:24])[0]
+o2 = 32
+while o2 + 8 <= cmd_end:
+    c, s = struct.unpack("<II", d[o2:o2 + 8])
+    if s < 8 or s % 8:
+        bad.append("加载命令 0x%x 的 cmdsize=%d 不合法" % (c, s))
+        break
+    if c in EXPECT and s != EXPECT[c]:
+        bad.append("加载命令 0x%x 的 cmdsize=%d（应为 %d）" % (c, s, EXPECT[c]))
+    elif c == 0x19:
+        nsects = struct.unpack("<I", d[o2 + 64:o2 + 68])[0]
+        if s != 72 + 80 * nsects:
+            bad.append("段命令 cmdsize=%d（应为 %d）" % (s, 72 + 80 * nsects))
+    elif c == 0x32:
+        ntools = struct.unpack("<I", d[o2 + 20:o2 + 24])[0]
+        if s != 24 + 8 * ntools:
+            bad.append("LC_BUILD_VERSION cmdsize=%d（应为 %d）" % (s, 24 + 8 * ntools))
+    o2 += s
 if fs % 0x4000 or vs % 0x4000:
     bad.append("__TEXT 不是整页（filesize=0x%x vmsize=0x%x）" % (fs, vs))
 if co != 0x4000:

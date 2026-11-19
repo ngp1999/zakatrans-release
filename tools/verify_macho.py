@@ -42,7 +42,7 @@ class M(object):
                     p += 80
                 self.segs.append({'name': name, 'vm': vm, 'vs': vs, 'fo': fo,
                                   'fs': fs, 'secs': secs})
-            elif cmd == 0x2E:
+            elif cmd == 0x2C:
                 co, cs, ci = struct.unpack_from('<III', self.d, off + 8)
                 self.enc = (co, cs, ci)
             elif cmd == 0x80000028:

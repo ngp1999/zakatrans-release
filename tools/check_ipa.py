@@ -181,7 +181,9 @@ def flatten_icon(path):
 MH_MAGIC_64 = 0xFEEDFACF
 LC_BUILD_VERSION = 0x32
 LC_CODE_SIGNATURE = 0x1D
-LC_ENCRYPTION_INFO_64 = 0x2E          # 64 位版；0x2C 是 32 位的 LC_ENCRYPTION_INFO
+LC_ENCRYPTION_INFO = 0x21             # 32 位版，结构 20 字节
+LC_ENCRYPTION_INFO_64 = 0x2C          # 64 位版，结构 24 字节（mach-o/loader.h）
+LC_LINKER_OPTIMIZATION_HINT = 0x2E    # 0x2E 是这条，16 字节 —— 别跟加密命令混
 LC_MAIN = 0x28 | 0x80000000
 LC_LOAD_DYLIB = (0xC, 0x8000001F, 0x80000018)
 LC_SEGMENT_64 = 0x19
@@ -191,6 +193,97 @@ PAGE = 0x4000
 
 def u32(d, o):
     return struct.unpack("<I", d[o:o + 4])[0]
+
+
+# 苹果上传时会逐条核加载命令的 cmdsize，错一条整包退。
+# 真实事故：加密命令被写成 0x2E（LC_LINKER_OPTIMIZATION_HINT，16 字节），
+# 结构却按 24 字节填，苹果回 "invalid load command token, cmdsize 24 Incorrect size"。
+LC_EXPECTED_SIZE = {
+    0x2: 24,             # LC_SYMTAB
+    0x3: 16,             # LC_SYMSEG
+    0x8: 16,             # LC_IDENT
+    0xB: 80,             # LC_DYSYMTAB
+    0x1B: 24,            # LC_UUID
+    0x1D: 16,            # LC_CODE_SIGNATURE
+    0x1E: 16,            # LC_SEGMENT_SPLIT_INFO
+    0x21: 20,            # LC_ENCRYPTION_INFO（32 位）
+    0x22: 48, 0x80000022: 48,        # LC_DYLD_INFO / _ONLY
+    0x24: 16,            # LC_VERSION_MIN_MACOSX
+    0x25: 16,            # LC_VERSION_MIN_IPHONEOS
+    0x26: 16,            # LC_FUNCTION_STARTS
+    0x28: 24, 0x80000028: 24,        # LC_MAIN
+    0x29: 16,            # LC_DATA_IN_CODE
+    0x2A: 16,            # LC_SOURCE_VERSION
+    0x2C: 24,            # LC_ENCRYPTION_INFO_64
+    0x2E: 16,            # LC_LINKER_OPTIMIZATION_HINT
+    0x2F: 16,            # LC_VERSION_MIN_TVOS
+    0x30: 16,            # LC_VERSION_MIN_WATCHOS
+    0x31: 40,            # LC_NOTE
+    0x33: 16, 0x80000033: 16,        # LC_DYLD_EXPORTS_TRIE
+    0x34: 16, 0x80000034: 16,        # LC_DYLD_CHAINED_FIXUPS
+}
+LC_MIN_SIZE = {
+    0x1: 56, 0x4: 8, 0x5: 8, 0x19: 72,
+    0xC: 24, 0xD: 24, 0xE: 24, 0x18: 24, 0x80000018: 24,
+    0x1F: 24, 0x20: 24, 0x23: 24, 0x8000001C: 24,
+    0x8000001F: 24, 0x80000023: 24, 0x2D: 12, 0x32: 24,
+}
+LC_NAMES = {
+    0x1: "LC_SEGMENT", 0x2: "LC_SYMTAB", 0xB: "LC_DYSYMTAB",
+    0xC: "LC_LOAD_DYLIB", 0xE: "LC_LOAD_DYLINKER", 0x19: "LC_SEGMENT_64",
+    0x1B: "LC_UUID", 0x1D: "LC_CODE_SIGNATURE", 0x21: "LC_ENCRYPTION_INFO",
+    0x26: "LC_FUNCTION_STARTS", 0x29: "LC_DATA_IN_CODE",
+    0x2C: "LC_ENCRYPTION_INFO_64", 0x2E: "LC_LINKER_OPTIMIZATION_HINT",
+    0x32: "LC_BUILD_VERSION",
+}
+
+
+def validate_load_commands(d):
+    """逐条核 cmdsize，返回问题列表（空 = 全合法）。"""
+    problems = []
+    if len(d) < 32:
+        return ["文件太小"]
+    ncmds, sizeofcmds = u32(d, 16), u32(d, 20)
+    end = 32 + sizeofcmds
+    off = 32
+    for i in range(ncmds):
+        if off + 8 > min(end, len(d)):
+            problems.append("第 %d 条命令超出命令区（off=0x%x）" % (i + 1, off))
+            return problems
+        cmd, size = struct.unpack("<II", d[off:off + 8])
+        name = LC_NAMES.get(cmd, "0x%x" % cmd)
+        if size < 8 or size % 8:
+            problems.append("%s(0x%x) 的 cmdsize=%d，不是 8 的倍数" % (name, cmd, size))
+            return problems
+        if off + size > end:
+            problems.append("%s(0x%x) 的 cmdsize=%d 冲出命令区" % (name, cmd, size))
+            return problems
+        want = LC_EXPECTED_SIZE.get(cmd)
+        if want is not None:
+            if size != want:
+                problems.append("%s(0x%x) 的 cmdsize=%d，苹果要求 %d"
+                                % (name, cmd, size, want))
+                if cmd == LC_LINKER_OPTIMIZATION_HINT and size == ENC_SIZE:
+                    problems.append("这条就是加密命令被写错了命令号：0x2C 才是 "
+                                    "LC_ENCRYPTION_INFO_64，0x2E 是优化提示")
+        elif cmd == LC_SEGMENT_64:
+            nsects = u32(d, off + 64)
+            if size != 72 + 80 * nsects:
+                problems.append("段 %s：nsects=%d 需 %d 字节，实际 %d"
+                                % (d[off + 8:off + 24].split(b"\0")[0].decode("utf-8", "replace"),
+                                   nsects, 72 + 80 * nsects, size))
+        elif cmd == LC_BUILD_VERSION:
+            ntools = u32(d, off + 20)
+            if size != 24 + 8 * ntools:
+                problems.append("LC_BUILD_VERSION：ntools=%d 需 %d 字节，实际 %d"
+                                % (ntools, 24 + 8 * ntools, size))
+        elif cmd in LC_MIN_SIZE and size < LC_MIN_SIZE[cmd]:
+            problems.append("%s(0x%x) 的 cmdsize=%d 小于最小值 %d"
+                            % (name, cmd, size, LC_MIN_SIZE[cmd]))
+        off += size
+    if off != end:
+        problems.append("命令区长度对不上：逐条走完 0x%x，头里写的是 0x%x" % (off, end))
+    return problems
 
 
 def u64(d, o):
@@ -433,6 +526,32 @@ def repair_text_section_offsets(path, info):
     return -shift, "把 __TEXT 节数据挪回和虚拟地址对齐（%+d 字节）" % shift
 
 
+def fix_encryption_cmd_id(path, info):
+    """
+    把误写成 0x2E 的加密命令改回 0x2C。
+
+    0x2C 才是 LC_ENCRYPTION_INFO_64（结构 24 字节）；0x2E 是
+    LC_LINKER_OPTIMIZATION_HINT（16 字节）。结构照 24 字节填、命令号却写 0x2E，
+    苹果就会在一条「看着像加密命令」的位置报
+    'invalid load command token, cmdsize 24 Incorrect size'。
+    只改四字节命令号，其余一个字节不动。
+    """
+    d = bytearray(info["data"])
+    off = 32
+    hits = []
+    for _ in range(info["ncmds"]):
+        cmd, size = struct.unpack("<II", d[off:off + 8])
+        if cmd == LC_LINKER_OPTIMIZATION_HINT and size == ENC_SIZE:
+            struct.pack_into("<I", d, off, LC_ENCRYPTION_INFO_64)
+            hits.append(off)
+        off += size
+    if not hits:
+        return None
+    with open(path, "wb") as f:
+        f.write(d)
+    return ("加密命令号 0x2E→0x2C（共 %d 条；只改命令号，结构不动）" % len(hits))
+
+
 def add_encryption_info(path, info):
     """
     补 / 修 LC_ENCRYPTION_INFO_64（cryptid=0）。
@@ -592,6 +711,13 @@ def align_all(path):
         if info.get("error"):
             return notes, info["error"]
 
+    fixmsg = fix_encryption_cmd_id(path, info)
+    if fixmsg:
+        notes.append(fixmsg)
+        info = macho_scan(path)
+        if info.get("error"):
+            return notes, info["error"]
+
     _, msg = add_encryption_info(path, info)
     if msg:
         notes.append(msg)
@@ -612,6 +738,11 @@ def align_all(path):
     m2 = align_segment_vmsizes(path, info)
     if m2:
         notes.append("段 vmsize 对齐：%s" % m2)
+
+    final = macho_scan(path)
+    bad = validate_load_commands(final.get("data", b""))
+    if bad:
+        return notes, "修完加载命令仍不合法：%s" % "；".join(bad[:3])
     return notes, None
 
 
@@ -989,6 +1120,15 @@ def check_macho(path, label):
     if info.get("fat"):
         ok("%s：fat 包（多架构）" % label)
         return
+
+    # 加载命令本身的长度必须合法：苹果上传时逐条核，错一条整包退
+    badcmds = validate_load_commands(info["data"])
+    if badcmds:
+        for p in badcmds[:4]:
+            err("%s：加载命令不合法 —— %s（苹果报 'invalid load command token'，必退）"
+                % (label, p))
+    else:
+        ok("%s：%d 条加载命令结构合法" % (label, info.get("ncmds", 0)))
 
     sdk = info.get("sdk")
     if sdk is None:
