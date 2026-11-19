@@ -2,7 +2,9 @@
 # -*- coding: utf-8 -*-
 """校验签名产物里真的有 entitlement。签名没生效时这里直接失败，不让包上传。
 
-用法：verify_entitlements.py <ZakaTrans.app> [--ext]
+用法：verify_entitlements.py <ZakaTrans.app> [--allow-dev]
+  --allow-dev  归档阶段用（这时挂的是开发描述文件，get-task-allow 正常为真），
+               只核对 Apple 登录与 App Group；是否可上架由导出后的 ipa 判定。
 """
 
 import plistlib
@@ -24,7 +26,9 @@ def entitlements(path):
 
 
 def main():
-    app = sys.argv[1]
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    allow_dev = "--allow-dev" in sys.argv
+    app = args[0]
     ok = True
 
     ent, err = entitlements(app)
@@ -47,8 +51,11 @@ def main():
         ok = False
 
     if ent.get("get-task-allow"):
-        print("❌ get-task-allow 为真 —— 这是开发描述文件，不能上传商店")
-        ok = False
+        if allow_dev:
+            print("ℹ️ get-task-allow 为真（归档阶段使用开发描述文件，属正常；导出时会换成分发描述文件）")
+        else:
+            print("❌ get-task-allow 为真 —— 这是开发描述文件，不能上传商店")
+            ok = False
 
     ext_path = f"{app}/PlugIns/Broadcast.appex"
     import os
