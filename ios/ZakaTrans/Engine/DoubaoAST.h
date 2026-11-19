@@ -12,6 +12,14 @@
 
 + (instancetype)shared;
 
+// 另开一条独立会话（同声传译要两条：A→B 和 B→A）。
+// 每条实例各有自己的连接、回调、句柄，互不影响。
++ (instancetype)session;
+
+// 这条会话的语向（不设就读设置里的 asr/dst）
+@property (nonatomic, copy) NSString *srcLang;
+@property (nonatomic, copy) NSString *dstLang;
+
 // 原文（增量 / 整句）
 @property (nonatomic, copy) void (^onSourcePartial)(NSString *delta);
 @property (nonatomic, copy) void (^onSourceEnd)(NSString *full);
