@@ -23,7 +23,7 @@ for _p in (_HERE, os.path.normpath(os.path.join(_HERE, "..", "..", "tools"))):
         sys.path.insert(0, _p)
 from asc_provision import Client, api_error_text  # noqa: E402
 
-WANT = ["SIGN_IN_WITH_APPLE"]
+WANT = ["APPLE_ID_AUTH", "APP_GROUPS"]
 
 log = lambda m: print(f"[caps] {m}", flush=True)
 
@@ -39,7 +39,7 @@ def bundle_id_of(c, identifier):
 
 
 def caps_of(c, bid):
-    st, body = c.req("GET", f"/v1/bundleIds/{bid}/bundleIdCapabilities?limit=200")
+    st, body = c.req("GET", f"/v1/bundleIds/{bid}/bundleIdCapabilities")
     if st != 200:
         log(f"查询能力失败 {st}：{api_error_text(body)}")
         return set()
@@ -87,8 +87,8 @@ def main():
     ok = True
     bid = bundle_id_of(c, app)
     have = caps_of(c, bid)
-    if "SIGN_IN_WITH_APPLE" not in have:
-        log("❌ 主 App 仍未开启 SIGN_IN_WITH_APPLE")
+    if "APPLE_ID_AUTH" not in have:
+        log("❌ 主 App 仍未开启 APPLE_ID_AUTH（Sign in with Apple）")
         ok = False
     else:
         log("✅ 主 App 已具备 Sign in with Apple")
