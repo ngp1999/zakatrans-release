@@ -34,6 +34,8 @@ final class Speaker: NSObject, ObservableObject {
     /// 用户已经停止：之后进来的迟到回调一律丢掉，避免"暂停了还在念"
     private var paused = false
 
+    private var gateTimer: Timer?
+
     private let maxQueue = 3
     private let recentLimit = 24
 
@@ -125,13 +127,39 @@ final class Speaker: NSObject, ObservableObject {
         current = t
         let u = AVSpeechUtterance(string: t)
         u.voice = Self.voice(voiceId, lang: lang)
-        u.rate = Float(max(0.40, min(0.68, rate)))
+        u.rate = Float(max(0.40, min(0.80, rate)))
         u.pitchMultiplier = 1.0
         // 压低别的 App 的时候自己可以响一点（相对更清楚）；不压的时候让一点，别盖住原声
         u.volume = duckLevel > 0 ? Float(0.9 + 0.1 * min(1, duckLevel / 100)) : 0.85
         u.postUtteranceDelay = 0
         u.preUtteranceDelay = 0
         synth.speak(u)
+        openEchoGate()
+    }
+
+    /// 朗读门:念的时候给录屏那边留一个"我在出声"的时间戳,那边据此把这段音频丢掉。
+    /// 系统录屏拿到的是混音,我们的朗读也在里面——送进上游就会被当成对方说话再翻一遍,
+    /// 结果就是文本重复两遍、句子被切断、还白烧 token。
+    private func openEchoGate() {
+        let deadline = String(Int(Date().timeIntervalSince1970) + 2)
+        ZKStore.setSetting("tts_gate", v: deadline)
+        gateTimer?.invalidate()
+        gateTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                if self.synth.isSpeaking || self.current != nil {
+                    ZKStore.setSetting("tts_gate", v: String(Int(Date().timeIntervalSince1970) + 2))
+                } else {
+                    self.closeEchoGate()
+                }
+            }
+        }
+    }
+
+    private func closeEchoGate() {
+        gateTimer?.invalidate()
+        gateTimer = nil
+        ZKStore.setSetting("tts_gate", v: "0")
     }
 
     /// 试听：不排队，立刻念（不影响正式队列）
@@ -157,6 +185,7 @@ final class Speaker: NSObject, ObservableObject {
         current = nil
         if synth.isSpeaking { synth.stopSpeaking(at: .immediate) }
         speaking = false
+        closeEchoGate()
     }
 
     // MARK: - 文本归一化 / 去重
@@ -197,6 +226,7 @@ extension Speaker: AVSpeechSynthesizerDelegate {
         current = nil
         if paused || queue.isEmpty {
             speaking = false
+            closeEchoGate()
             return
         }
         let item = queue.removeFirst()
