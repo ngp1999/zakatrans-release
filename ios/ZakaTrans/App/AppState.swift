@@ -11,6 +11,8 @@ final class AppState: ObservableObject {
     static let shared = AppState()
 
     @Published var running = false
+    /// 点完「开始」到字幕浮窗真正出来这段：按钮显示加载态
+    @Published var preparing = false
     @Published var status = "未开始"
     @Published var liveSource = ""
     @Published var liveTrans = ""
@@ -81,6 +83,13 @@ final class AppState: ObservableObject {
             let zh = (full ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let src = self.liveSource.trimmingCharacters(in: .whitespacesAndNewlines)
             if !zh.isEmpty {
+                // 回声先拦：这句话是我们自己刚念出去的，被录屏录回来又识别了一遍。
+                // 不拦的话既重复显示、又重复念，还会把真实语音的句子切碎。
+                if self.prefs.tts && Speaker.shared.isEcho([zh, src]) {
+                    self.liveTrans = ""
+                    self.liveSource = ""
+                    return
+                }
                 // 去重：同一句（原文+译文）短时间内只收一次。
                 // 只跟上一句比不够——中间夹一句别的，同一句照样会再冒出来一遍。
                 let key = Speaker.key(src) + "\u{1}" + Speaker.key(zh)
@@ -156,6 +165,8 @@ final class AppState: ObservableObject {
         prefs.saveLocal()
         Speaker.shared.enabled = prefs.tts
         Speaker.shared.rate = prefs.speechRate
+        Speaker.shared.duckLevel = prefs.duckLevel
+        Speaker.shared.voiceId = prefs.voiceId
     }
 
     /// 改设置后统一走这里：本地存 + 云端同步 + 通知引擎
@@ -178,12 +189,16 @@ final class AppState: ObservableObject {
     // MARK: - 开 / 停
 
     func start() async {
-        guard !running else { return }
-        await Cloud.shared.refresh()
+        guard !running, !preparing else { return }
+        // 余额用本地已知的，不再等网络往返（弱网下这一下要好几秒）
         if Cloud.shared.balanceCredits < Cloud.shared.minStartCredits {
-            alert = "积分不足，先去充值。"
-            return
+            await Cloud.shared.refresh()
+            if Cloud.shared.balanceCredits < Cloud.shared.minStartCredits {
+                alert = "积分不足，先去充值。"
+                return
+            }
         }
+        preparing = true
         // 每次开新的一场，字幕不会串上一次的
         ZKStore.beginNewSession()
         ZKStore.clearLines()
@@ -204,6 +219,10 @@ final class AppState: ObservableObject {
         running = true
         status = "等待录屏"
         startWatchingBroadcast()
+        // 兜底：12 秒还没浮出来也不能一直转圈
+        DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in
+            self?.preparing = false
+        }
     }
 
     func stop() {
@@ -219,6 +238,7 @@ final class AppState: ObservableObject {
         keeper.stop()
         pipRequested = false
         pipActive = false
+        preparing = false
         running = false
         status = "未开始"
         liveSource = ""
@@ -238,6 +258,8 @@ final class AppState: ObservableObject {
                 guard let self else { return }
                 let active = ZKPip.shared()!.isActive()
                 if active != self.pipActive { self.pipActive = active }
+                // 浮窗出来了，按钮就从「正在加载字幕浮窗」变成「停止」
+                if active && self.preparing { self.preparing = false }
             }
         }
     }
@@ -258,6 +280,8 @@ final class AppState: ObservableObject {
 
         broadcastSeen = true
         status = "正在听"
+        // 画中画关掉的人，录制一开始就算就位了
+        if !pipOn { preparing = false }
         broadcastTimer?.invalidate()
         broadcastTimer = nil
 
@@ -284,6 +308,7 @@ final class AppState: ObservableObject {
             guard let self else { return }
             if ZKPip.shared()!.isActive() {
                 self.pipActive = true
+                self.preparing = false
             } else if self.running && self.pipRequested {
                 // 再试一次：视图刚上屏时系统偶尔会拒
                 ZKPip.shared()!.start(in: anchor)
