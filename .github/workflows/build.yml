@@ -96,7 +96,6 @@ jobs:
             CURRENT_PROJECT_VERSION="$BUILD_NO" \
             DEVELOPMENT_TEAM=9VSZ8M2JL5 \
             CODE_SIGN_STYLE=Automatic \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
             archive 2>&1 | tee "$RUNNER_TEMP/archive.log"
           test ${PIPESTATUS[0]} -eq 0
 
