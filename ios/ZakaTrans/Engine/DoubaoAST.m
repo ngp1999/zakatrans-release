@@ -199,8 +199,8 @@ static NSString *ZTSign(NSString *token, NSString *method, NSString *path,
             }
 
             NSString *ws = json[@"ws_url"];
-            NSString *src = [ZKStore setting:@"asrlang"] ?: @"auto";
-            NSString *dst = [ZKStore setting:@"dstlang"] ?: @"zh";
+            NSString *src = s.srcLang.length ? s.srcLang : ([ZKStore setting:@"asrlang"] ?: @"auto");
+            NSString *dst = s.dstLang.length ? s.dstLang : ([ZKStore setting:@"dstlang"] ?: @"zh");
             ws = [NSString stringWithFormat:@"%@&src=%@&dst=%@", ws, src, dst];
 
             s->_ticket = json[@"ticket"];
