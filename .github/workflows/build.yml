@@ -75,7 +75,6 @@ jobs:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
         run: |
           set -euo pipefail
-          python3 -m pip install --quiet --disable-pip-version-check cryptography || true
           python3 ios/tools/revoke_extra_certs.py
 
       - name: 生成工程
