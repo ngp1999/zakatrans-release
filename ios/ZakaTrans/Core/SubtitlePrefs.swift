@@ -22,7 +22,7 @@ struct SubtitlePrefs: Codable, Equatable {
     /// 输出音频（把译文读出来）
     var tts: Bool = false
     /// 朗读语速 0.4~0.62（0.5 是系统正常语速）
-    var speechRate: Double = 0.58
+    var speechRate: Double = 0.62
     /// 朗读时把别的 App 声音压低多少（0 = 不压，100 = 系统最大压低量）
     var duckLevel: Double = 60
     /// 朗读音色：空 = 跟随系统中文默认；否则是 AVSpeechSynthesisVoice.identifier
