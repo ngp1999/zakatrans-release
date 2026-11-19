@@ -5,14 +5,13 @@ import SwiftUI
 struct PurchaseView: View {
     @ObservedObject private var cloud = Cloud.shared
     @ObservedObject private var purch = Purchases.shared
-    @Environment(\.dismiss) private var dismiss
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 3)
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 18) {
+                VStack(spacing: 16) {
                     HStack {
                         Text("当前余额")
                             .font(.system(size: 14))
@@ -24,15 +23,17 @@ struct PurchaseView: View {
                     }
                     .card(padding: 16)
 
+                    Text("选择档位，付款后立即到账")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.sub)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 2)
+
                     LazyVGrid(columns: columns, spacing: 10) {
                         ForEach(Purchases.fallback, id: \.id) { item in
                             tile(id: item.id, credits: item.credits)
                         }
                     }
-
-                    Text("1 元 = 10 积分 · 1 积分 ≈ 714 Token")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.sub)
 
                     if let m = purch.message {
                         Text(m)
@@ -44,19 +45,27 @@ struct PurchaseView: View {
                     if purch.busy {
                         ProgressView().scaleEffect(0.8)
                     }
+
+                    NavigationLink {
+                        TermsView(kind: .payment)
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("付费协议")
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 10, weight: .semibold))
+                        }
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.faint)
+                    }
+                    .padding(.top, 12)
+                    .padding(.bottom, 24)
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 10)
-                .padding(.bottom, 24)
             }
             .background(Theme.bg)
             .navigationTitle("充值")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("关闭") { dismiss() }
-                }
-            }
             .task {
                 if purch.products.isEmpty { await purch.load() }
                 await cloud.refresh()
