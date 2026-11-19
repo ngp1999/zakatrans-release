@@ -47,6 +47,9 @@ targets:
     platform: iOS
     sources:
       - path: Broadcast
+      # 扩展也要用共享存储（App Group / 心跳 / PCM 落盘），原工程就是这么带的
+      - path: ZakaTrans/Engine/Shared.m
+      - path: ZakaTrans/Engine/Shared.h
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.zakatrans.app.ext

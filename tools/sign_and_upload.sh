@@ -45,6 +45,7 @@ if [ -f "ios/project.yml" ] && [ "${SKIP_BUILD:-0}" != "1" ]; then
   command -v xcodegen >/dev/null 2>&1 || fail "xcodegen 装不上，没法生成工程"
   ( cd ios && xcodegen generate --quiet ) || fail "xcodegen 生成工程失败"
   mkdir -p build
+  XC=0
   set +e
   xcodebuild -project ios/ZakaTrans.xcodeproj \
     -scheme ZakaTrans -configuration Release \
@@ -52,15 +53,14 @@ if [ -f "ios/project.yml" ] && [ "${SKIP_BUILD:-0}" != "1" ]; then
     -archivePath build/ZakaTrans.xcarchive \
     CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
     DEVELOPMENT_TEAM="" ENABLE_BITCODE=NO \
-    > build/xcodebuild.log 2>&1
-  XC=$?
+    > build/xcodebuild.log 2>&1 || XC=$?
   set -e
-  if [ $XC -ne 0 ]; then
+  if [ "${XC}" -ne 0 ]; then
     echo "---- 编译失败，最后 60 行 ----"
     tail -60 build/xcodebuild.log || true
     echo "---- 报错汇总 ----"
     grep -nE "error:|error " build/xcodebuild.log | head -30 || true
-    fail "xcodebuild 失败（退出码 $XC）"
+    fail "xcodebuild 失败（退出码 ${XC}）"
   fi
   APP_PATH="build/ZakaTrans.xcarchive/Products/Applications/ZakaTrans.app"
   [ -d "$APP_PATH" ] || fail "编译产物里没有 ZakaTrans.app"
