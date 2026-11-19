@@ -25,9 +25,9 @@ static const CGFloat ZK_EN_SIZE = 13.0;
 static CGFloat gZhSize = 20.0;
 static CGFloat gEnSize = 13.0;
 static UIColor *gTextColor = nil;
-static NSString *gStyle = @"shadow";       // shadow | box | plain
 static NSString *gMode = @"bilingual";     // bilingual | zh | source
-static CGSize gPipSize = {640, 180};       // bar 默认横条
+static NSString *gBackground = @"dark";    // none | dark | solid | light
+static CGSize gPipSize = {800, 340};       // bar：宽横条（约 2.35:1），铺满屏宽也放得下一整句
 static BOOL gPipBar = YES;
 static const CGFloat ZK_PARA_GAP = 14.0;      // 句与句之间的空档
 static const CGFloat ZK_MAX_BLOCKS = 120.0;   // 历史句上限（正常一场对话到不了）
@@ -88,15 +88,26 @@ static const CGFloat ZK_SPRING_W_BIG = 13.0;
 
 // 属性字典建一次就够：每帧 new 一个 ParagraphStyle + 字典是白扔的内存和 CPU
 // 每次按当前设置生成（字幕设置改了要立刻生效，所以不能 dispatch_once 缓存死）
+// 浅色底上白字看不见：统一在这里把「白/浅色」翻成深色，两边（App 内和画中画）口径一致
+static UIColor *ZKMainColor(void) {
+    UIColor *c = gTextColor ?: [UIColor whiteColor];
+    if ([gBackground isEqualToString:@"light"]) {
+        CGFloat r = 0, g = 0, b = 0, a = 0;
+        if ([c getRed:&r green:&g blue:&b alpha:&a] && (r + g + b) / 3.0 > 0.72) {
+            return [UIColor colorWithWhite:0.10 alpha:1];
+        }
+    }
+    return c;
+}
+
 static NSDictionary *ZKZhAttrs(void) {
     NSMutableParagraphStyle *p = [NSMutableParagraphStyle new];
     p.lineSpacing = 2.0;
     p.lineBreakMode = NSLineBreakByWordWrapping;
     p.alignment = NSTextAlignmentLeft;
-    UIColor *c = gTextColor ?: [UIColor whiteColor];
     return @{
         NSFontAttributeName: [UIFont boldSystemFontOfSize:gZhSize],
-        NSForegroundColorAttributeName: c,
+        NSForegroundColorAttributeName: ZKMainColor(),
         NSParagraphStyleAttributeName: p,
     };
 }
@@ -107,12 +118,19 @@ static NSDictionary *ZKEnAttrs(void) {
     p.lineBreakMode = NSLineBreakByWordWrapping;
     p.alignment = NSTextAlignmentLeft;
     // 原文比译文暗一档：同一底色下按 70% 亮度走，纯白时是浅灰
-    UIColor *c = gTextColor ?: [UIColor colorWithWhite:1 alpha:1];
     return @{
         NSFontAttributeName: [UIFont systemFontOfSize:gEnSize],
-        NSForegroundColorAttributeName: [c colorWithAlphaComponent:0.72],
+        NSForegroundColorAttributeName: [ZKMainColor() colorWithAlphaComponent:0.72],
         NSParagraphStyleAttributeName: p,
     };
+}
+
+/// 字幕底色：none 全透明、dark 半透明黑、solid 纯黑、light 浅色
+static UIColor *ZKBackgroundColor(void) {
+    if ([gBackground isEqualToString:@"none"])  return [UIColor clearColor];
+    if ([gBackground isEqualToString:@"solid"]) return [UIColor blackColor];
+    if ([gBackground isEqualToString:@"light"]) return [UIColor colorWithWhite:0.96 alpha:1.0];
+    return [UIColor colorWithWhite:0 alpha:0.86];
 }
 
 // 这个视图只做"内容画在固定位置上"，位置由外层滚动统一控制。
@@ -176,14 +194,13 @@ static NSDictionary *ZKEnAttrs(void) {
 
     CGFloat padTop = first ? 0 : ZK_PARA_GAP;
 
-    // 样式：底板 / 描边阴影 / 纯文字
-    BOOL box = [gStyle isEqualToString:@"box"];
-    BOOL plain = [gStyle isEqualToString:@"plain"];
+    // 底色由「背景」统一控制，文字本身只带一层很淡的阴影（浅色/纯黑底上不显脏）
+    BOOL needShadow = [gBackground isEqualToString:@"none"];
     for (UILabel *l in @[self.zhLabel, self.enLabel]) {
-        l.backgroundColor = box ? [UIColor colorWithWhite:0 alpha:0.45] : [UIColor clearColor];
-        l.layer.cornerRadius = box ? 6 : 0;
-        l.layer.masksToBounds = box;
-        l.layer.shadowOpacity = plain ? 0 : (box ? 0 : 0.85);
+        l.backgroundColor = [UIColor clearColor];
+        l.layer.cornerRadius = 0;
+        l.layer.masksToBounds = NO;
+        l.layer.shadowOpacity = needShadow ? 0.85 : 0.0;
         l.layer.shadowColor = [UIColor blackColor].CGColor;
         l.layer.shadowRadius = 3;
         l.layer.shadowOffset = CGSizeMake(0, 1);
@@ -224,6 +241,7 @@ static NSDictionary *ZKEnAttrs(void) {
 - (void)updateTailEn:(NSString *)en zh:(NSString *)zh;
 - (void)freezeTailEn:(NSString *)en zh:(NSString *)zh;
 - (void)clearTail;
+- (void)relayoutAll;
 - (void)rebuildWithLines:(NSArray *)lines;
 @end
 
@@ -383,9 +401,11 @@ static NSDictionary *ZKEnAttrs(void) {
 @interface ZKSubtitleVC : UIViewController
 @property (nonatomic, strong) UIScrollView *scroll;
 @property (nonatomic, strong) ZKStreamView *stream;
+@property (nonatomic, strong) UILabel *placeholder;
 @property (nonatomic, copy) NSString *liveEn;
 @property (nonatomic, copy) NSString *liveZh;
 - (void)shutdown;
+- (void)refreshStyle;
 - (void)rebuildFromLines:(NSArray *)lines;
 - (void)appendLine:(NSDictionary *)d;
 - (void)setLiveEn:(NSString *)en zh:(NSString *)zh;
@@ -395,6 +415,7 @@ static NSDictionary *ZKEnAttrs(void) {
 @implementation ZKSubtitleVC {
     CGFloat _lastLayoutW;
     CGFloat _lastLayoutH;
+    NSString *_lastKey;
     CADisplayLink *_link;
     CGFloat _targetY;
     CFTimeInterval _lastTickAt;
@@ -404,7 +425,20 @@ static NSDictionary *ZKEnAttrs(void) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.view.backgroundColor = [UIColor colorWithWhite:0 alpha:0.86];
+    self.view.backgroundColor = ZKBackgroundColor();
+
+    // 刚打开画中画还没收到音频：先给一句占位，别是一片黑让人以为坏了
+    self.placeholder = [UILabel new];
+    self.placeholder.text = @"等待音频播放";
+    self.placeholder.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
+    self.placeholder.textColor = [UIColor colorWithWhite:1.0 alpha:0.55];
+    self.placeholder.textAlignment = NSTextAlignmentCenter;
+    self.placeholder.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:self.placeholder];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.placeholder.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
+        [self.placeholder.centerYAnchor constraintEqualToAnchor:self.view.centerYAnchor],
+    ]];
 
     self.scroll = [UIScrollView new];
     self.scroll.showsVerticalScrollIndicator = NO;
@@ -575,6 +609,8 @@ static NSDictionary *ZKEnAttrs(void) {
 
 - (void)rebuildFromLines:(NSArray *)lines {
     _snapNext = YES;
+    _lastKey = nil;
+    self.placeholder.hidden = ([lines isKindOfClass:[NSArray class]] && lines.count > 0);
     [self.scroll setContentOffset:CGPointZero animated:NO];
     [self.stream rebuildWithLines:lines];
     _lastLayoutW = 0;   // 强制重排一次
@@ -583,12 +619,33 @@ static NSDictionary *ZKEnAttrs(void) {
     [self applyGeometry];
 }
 
+- (void)refreshStyle {
+    self.view.backgroundColor = ZKBackgroundColor();
+    self.placeholder.textColor = [gBackground isEqualToString:@"light"]
+        ? [UIColor colorWithWhite:0.35 alpha:1]
+        : [UIColor colorWithWhite:1.0 alpha:0.55];
+    _lastLayoutW = 0;
+    [self.view setNeedsLayout];
+    [self.view layoutIfNeeded];
+    [self.stream relayoutAll];
+    [self applyGeometry];
+}
+
+- (void)hidePlaceholder {
+    if (self.placeholder && !self.placeholder.hidden) self.placeholder.hidden = YES;
+}
+
 - (void)appendLine:(NSDictionary *)d {
     if (![d isKindOfClass:[NSDictionary class]]) return;
     NSString *e = d[@"en"], *z = d[@"zh"];
     if (![e isKindOfClass:[NSString class]]) e = @"";
     if (![z isKindOfClass:[NSString class]]) z = @"";
     if (!e.length && !z.length) return;
+    [self hidePlaceholder];
+    // 同一句重复推上来（断线重连、重复回调）就不再落一块，避免画中画里出现两遍
+    NSString *key = [NSString stringWithFormat:@"%@\u0001%@", e, z];
+    if (_lastKey && [key isEqualToString:_lastKey]) return;
+    _lastKey = key;
 
     if (self.scroll.bounds.size.width < 1) {
         [self.view layoutIfNeeded];
@@ -605,6 +662,7 @@ static NSDictionary *ZKEnAttrs(void) {
 - (void)setLiveEn:(NSString *)en zh:(NSString *)zh {
     NSString *e = en.length ? en : nil;
     NSString *z = zh.length ? zh : nil;
+    if (e.length || z.length) [self hidePlaceholder];
     if ((e == self.liveEn || [e isEqualToString:self.liveEn]) &&
         (z == self.liveZh || [z isEqualToString:self.liveZh])) return;
     self.liveEn = e;
@@ -635,7 +693,10 @@ static NSDictionary *ZKEnAttrs(void) {
     BOOL _starting;
 }
 
-// App 的字幕设置传进来：字号、颜色、样式、语言模式、画中画形态
+// 已经开着的字幕视图：改了字幕设置要立刻反映到画中画上，而不是等下一场
+static __weak id gActiveSub = nil;
+
+// App 的字幕设置传进来：字号、颜色、背景、语言模式、画中画形态
 + (void)applyStyle:(NSDictionary *)p {
     if (![p isKindOfClass:[NSDictionary class]]) return;
     NSNumber *size = p[@"size"];
@@ -651,19 +712,21 @@ static NSDictionary *ZKEnAttrs(void) {
         else if ([color isEqualToString:@"black"])  gTextColor = [UIColor blackColor];
         else                                        gTextColor = [UIColor whiteColor];
     }
-    NSString *style = p[@"style"];
-    if ([style isKindOfClass:[NSString class]]) gStyle = style;
+    NSString *bg = p[@"background"];
+    if ([bg isKindOfClass:[NSString class]]) gBackground = bg;
     NSString *mode = p[@"mode"];
     if ([mode isKindOfClass:[NSString class]]) gMode = mode;
 
     NSString *pip = p[@"pip"];
     if ([pip isKindOfClass:[NSString class]]) {
         gPipBar = [pip isEqualToString:@"bar"];
-        // 横条：3.5:1，缩到最小窗口时一句中文也基本能放一行，不会两三行叠在一起
-        gPipSize = gPipBar ? CGSizeMake(640, 180) : CGSizeMake(420, 300);
+        // 横条：约 2.35:1。窗口拉到最宽时高度也够放两行，
+        // 一句中文在最大宽度下基本一行放完，不会再被上下裁掉。
+        gPipSize = gPipBar ? CGSizeMake(800, 340) : CGSizeMake(460, 340);
     }
-    [ZKStore log:@"pip style size=%.0f color=%@ style=%@ mode=%@ pip=%@",
-        gZhSize, color ?: @"", gStyle, gMode, pip ?: @""];
+    [ZKStore log:@"pip style size=%.0f color=%@ bg=%@ mode=%@ pip=%@",
+        gZhSize, color ?: @"", gBackground, gMode, pip ?: @""];
+    if (gActiveSub) [(id)gActiveSub performSelector:@selector(refreshStyle)];
 }
 
 + (instancetype)shared {
@@ -677,6 +740,12 @@ static NSDictionary *ZKEnAttrs(void) {
 - (void)startInView:(UIView *)view {
     if (_starting) return;
     if (_pip && _pip.isPictureInPictureActive) return;
+    // 上一次的残留先彻底清掉，避免「关了还挂着」「再开起不来」
+    if (_pip) { @try { [_pip stopPictureInPicture]; } @catch (__unused NSException *e) {} }
+    _pip = nil;
+    _host = nil;
+    _sub = nil;
+    gActiveSub = nil;
     // 视图还没上屏就起画中画，系统会直接拒绝，严重时会把进程带走
     if (!view || !view.window) {
         [ZKStore log:@"pip: 视图还没上屏，先别起"];
@@ -704,6 +773,7 @@ static NSDictionary *ZKEnAttrs(void) {
         _sub.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
         [_host.view addSubview:_sub.view];
         [_sub didMoveToParentViewController:_host];
+        gActiveSub = _sub;
     } @catch (NSException *e) {
         [ZKStore log:@"pip host ex %@", e.reason];
         _starting = NO;
@@ -758,9 +828,15 @@ static NSDictionary *ZKEnAttrs(void) {
 }
 
 - (void)stop {
-    if (_pip) [_pip stopPictureInPicture];
     _starting = NO;
+    @try { [_pip stopPictureInPicture]; } @catch (__unused NSException *e) {}
+    // 引用一起清掉：只调 stopPictureInPicture 的话，下一次 isActive 判断会拿到旧对象，
+    // 表现就是「已经停止了，画中画还赖在屏幕上」或者「再点开始起不来」
+    _pip = nil;
     @try { [_sub shutdown]; } @catch (__unused NSException *e) {}
+    _host = nil;
+    _sub = nil;
+    gActiveSub = nil;
 }
 
 - (void)refreshFromStore {
