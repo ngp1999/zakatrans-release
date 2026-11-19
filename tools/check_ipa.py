@@ -189,6 +189,7 @@ LC_LOAD_DYLIB = (0xC, 0x8000001F, 0x80000018)
 LC_SEGMENT_64 = 0x19
 ENC_SIZE = 24
 PAGE = 0x4000
+SG_READ_ONLY = 0x10    # 段标志：__DATA_CONST 必须是只读段，否则 dyld 直接拒绝加载
 
 
 def u32(d, o):
@@ -346,6 +347,8 @@ def macho_scan(path):
             seg = {"name": name, "hdr": off,
                    "vmaddr": u64(d, off + 24), "vmsize": u64(d, off + 32),
                    "fileoff": u64(d, off + 40), "filesize": u64(d, off + 48),
+                   "maxprot": u32(d, off + 56), "initprot": u32(d, off + 60),
+                   "flags": u32(d, off + 68),
                    "sects": []}
             nsects = u32(d, off + 64)
             for i in range(nsects):
@@ -656,6 +659,37 @@ def pad_text_filesize(path, info):
         text["filesize"], want - text["fileoff"])
 
 
+# ── 规范化：__DATA_CONST 必须是只读段 ────────────────────────
+def fix_data_const_flags(path, info):
+    """
+    __DATA_CONST 段必须带 SG_READ_ONLY 标志。
+
+    dyld（iOS 15 起，iOS 26 上是硬性拒绝）加载时会检查这一位：带了就把这段里的
+    指针链修好之后 mprotect 成只读；不带就直接中止进程。
+
+    真实事故（2026-11-19，TestFlight build 11190220）：换成 LLVM 的 ld64.lld 重链
+    两个二进制之后，lld 不给 __DATA_CONST 打这个标志（苹果自家 ld64 会打）。
+    苹果那边一路校验全过、上传成功、TestFlight 也装得上，但一点图标就闪退，
+    崩溃日志只有一句 'DYLD: __DATA_CONST segment missing SG_READ_ONLY flag'。
+
+    这一位只影响段属性，不动机器码、不动任何数据。
+    """
+    d = bytearray(info["data"])
+    fixed = []
+    for s in info["segs"]:
+        if s["name"] != "__DATA_CONST":
+            continue
+        if s["flags"] & SG_READ_ONLY:
+            continue
+        struct.pack_into("<I", d, s["hdr"] + 68, s["flags"] | SG_READ_ONLY)
+        fixed.append("0x%x→0x%x" % (s["flags"], s["flags"] | SG_READ_ONLY))
+    if fixed:
+        with open(path, "wb") as f:
+            f.write(d)
+        return "__DATA_CONST 补 SG_READ_ONLY 标志（%s）" % "、".join(fixed)
+    return None
+
+
 def align_all(path):
     """修节的错位 + 补加密信息 + 给签名命令留位置 + 段 vmsize 对齐。"""
     info = macho_scan(path)
@@ -664,6 +698,13 @@ def align_all(path):
     if info.get("fat"):
         return None, "fat 包，跳过"
     notes = []
+
+    flagsmsg = fix_data_const_flags(path, info)
+    if flagsmsg:
+        notes.append(flagsmsg)
+        info = macho_scan(path)
+        if info.get("error"):
+            return notes, info["error"]
 
     shift, msg = repair_text_section_offsets(path, info)
     if msg and shift is None:
@@ -1182,6 +1223,18 @@ def check_macho(path, label):
             % (label, "、".join(alignment_bad)))
     else:
         ok("%s：段结构和对齐正常" % label)
+
+    # 段标志：__DATA_CONST 必须是只读段（SG_READ_ONLY）。
+    # 这一位漏了苹果那边全过（上传成功、TestFlight 装得上），但一点图标就闪退，
+    # 崩溃日志只有一句 DYLD: __DATA_CONST segment missing SG_READ_ONLY flag。
+    # 真实事故：2026-11-19 build 11190220，ld64.lld 重链后没打这个标志。
+    dc = segs_by_name(info).get("__DATA_CONST")
+    if dc is not None and not (dc["flags"] & SG_READ_ONLY):
+        err("%s：__DATA_CONST 段缺 SG_READ_ONLY 标志（flags=0x%x，应为 0x%x）。"
+            "装上去一启动就被系统拒绝加载、直接闪退。跑 --fix-dir 会自动补上。"
+            % (label, dc["flags"], dc["flags"] | SG_READ_ONLY))
+    elif dc is not None:
+        ok("%s：__DATA_CONST 只读标志正常" % label)
 
     check_geometry(label, info)
 

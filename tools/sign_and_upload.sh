@@ -82,11 +82,13 @@ d = open(p, "rb").read()
 if struct.unpack("<I", d[:4])[0] != 0xFEEDFACF:
     sys.exit(0)
 ncmds = struct.unpack("<I", d[16:20])[0]
-off, text, enc = 32, None, None
+off, text, enc, dcflags = 32, None, None, None 
 for _ in range(ncmds):
     cmd, size = struct.unpack("<II", d[off:off + 8])
     if cmd == 0x19 and d[off + 8:off + 24].rstrip(b"\0") == b"__TEXT":
         text = struct.unpack("<QQQQ", d[off + 24:off + 56])
+    elif cmd == 0x19 and d[off + 8:off + 24].rstrip(b"\0") == b"__DATA_CONST":
+        dcflags = struct.unpack("<I", d[off + 68:off + 72])[0]
     elif cmd == 0x2C:
         enc = struct.unpack("<III", d[off + 8:off + 20])
     off += size
@@ -133,11 +135,15 @@ if ci != 0:
 if bad:
     print("  " + "；".join(bad))
     sys.exit(1)
+if dcflags is not None and not (dcflags & 0x10):
+    print("  ⚠ %s：__DATA_CONST 缺 SG_READ_ONLY（flags=0x%x）—— 2a 会补上；"
+          "补不上就装上闪退" % (p.rsplit("/", 1)[-1], dcflags))
 print("  %s：版式 OK（crypt [0x%x,+0x%x]，段尾 0x%x）"
       % (p.rsplit("/", 1)[-1], co, cs, fs))
 PYBIN
-  # 寻址巡检：代码里的每一条 adrp(+add/ldr) 算出来的地址必须落在映像的节里。
-  # 真实事故（2026-11-19）：正文被挪了 0x3100、数据段没挪，68% 的引用指到映像外面，
+  echo "    二进制指纹：$(shasum -a 256 "$BIN" | cut -c1-16)  $(basename "$BIN")"
+
+  # 寻址巡检：代码里的每一条 adrp(+add/ldr) 算出来的地址必须落在映像的节里。  # 真实事故（2026-11-19）：正文被挪了 0x3100、数据段没挪，68% 的引用指到映像外面，
   # 包能传上去、TestFlight 也装得上，但一打开就崩（SIGBUS / PC alignment）。
   if [ -f tools/macho_layout.py ]; then
     AUD="$(python3 tools/macho_layout.py --audit "$BIN" 2>/dev/null || true)"
@@ -159,6 +165,53 @@ done
 # 这里在签名前一次补齐；包本来就合规就不动它（幂等）。
 log "2a/9 规范化包结构"
 python3 tools/check_ipa.py --fix-dir "$WORK/payload/Payload" || fail "包结构规范化失败。"
+
+# 2a+ 段标志复核：__DATA_CONST 必须带 SG_READ_ONLY。
+# 这是 dyld 的硬性要求：缺了这一位，苹果那边全部校验都能过（上传成功、TestFlight
+# 装得上），但一点图标就被系统拒绝加载、当场闪退，日志只有一句
+#   DYLD: __DATA_CONST segment missing SG_READ_ONLY flag
+# 真实事故：2026-11-19 build 11190220。补不上就绝不签名上传，省一次白跑。
+python3 - "$WORK/payload/Payload" <<'PYFB' || fail "可执行文件的 __DATA_CONST 不是只读段，装上必闪退（见上）。"
+import os, struct, sys
+root = sys.argv[1]
+def main_exe(bundle):
+    info = os.path.join(bundle, "Info.plist")
+    if not os.path.exists(info):
+        return None
+    try:
+        import plistlib
+        name = plistlib.load(open(info, "rb")).get("CFBundleExecutable")
+    except Exception:
+        return None
+    p = os.path.join(bundle, name) if name else None
+    return p if p and os.path.isfile(p) else None
+bins = []
+for dirpath, dirnames, _ in os.walk(root):
+    if dirpath.endswith(".app") or dirpath.endswith(".appex"):
+        b = main_exe(dirpath)
+        if b:
+            bins.append(b)
+        dirnames[:] = [d for d in dirnames if not (d.endswith(".app") or d.endswith(".appex"))]
+missing = []
+for b in bins:
+    d = open(b, "rb").read()
+    if struct.unpack("<I", d[:4])[0] != 0xFEEDFACF:
+        continue
+    ncmds = struct.unpack("<I", d[16:20])[0]
+    off = 32
+    have = None
+    for _ in range(ncmds):
+        cmd, size = struct.unpack("<II", d[off:off + 8])
+        if cmd == 0x19 and d[off + 8:off + 24].rstrip(b"\0") == b"__DATA_CONST":
+            have = struct.unpack("<I", d[off + 68:off + 72])[0]
+        off += size
+    if have is not None and not (have & 0x10):
+        missing.append("%s（flags=0x%x）" % (os.path.basename(b), have))
+if missing:
+    print("  ✗ 这些可执行文件的 __DATA_CONST 缺 SG_READ_ONLY：" + "、".join(missing))
+    sys.exit(1)
+print("  ✓ 可执行文件的 __DATA_CONST 都是只读段（%d 个）" % len(bins))
+PYFB
 
 APPEX="$(ls -d "$APP"/PlugIns/*.appex 2>/dev/null | head -1 || true)"
 
