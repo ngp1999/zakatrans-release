@@ -3,17 +3,11 @@ import SwiftUI
 /// 入口：启动图 → 没登录就是登录页，登录后进主界面。
 struct RootView: View {
     @ObservedObject private var cloud = Cloud.shared
-    @State private var checking = true
     @State private var splash = true
 
     var body: some View {
         ZStack {
-            if checking {
-                ZStack {
-                    Theme.bg.ignoresSafeArea()
-                    ProgressView()
-                }
-            } else if cloud.loggedIn {
+            if cloud.loggedIn {
                 MainView()
                     .transition(.opacity)
             } else {
@@ -29,33 +23,41 @@ struct RootView: View {
         }
         .animation(.easeInOut(duration: 0.25), value: cloud.loggedIn)
         .task {
+            // 冷启动：本地有登录态就立刻放行，不等网络。
             await cloud.bootstrap()
-            if cloud.loggedIn {
-                await AppState.shared.syncPrefsFromCloud()
+            // 启动图只做一次很短的过渡，不做长时间停留
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            withAnimation(.easeOut(duration: 0.22)) { splash = false }
+
+            // 下面这些都在界面出来之后才跑，谁也不挡启动
+            Task {
+                if cloud.loggedIn {
+                    await AppState.shared.syncPrefsFromCloud()
+                }
                 await Purchases.shared.load()
                 await Purchases.shared.syncUnfinished()
             }
-            checking = false
-            // 启动图停留一小会儿就淡出，不挡操作
-            try? await Task.sleep(nanoseconds: 700_000_000)
-            withAnimation(.easeOut(duration: 0.35)) { splash = false }
         }
     }
 }
 
-/// 两个 Tab：首页（实时翻译） / 我的
+/// 三个 Tab：字幕翻译 / 同声传译 / 我的
 struct MainView: View {
     @State private var tab = 0
 
     var body: some View {
         TabView(selection: $tab) {
             HomeView()
-                .tabItem { Label("首页", systemImage: "waveform.circle.fill") }
+                .tabItem { Label("字幕翻译", systemImage: "captions.bubble.fill") }
                 .tag(0)
+
+            InterpreterView()
+                .tabItem { Label("同声传译", systemImage: "arrow.left.arrow.right.circle.fill") }
+                .tag(1)
 
             ProfileView()
                 .tabItem { Label("我的", systemImage: "person.crop.circle.fill") }
-                .tag(1)
+                .tag(2)
         }
         .tint(Theme.accent)
         // 画中画的锚点必须挂在整个 App 的最外层，而不是某个页面里：
