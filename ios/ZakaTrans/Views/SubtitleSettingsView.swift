@@ -1,16 +1,16 @@
 import SwiftUI
 
-/// 字幕设置：显示什么、多大、什么颜色、什么背景。
+/// 字幕样式：显示什么、多大、什么颜色、什么背景、画中画比例。
 /// 改一处立刻生效（App 内字幕和画中画同步），并自动同步到云端。
 struct SubtitleSettingsView: View {
     @ObservedObject private var app = AppState.shared
+    private let haptic = UIImpactFeedbackGenerator(style: .light)
 
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
                 previewCard
-                languageCard
-                appearanceCard
+                styleCard
                 pipCard
                 if app.prefs.tts { speechCard }
             }
@@ -19,7 +19,7 @@ struct SubtitleSettingsView: View {
             .padding(.bottom, 28)
         }
         .background(Theme.bg)
-        .navigationTitle("字幕设置")
+        .navigationTitle("字幕样式")
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -34,12 +34,12 @@ struct SubtitleSettingsView: View {
                     if app.prefs.mode != "source" {
                         Text("这段话是翻译后的中文效果预览")
                             .font(.system(size: app.prefs.size, weight: .semibold))
-                            .foregroundStyle(app.prefs.background == "light" ? Color.black : app.prefs.swiftUIColor)
+                            .foregroundStyle(Color(uiColor: app.prefs.effectiveColor))
                     }
                     if app.prefs.mode != "zh" {
                         Text("This is what the original line looks like")
                             .font(.system(size: max(12, app.prefs.size - 4)))
-                            .foregroundStyle(app.prefs.background == "light" ? Color.black.opacity(0.6) : Color.white.opacity(0.72))
+                            .foregroundStyle(Color(uiColor: app.prefs.secondaryColor))
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -47,168 +47,169 @@ struct SubtitleSettingsView: View {
                 .padding(.vertical, 12)
             }
         }
-        .frame(height: 118, alignment: .leading)
-        .background(app.prefs.backgroundColor())
+        .frame(height: 120, alignment: .leading)
+        .background(app.prefs.backgroundColor)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.white.opacity(app.prefs.background == "none" ? 0.0 : 0.10), lineWidth: 0.6)
+                .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.6)
         )
     }
 
-    // MARK: 语言
+    // MARK: 样式（一行一个控制）
 
-    private var languageCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionLabel(text: "字幕内容")
-            VStack(spacing: 0) {
-                ForEach(Array(SubtitlePrefs.modeOptions.enumerated()), id: \.offset) { idx, opt in
-                    if idx > 0 {
-                        Rectangle().fill(Theme.line).frame(height: 0.5).padding(.leading, 16)
+    private var styleCard: some View {
+        VStack(spacing: 18) {
+            // 字号
+            HStack {
+                Text("字号").font(.system(size: 15)).foregroundStyle(Theme.ink)
+                Spacer()
+                Text("\(Int(app.prefs.size))")
+                    .font(.system(size: 15, weight: .medium).monospacedDigit())
+                    .foregroundStyle(Theme.sub)
+            }
+            Slider(value: Binding(
+                get: { app.prefs.size },
+                set: { v in app.updatePrefs { $0.size = v } }
+            ), in: 14...30, step: 1)
+            .tint(Theme.accent)
+
+            divider
+
+            // 文字颜色：一行 7 个色块，不带文字
+            HStack(spacing: 0) {
+                ForEach(SubtitlePrefs.colors, id: \.0) { opt in
+                    Button {
+                        haptic.impactOccurred()
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            app.updatePrefs { $0.color = opt.0 }
+                        }
+                    } label: {
+                        Circle()
+                            .fill(Color(uiColor: opt.2))
+                            .frame(width: 30, height: 30)
+                            .overlay(
+                                Circle().strokeBorder(
+                                    app.prefs.color == opt.0 ? Theme.ink : Color.white.opacity(0.22),
+                                    lineWidth: app.prefs.color == opt.0 ? 2.5 : 0.8
+                                )
+                            )
+                            .frame(maxWidth: .infinity)
                     }
-                    row(title: opt.1, selected: app.prefs.mode == opt.0) {
-                        app.updatePrefs { $0.mode = opt.0 }
-                    }
+                    .buttonStyle(.plain)
                 }
             }
-            .background(Theme.card)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+
+            divider
+
+            // 背景颜色：一行 7 个色块，不带文字
+            HStack(spacing: 0) {
+                ForEach(SubtitlePrefs.backgrounds, id: \.0) { opt in
+                    Button {
+                        haptic.impactOccurred()
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            app.updatePrefs { $0.background = opt.0 }
+                        }
+                    } label: {
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .fill(Color(uiColor: opt.2))
+                            .frame(height: 32)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                    .strokeBorder(
+                                        app.prefs.background == opt.0 ? Theme.ink : Color.white.opacity(0.22),
+                                        lineWidth: app.prefs.background == opt.0 ? 2.5 : 0.8
+                                    )
+                            )
+                            .padding(.horizontal, 2)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            divider
+
+            // 显示什么
+            HStack {
+                Text("字幕内容").font(.system(size: 15)).foregroundStyle(Theme.ink)
+                Spacer()
+            }
+            Picker("字幕内容", selection: Binding(
+                get: { app.prefs.mode },
+                set: { v in app.updatePrefs { $0.mode = v } }
+            )) {
+                ForEach(SubtitlePrefs.modeOptions, id: \.0) { opt in
+                    Text(opt.1).tag(opt.0)
+                }
+            }
+            .pickerStyle(.segmented)
         }
+        .card(padding: 16)
     }
 
-    // MARK: 外观
-
-    private var appearanceCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            SectionLabel(text: "外观")
-
-            VStack(spacing: 16) {
-                HStack {
-                    Text("字号").font(.system(size: 15)).foregroundStyle(Theme.ink)
-                    Spacer()
-                    Text("\(Int(app.prefs.size))")
-                        .font(.system(size: 15, weight: .medium).monospacedDigit())
-                        .foregroundStyle(Theme.sub)
-                }
-                Slider(value: Binding(
-                    get: { app.prefs.size },
-                    set: { v in app.updatePrefs { $0.size = v } }
-                ), in: 14...30, step: 1)
-                .tint(Theme.accent)
-
-                Rectangle().fill(Theme.line).frame(height: 0.5)
-
-                Text("颜色").font(.system(size: 15)).foregroundStyle(Theme.ink)
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 5), spacing: 12) {
-                    ForEach(SubtitlePrefs.colorOptions, id: \.0) { opt in
-                        Button {
-                            app.updatePrefs { $0.color = opt.0 }
-                        } label: {
-                            VStack(spacing: 5) {
-                                Circle()
-                                    .fill(Color(uiColor: SubtitlePrefs.uiColor(opt.0)))
-                                    .frame(width: 28, height: 28)
-                                    .overlay(
-                                        Circle().strokeBorder(
-                                            app.prefs.color == opt.0 ? Theme.accent : Theme.line,
-                                            lineWidth: app.prefs.color == opt.0 ? 2.5 : 1
-                                        )
-                                    )
-                                Text(opt.1)
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(Theme.sub)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-
-                Rectangle().fill(Theme.line).frame(height: 0.5)
-
-                HStack {
-                    Text("背景").font(.system(size: 15)).foregroundStyle(Theme.ink)
-                    Spacer()
-                }
-                Picker("背景", selection: Binding(
-                    get: { app.prefs.background },
-                    set: { v in app.updatePrefs { $0.background = v } }
-                )) {
-                    ForEach(SubtitlePrefs.backgroundOptions, id: \.0) { opt in
-                        Text(opt.1).tag(opt.0)
-                    }
-                }
-                .pickerStyle(.segmented)
-            }
-            .card(padding: 16)
-        }
+    private var divider: some View {
+        Rectangle().fill(Theme.line).frame(height: 0.5)
     }
 
     // MARK: 画中画
 
     private var pipCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionLabel(text: "画中画形态")
-            VStack(spacing: 0) {
-                ForEach(Array(SubtitlePrefs.pipOptions.enumerated()), id: \.offset) { idx, opt in
-                    if idx > 0 {
-                        Rectangle().fill(Theme.line).frame(height: 0.5).padding(.leading, 16)
-                    }
-                    row(title: opt.1, selected: app.prefs.pip == opt.0) {
-                        app.updatePrefs { $0.pip = opt.0 }
-                    }
+        VStack(spacing: 18) {
+            HStack {
+                Text("画中画").font(.system(size: 15)).foregroundStyle(Theme.ink)
+                Spacer()
+                Toggle("", isOn: Binding(
+                    get: { app.pipOn },
+                    set: { v in withAnimation(.easeOut(duration: 0.18)) { app.setPip(v) } }
+                ))
+                .labelsHidden()
+                .tint(Theme.accent)
+            }
+
+            divider
+
+            HStack {
+                Text("比例").font(.system(size: 15)).foregroundStyle(Theme.ink)
+                Spacer()
+            }
+            Picker("比例", selection: Binding(
+                get: { app.prefs.pip },
+                set: { v in app.updatePrefs { $0.pip = v } }
+            )) {
+                ForEach(SubtitlePrefs.pipOptions, id: \.0) { opt in
+                    Text(opt.1).tag(opt.0)
                 }
             }
-            .background(Theme.card)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+            .pickerStyle(.segmented)
         }
+        .card(padding: 16)
     }
 
     // MARK: 朗读
 
     private var speechCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            SectionLabel(text: "朗读")
-            VStack(spacing: 12) {
-                HStack {
-                    Text("语速").font(.system(size: 15)).foregroundStyle(Theme.ink)
-                    Spacer()
-                    Text(String(format: "%.1fx", app.prefs.speechRate / 0.5))
-                        .font(.system(size: 15, weight: .medium).monospacedDigit())
-                        .foregroundStyle(Theme.sub)
-                }
-                Slider(value: Binding(
-                    get: { app.prefs.speechRate },
-                    set: { v in app.updatePrefs { $0.speechRate = v } }
-                ), in: 0.4...0.62, step: 0.01)
-                .tint(Theme.accent)
-
-                Button {
-                    Speaker.shared.rate = app.prefs.speechRate
-                    Speaker.shared.preview("这是朗读效果，翻译结果会这样读出来。")
-                } label: {
-                    Text("试听")
-                }
-                .buttonStyle(SecondaryButtonStyle())
-            }
-            .card(padding: 16)
-        }
-    }
-
-    private func row(title: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        VStack(spacing: 18) {
             HStack {
-                Text(title).font(.system(size: 15)).foregroundStyle(Theme.ink)
+                Text("语速").font(.system(size: 15)).foregroundStyle(Theme.ink)
                 Spacer()
-                if selected {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(Theme.accent)
-                }
+                Text(String(format: "%.1fx", app.prefs.speechRate / 0.5))
+                    .font(.system(size: 15, weight: .medium).monospacedDigit())
+                    .foregroundStyle(Theme.sub)
             }
-            .padding(.horizontal, 16)
-            .frame(height: 46)
-            .contentShape(Rectangle())
+            Slider(value: Binding(
+                get: { app.prefs.speechRate },
+                set: { v in app.updatePrefs { $0.speechRate = v } }
+            ), in: 0.4...0.62, step: 0.01)
+            .tint(Theme.accent)
+
+            Button {
+                Speaker.shared.rate = app.prefs.speechRate
+                Speaker.shared.preview("这是朗读效果，翻译结果会这样读出来。")
+            } label: {
+                Text("试听")
+            }
+            .buttonStyle(SecondaryButtonStyle())
         }
-        .buttonStyle(.plain)
+        .card(padding: 16)
     }
 }
