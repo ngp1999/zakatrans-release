@@ -643,7 +643,7 @@ static UIColor *ZKBackgroundColor(void) {
     if (!e.length && !z.length) return;
     [self hidePlaceholder];
     // 同一句重复推上来（断线重连、重复回调）就不再落一块，避免画中画里出现两遍
-    NSString *key = [NSString stringWithFormat:@"%@\u0001%@", e, z];
+    NSString *key = [NSString stringWithFormat:@"%@|%@", e, z];
     if (_lastKey && [key isEqualToString:_lastKey]) return;
     _lastKey = key;
 
