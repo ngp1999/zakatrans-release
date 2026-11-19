@@ -195,7 +195,7 @@ final class AppState: ObservableObject {
 
     private func checkBroadcast() {
         guard running, !broadcastSeen else { return }
-        let beat = ZKStore.beat()
+        let beat: [AnyHashable: Any] = ZKStore.beat() ?? [:]
         let t = (beat["t"] as? NSNumber)?.doubleValue ?? 0
         let now = Date().timeIntervalSince1970
         guard t > 0, t >= sessionStartAt - 1.5, now - t < 4 else { return }
