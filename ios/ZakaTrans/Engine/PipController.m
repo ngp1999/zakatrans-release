@@ -483,7 +483,7 @@ static CGFloat ZKTextHeight(NSString *text, CGFloat width, UIFont *font, CGFloat
                                  options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
                               attributes:attrs
                                  context:nil];
-    CGFloat h = ceil(r.size.height);
+    CGFloat h = ceil(CGRectGetHeight(r));
     return isfinite(h) && h > 0 ? h : 0;
 }
 
@@ -497,7 +497,7 @@ static CGFloat ZKTextWidth(NSString *text, UIFont *font) {
                                  options:(NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading)
                               attributes:@{NSFontAttributeName: font}
                                  context:nil];
-    CGFloat w = ceil(r.width) + 1.0;
+    CGFloat w = ceil(CGRectGetWidth(r)) + 1.0;
     return isfinite(w) ? w : CGFLOAT_MAX;
 }
 
@@ -1052,7 +1052,7 @@ static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CG
 - (CGSize)containerSize {
     NSMutableArray<NSValue *> *cands = [NSMutableArray array];
     void (^add)(CGRect) = ^(CGRect r) {
-        if (isfinite(r.size.width) && isfinite(r.size.height) && r.size.width >= 1 && r.size.height >= 1) {
+        if (isfinite(CGRectGetWidth(r)) && isfinite(CGRectGetHeight(r)) && CGRectGetWidth(r) >= 1 && CGRectGetHeight(r) >= 1) {
             [cands addObject:[NSValue valueWithCGSize:r.size]];
         }
     };
