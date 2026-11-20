@@ -40,20 +40,6 @@ struct AudioOutputView: View {
             Text("音频输出")
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(Theme.ink)
-            HStack {
-                Spacer()
-                Button {
-                    dismissAudio()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(Theme.sub)
-                        .frame(width: 30, height: 30)
-                        .background(Theme.surface)
-                        .clipShape(Circle())
-                }
-                .buttonStyle(TileButtonStyle())
-            }
         }
         .padding(.horizontal, 16)
         .frame(height: 46)
