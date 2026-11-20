@@ -459,7 +459,7 @@ static CGFloat ZKTextHeight(NSString *text, CGFloat width, UIFont *font, CGFloat
                                  options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
                               attributes:attrs
                                  context:nil];
-    CGFloat h = ceil(r.height);
+    CGFloat h = ceil(r.size.height);
     return isfinite(h) && h > 0 ? h : 0;
 }
 
