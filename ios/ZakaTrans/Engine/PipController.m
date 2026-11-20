@@ -142,13 +142,15 @@ static UIColor *ZKBackgroundColor(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         map = @{
+            // 必须和 Swift 侧 SubtitlePrefs.backgrounds 逐条一致，
+            // 否则「设置里换了底色，画中画没变」——以前两处各写一套，深浅差一点点看不出来。
             @"black":    [UIColor colorWithRed:0.00 green:0.00 blue:0.00 alpha:1],
-            @"graphite": [UIColor colorWithRed:0.11 green:0.11 blue:0.12 alpha:1],
-            @"navy":     [UIColor colorWithRed:0.04 green:0.10 blue:0.20 alpha:1],
-            @"forest":   [UIColor colorWithRed:0.05 green:0.14 blue:0.10 alpha:1],
-            @"wine":     [UIColor colorWithRed:0.16 green:0.05 blue:0.08 alpha:1],
-            @"indigo":   [UIColor colorWithRed:0.10 green:0.07 blue:0.18 alpha:1],
-            @"paper":    [UIColor colorWithRed:0.95 green:0.95 blue:0.96 alpha:1],
+            @"graphite": [UIColor colorWithRed:0.17 green:0.17 blue:0.19 alpha:1],
+            @"navy":     [UIColor colorWithRed:0.03 green:0.17 blue:0.42 alpha:1],
+            @"forest":   [UIColor colorWithRed:0.03 green:0.28 blue:0.21 alpha:1],
+            @"wine":     [UIColor colorWithRed:0.40 green:0.04 blue:0.14 alpha:1],
+            @"indigo":   [UIColor colorWithRed:0.20 green:0.09 blue:0.44 alpha:1],
+            @"paper":    [UIColor colorWithRed:0.94 green:0.94 blue:0.95 alpha:1],
             // 老值兜底
             @"dark":     [UIColor blackColor],
             @"solid":    [UIColor blackColor],
