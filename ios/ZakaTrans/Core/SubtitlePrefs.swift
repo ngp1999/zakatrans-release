@@ -18,9 +18,10 @@ struct SubtitlePrefs: Codable, Equatable {
     /// 语言模式：bilingual（双语）| zh（仅中文）| source（仅原文）
     var mode: String = "bilingual"
     /// 画中画窗口大小：
-    /// W 全宽（5:1 1080×216，默认，最不挡画面）| L 大（4:3 480×360）
-    /// M 中（16:9 576×324）| S 小（21:9 840×360）
-    var pip: String = "W"
+    /// X 小（5:1 1080×216，默认，铺满屏宽只占最下面一条，最不挡画面）
+    /// M 中（21:9 840×360，宽条，能站三四行）
+    /// B 大（1080×640，又宽又大，一屏能站六七行）
+    var pip: String = "X"
     /// 输出音频（把译文读出来）
     var tts: Bool = false
     /// 朗读语速 0.4~0.62（0.5 是系统正常语速）
@@ -34,7 +35,7 @@ struct SubtitlePrefs: Codable, Equatable {
     /// 译文语言：固定中文
     var destLang: String = "zh"
 
-    static let key = "zt_subtitle_prefs_v5"
+    static let key = "zt_subtitle_prefs_v6"
 
     init() {}
 
@@ -55,13 +56,9 @@ struct SubtitlePrefs: Codable, Equatable {
         duckLevel = try c.decodeIfPresent(Double.self, forKey: .duckLevel) ?? d.duckLevel
         voiceId = try c.decodeIfPresent(String.self, forKey: .voiceId) ?? d.voiceId
 
-        // 旧值映射：以前是 4:3 / 21:9 / bar 两档，现在换成大中小三档
-        switch pip {
-        case "L", "M", "S", "W": break
-        case "21:9", "bar": pip = "S"
-        case "16:9": pip = "M"
-        default: pip = "L"
-        }
+        // 三档的新代码是 X / M / B（以前没用过），老存档的老代码在这里映射一次，
+        // 之后写回去的就是新代码，不会二次映射。
+        pip = SubtitlePrefs.pipFromLegacy(pip)
 
         switch background {
         case "dark", "solid": background = "black"
@@ -73,15 +70,27 @@ struct SubtitlePrefs: Codable, Equatable {
         if !SubtitlePrefs.colors.contains(where: { $0.0 == color }) { color = "white" }
     }
 
+    /// 老代码 → 新三档：老的「全宽 W」就是现在的小（5:1），
+    /// 老的「S 21:9」现在是中，老的「M 16:9」「L 4:3」并到大。
+    static func pipFromLegacy(_ v: String) -> String {
+        switch v {
+        case "X", "M", "B": return v          // 已经是新代码
+        case "W", "full", "bar-full": return "X"
+        case "S", "21:9", "bar": return "M"
+        default: return "B"                    // 老的 M(16:9) / L(4:3)
+        }
+    }
+
     static func load() -> SubtitlePrefs {
-        // v5 之前默认是大窗（4:3）。全宽档做成默认后，老存档一次性迁过来，
-        // 其它设置（字号、颜色、背景、朗读）原样保留。
+        // v6 之前默认是大窗（4:3）。现在小（5:1 横条）是默认，老存档一次性迁过来，
+        // 其它设置（颜色、背景、朗读）原样保留。
         if UserDefaults.standard.data(forKey: key) == nil {
-            for k in ["zt_subtitle_prefs_v4", "zt_subtitle_prefs_v3", "zt_subtitle_prefs_v2"] {
+            for k in ["zt_subtitle_prefs_v5", "zt_subtitle_prefs_v4", "zt_subtitle_prefs_v3", "zt_subtitle_prefs_v2"] {
                 if let data = UserDefaults.standard.data(forKey: k),
                    var v = try? JSONDecoder().decode(SubtitlePrefs.self, from: data) {
                     if v.size == 19 { v.size = 20 }
-                    v.pip = "W"
+                    v.pip = SubtitlePrefs.pipFromLegacy(v.pip)
+                    if v.pip == "B" { v.pip = "X" }      // 老默认窗一并挪到小
                     v.saveLocal()
                     return v
                 }
@@ -131,12 +140,7 @@ struct SubtitlePrefs: Codable, Equatable {
         }
         if let v = dict["subtitle_mode"] as? String { p.mode = v }
         if let v = dict["pip_style"] as? String {
-            switch v {
-            case "W", "full", "bar-full": p.pip = "W"
-            case "M", "16:9": p.pip = "M"
-            case "S", "21:9", "bar": p.pip = "S"
-            default: p.pip = "L"
-            }
+            p.pip = SubtitlePrefs.pipFromLegacy(v)
         }
         if let v = dict["duck_level"] as? NSNumber { p.duckLevel = v.doubleValue }
         if let v = dict["voice_id"] as? String { p.voiceId = v }
@@ -215,18 +219,17 @@ struct SubtitlePrefs: Codable, Equatable {
         ("bilingual", "双语"), ("zh", "仅中文"), ("source", "仅原文"),
     ]
 
-    /// 窗口四档：选哪个，画中画开出来就是多大。全宽排第一，也是默认。
+    /// 窗口三档：选哪个，画中画开出来就是多大。小排第一，也是默认。
     static let pipOptions: [(String, String)] = [
-        ("W", "全宽"), ("L", "大"), ("M", "中"), ("S", "小"),
+        ("X", "小"), ("M", "中"), ("B", "大"),
     ]
 
     /// 每档的实际尺寸，设置页拿来做说明
     static func pipSizeText(_ v: String) -> String {
         switch v {
-        case "M": return "16:9"
-        case "S": return "21:9 宽条"
-        case "W": return "全宽 5:1"
-        default: return "4:3"
+        case "M": return "21:9 宽条"
+        case "B": return "21:12 大窗"
+        default: return "5:1 横条"
         }
     }
 
