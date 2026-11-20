@@ -49,7 +49,7 @@ struct HistoryView: View {
         if let p = s.preview?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty {
             return p
         }
-        return Self.shortStamp(s.startedAt) + " 的对话"
+        return "未命名的对话"
     }
 
     /// 年月日：列表里必须能一眼看出是哪天，不靠分组标题猜
@@ -170,10 +170,12 @@ struct SessionDetailView: View {
         .task { await load() }
     }
 
+    /// 日期只在第一行出现一次，第二行只放时间 / 时长 / 句数——
+    /// 以前两行各写一遍「11月20日 19:22」，同一页看到两个日期，纯属重复。
     private var metaCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text(Format.date(session.startedAt))
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(Self.dayText(session.startedAt))
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(Theme.ink)
                 Spacer()
@@ -181,9 +183,9 @@ struct SessionDetailView: View {
                     .font(.system(size: 15, weight: .semibold).monospacedDigit())
                     .foregroundStyle(Theme.accent)
             }
-            HStack(spacing: 16) {
-                Label(Self.detailStamp(session.startedAt), systemImage: "calendar")
-                Label(session.durationText, systemImage: "clock")
+            HStack(spacing: 14) {
+                Label(Self.timeText(session.startedAt), systemImage: "clock")
+                Label(session.durationText, systemImage: "timer")
                 Label("\(detail?.lines.count ?? 0) 句", systemImage: "text.bubble")
             }
             .font(.system(size: 12))
@@ -192,10 +194,15 @@ struct SessionDetailView: View {
         .card()
     }
 
-    static func detailStamp(_ d: Date) -> String {
+    /// 今天 / 昨天用口语写法，其它日子写全「yyyy年M月d日」
+    static func dayText(_ d: Date) -> String {
+        let cal = Calendar.current
+        if cal.isDateInToday(d) { return "今天" }
+        if cal.isDateInYesterday(d) { return "昨天" }
         let f = DateFormatter()
         f.locale = Locale(identifier: "zh_CN")
-        f.dateFormat = "M月d日 HH:mm"
+        f.dateFormat = cal.component(.year, from: d) == cal.component(.year, from: Date())
+            ? "M月d日" : "yyyy年M月d日"
         return f.string(from: d)
     }
 
