@@ -35,6 +35,9 @@
 - (void)start;
 - (void)stop;
 - (void)reloadLocale;
+
+// 收音模式切换（内部收音 = 系统声音 / 麦克风收音 = 手机麦克风）
+- (void)applyAudioSource;
 - (NSString *)diag;
 
 // 当前状态（连接中 / 同传在线 / 失败原因），状态行显示用
