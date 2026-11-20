@@ -20,13 +20,13 @@
 @property (nonatomic, copy) NSString *srcLang;
 @property (nonatomic, copy) NSString *dstLang;
 
-// 原文（增量 / 整句）
-@property (nonatomic, copy) void (^onSourcePartial)(NSString *delta);
-@property (nonatomic, copy) void (^onSourceEnd)(NSString *full);
+// 原文（增量 / 整句）。seg = 这一句的编号，译文那头带同一个号。
+@property (nonatomic, copy) void (^onSourcePartial)(NSString *delta, NSInteger seg);
+@property (nonatomic, copy) void (^onSourceEnd)(NSString *full, NSInteger seg);
 
 // 译文（增量 / 整句）
-@property (nonatomic, copy) void (^onTransPartial)(NSString *delta);
-@property (nonatomic, copy) void (^onTransEnd)(NSString *full);
+@property (nonatomic, copy) void (^onTransPartial)(NSString *delta, NSInteger seg);
+@property (nonatomic, copy) void (^onTransEnd)(NSString *full, NSInteger seg);
 
 // 状态行 / 自己恢复不了的错
 @property (nonatomic, copy) void (^onState)(NSString *state);
