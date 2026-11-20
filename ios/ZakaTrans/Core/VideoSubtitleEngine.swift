@@ -85,7 +85,12 @@ final class VideoSubtitleEngine: ObservableObject {
         audioFrames = 0
         state = "连接中"
 
-        let session = ZKDoubaoAST.session()
+        // ObjC 那边没标 nullability，Swift 侧当可选值处理
+        guard let session = ZKDoubaoAST.session() else {
+            state = "字幕通道没起来"
+            active = false
+            return
+        }
         ast = session
         videoAudioCore.reset()
         videoAudioCore.set(session)
