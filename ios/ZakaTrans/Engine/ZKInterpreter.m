@@ -126,6 +126,11 @@ static NSString *ZKClean(NSString *s) {
     NSString *_dstA, *_dstB;
     // 原文还在滚的时候先攒着，等落定了再把 id 定下来
     NSString *_draftSrcA, *_draftSrcB;
+    // 滚动中的那条气泡用的 id。
+    // 以前 draft 固定叫 draft-a / draft-b，落定时又换一个新 id 推 Final，
+    // 结果那条 draft 气泡永远留在最上面、只显示最后一个词——就是用户看到的「第一行老是最后一个词」。
+    // 现在 draft 和 Final 共用同一个 id，落定时原地变成正式气泡。
+    NSString *_draftIdA, *_draftIdB;
     NSString *_draftDstA, *_draftDstB;
     // 译文先于原文到达时暂存
     NSString *_earlyDstA, *_earlyDstB;
@@ -208,6 +213,7 @@ static NSString *ZKClean(NSString *s) {
 }
 
 - (void)resetLines {
+    _draftIdA = _draftIdB = nil;
     _idA = _idB = nil;
     _srcA = _srcB = nil;
     _dstA = _dstB = nil;
@@ -307,6 +313,28 @@ static NSString *ZKClean(NSString *s) {
     return YES;
 }
 
+/// 这一边当前正在滚的那条气泡 id；没有就建一条
+- (NSString *)draftIdFor:(NSString *)side create:(BOOL)create {
+    BOOL a = [side isEqualToString:@"a"];
+    NSString *cur = a ? _draftIdA : _draftIdB;
+    if (!cur.length && create) {
+        cur = [NSString stringWithFormat:@"%@-%ld", side, (long)++_seq];
+        if (a) _draftIdA = cur; else _draftIdB = cur;
+    }
+    return cur;
+}
+
+/// 这句最终没能落定（重复、回声、纯噪声）：把那条滚动中的气泡撤掉，
+/// 否则界面最上面会一直挂着半句没头没尾的字。
+- (void)dropDraft:(NSString *)side {
+    BOOL a = [side isEqualToString:@"a"];
+    NSString *cur = a ? _draftIdA : _draftIdB;
+    if (!cur.length) return;
+    if (a) _draftIdA = nil; else _draftIdB = nil;
+    if (a) { _draftSrcA = nil; _draftDstA = nil; } else { _draftSrcB = nil; _draftDstB = nil; }
+    [self emit:cur side:side src:@"" dst:@"" kind:ZKLineKindDraft];
+}
+
 - (void)sourcePartial:(NSString *)side text:(NSString *)text {
     if (!_running) return;
     NSString *t = ZKClean(text);
@@ -317,16 +345,17 @@ static NSString *ZKClean(NSString *s) {
     BOOL a = [side isEqualToString:@"a"];
     NSString *dst = a ? _draftDstA : _draftDstB;
     if (a) _draftSrcA = t; else _draftSrcB = t;
-    [self emit:[NSString stringWithFormat:@"draft-%@", side] side:side src:t dst:dst kind:ZKLineKindDraft];
+    [self emit:[self draftIdFor:side create:YES] side:side src:t dst:dst kind:ZKLineKindDraft];
 }
 
 - (void)sourceEnd:(NSString *)side text:(NSString *)text {
     if (!_running) return;
     NSString *t = ZKClean(text);
-    if (!ZKHasContent(t)) return;          // 纯标点、空串——直接丢
-    if (![self belongs:side src:t]) return;
-    if (![self acceptSide:side length:t.length]) return;
-    if ([self isEcho:side src:t]) return;
+    // 纯标点、空串——直接丢，顺手把自己那条草稿气泡撤掉
+    if (!ZKHasContent(t)) { [self dropDraft:side]; return; }
+    if (![self belongs:side src:t]) { [self dropDraft:side]; return; }
+    if (![self acceptSide:side length:t.length]) { [self dropDraft:side]; return; }
+    if ([self isEcho:side src:t]) { [self dropDraft:side]; return; }
 
     BOOL a = [side isEqualToString:@"a"];
     NSTimeInterval now = [NSDate date].timeIntervalSince1970;
@@ -335,20 +364,20 @@ static NSString *ZKClean(NSString *s) {
 
     // 同一句被上游重复推一遍
     if (last.length && [last isEqualToString:t] && now - lastAt < 3.0) {
-        if (a) { _draftSrcA = nil; _draftDstA = nil; } else { _draftSrcB = nil; _draftDstB = nil; }
+        [self dropDraft:side];
         return;
     }
     if (a) { _lastSrcA = t; _lastAtA = now; } else { _lastSrcB = t; _lastAtB = now; }
 
-    // 这一句定 id：原文一到就推出去，不等译文
-    NSString *lid = [NSString stringWithFormat:@"%@-%ld", side, (long)++_seq];
+    // 这一句的 id：滚动中的草稿已经在用，就沿用它——气泡原地落定，不再多出一条
+    NSString *lid = [self draftIdFor:side create:YES];
     NSString *early = a ? _earlyDstA : _earlyDstB;
     if (a) {
         _idA = lid; _srcA = t; _dstA = early ?: @"";
-        _draftSrcA = nil; _draftDstA = nil; _earlyDstA = nil;
+        _draftIdA = nil; _draftSrcA = nil; _draftDstA = nil; _earlyDstA = nil;
     } else {
         _idB = lid; _srcB = t; _dstB = early ?: @"";
-        _draftSrcB = nil; _draftDstB = nil; _earlyDstB = nil;
+        _draftIdB = nil; _draftSrcB = nil; _draftDstB = nil; _earlyDstB = nil;
     }
     [self emit:lid side:side src:t dst:(early ?: @"") kind:ZKLineKindFinal];
 }
@@ -372,7 +401,7 @@ static NSString *ZKClean(NSString *s) {
         if (a) { _earlyDstA = t; _draftDstA = t; } else { _earlyDstB = t; _draftDstB = t; }
         NSString *draftSrc = a ? _draftSrcA : _draftSrcB;
         if (draftSrc.length) {
-            [self emit:[NSString stringWithFormat:@"draft-%@", side] side:side src:draftSrc dst:t kind:ZKLineKindDraft];
+            [self emit:[self draftIdFor:side create:YES] side:side src:draftSrc dst:t kind:ZKLineKindDraft];
         }
     }
 }
