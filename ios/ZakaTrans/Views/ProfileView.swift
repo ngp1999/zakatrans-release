@@ -14,8 +14,9 @@ struct ProfileView: View {
         return b.isEmpty ? v : "\(v) (\(b))"
     }
 
+    @Environment(\.dismiss) private var dismiss
+
     var body: some View {
-        NavigationStack {
             ScrollView {
                 VStack(spacing: 14) {
                     accountCard
@@ -30,7 +31,7 @@ struct ProfileView: View {
                     SectionLabel("关于")
                     aboutGroup
                     Text("版本 \(version)")
-                        .font(.system(size: 12))
+                        .font(.system(size: 13).monospacedDigit())
                         .foregroundStyle(Theme.faint)
                         .padding(.top, 6)
                         .padding(.bottom, 10)
@@ -40,14 +41,20 @@ struct ProfileView: View {
             }
             .background(Theme.bg)
             .navigationTitle("我的")
-            .navigationBarTitleDisplayMode(.large)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { dismiss() }
+                        .fontWeight(.semibold)
+                        .foregroundStyle(Theme.accent)
+                }
+            }
             .task { await cloud.refresh() }
             .sheet(isPresented: $showAvatarPicker) {
                 AvatarPicker()
                     .presentationDetents([.height(300)])
                     .presentationDragIndicator(.visible)
             }
-        }
         .alert("退出登录？", isPresented: $showLogout) {
             Button("取消", role: .cancel) {}
             Button("退出", role: .destructive) { cloud.logout() }
@@ -81,17 +88,10 @@ struct ProfileView: View {
 
                 if let email = cloud.profile?.email, !email.isEmpty {
                     Text(email)
-                        .font(.system(size: 12))
+                        .font(.system(size: 14))
                         .foregroundStyle(Theme.sub)
                         .lineLimit(1)
                 }
-
-                HStack(spacing: 5) {
-                    Image(systemName: "apple.logo").font(.system(size: 10))
-                    Text(cloud.profile?.provider == "apple" ? "通过 Apple 登录" : "设备账号")
-                        .font(.system(size: 12))
-                }
-                .foregroundStyle(Theme.faint)
             }
             Spacer(minLength: 0)
         }
@@ -154,7 +154,7 @@ struct ProfileView: View {
                 HistoryView()
             } label: {
                 rowContent(icon: "clock.arrow.circlepath", title: "对话记录",
-                           tint: .orange, detail: "云端保留 30 天", chevron: true)
+                           tint: .orange, detail: "", chevron: true)
             }
             .buttonStyle(RowButtonStyle())
         }
@@ -291,10 +291,6 @@ struct AvatarPicker: View {
                     .buttonStyle(.plain)
                 }
             }
-
-            Text("头像只保存在本机，不同步到云端。")
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.sub)
 
             Spacer(minLength: 0)
         }
