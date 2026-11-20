@@ -3,7 +3,7 @@ import SwiftUI
 /// 用户协议 / 隐私政策。本地全文，审核要求能直接看到。
 struct TermsView: View {
     enum Kind: String, Identifiable {
-        case terms, privacy, payment
+        case terms, privacy, payment, permissions, contact
         var id: String { rawValue }
 
         var title: String {
@@ -11,6 +11,8 @@ struct TermsView: View {
             case .terms: return "用户协议"
             case .privacy: return "隐私政策"
             case .payment: return "付费协议"
+            case .permissions: return "应用权限说明"
+            case .contact: return "联系我们"
             }
         }
     }
@@ -53,6 +55,8 @@ struct TermsView: View {
         case .terms: return Self.termsText
         case .privacy: return Self.privacyText
         case .payment: return Self.paymentText
+        case .permissions: return Self.permissionsText
+        case .contact: return Self.contactText
         }
     }
 
@@ -123,5 +127,36 @@ struct TermsView: View {
          "本协议是《用户协议》的组成部分，未尽事宜以《用户协议》与《隐私政策》为准。本协议如有更新，将在应用内展示最新版本，更新后继续使用即视为接受。"),
         ("十四、联系方式",
          "对计费、积分或本协议有任何疑问，可通过 App Store 页面提供的支持方式与我们联系，我们会在核实账号信息后予以答复。"),
+    ]
+    // MARK: - 应用权限说明
+
+    private static let permissionsText: [(String, String)] = [
+        ("一、麦克风",
+         "仅在开启「同声传译」时使用。用于采集面对面对话的声音并实时识别、翻译。关闭同声传译后立即停止采集，不做后台录音。"),
+        ("二、屏幕录制与音频采集",
+         "仅在开启「实时翻译」并主动在系统面板中启动直播录屏后使用。用于采集设备正在播放的音频（视频、会议、网课等）并生成字幕。录制内容仅在本机与你的账号会话中流转，不会用于其它用途。"),
+        ("三、相册",
+         "仅在你主动选择头像时访问。通过系统照片选择器读取你指定的那一张图片，不读取相册中的其它内容。头像仅保存在本机。"),
+        ("四、通知",
+         "用于提醒会话状态与额度变化。你可以随时在系统设置中关闭，关闭后不影响核心功能。"),
+        ("五、网络",
+         "用于账号登录、语音识别与翻译请求、积分与订单校验。所有通信均通过 HTTPS / WSS 加密传输。"),
+        ("六、权限的撤回",
+         "以上权限均可在「设置 → 语幕翻译」中随时关闭。关闭某项权限后，依赖该权限的功能将无法使用，其余功能不受影响。"),
+    ]
+
+    // MARK: - 联系我们
+
+    private static let contactText: [(String, String)] = [
+        ("一、支持渠道",
+         "如在使用中遇到问题，可通过 App Store 产品页的「App 支持」入口与我们联系；涉及账号、订单或积分的问题，请一并提供你的账号标识与订单号，以便核实。"),
+        ("二、反馈内容",
+         "欢迎反馈翻译质量、字幕显示、连接稳定性等方面的问题。如方便，请附上出现问题的场景（视频 / 会议 / 面谈）、设备型号与系统版本，我们据此复现并修复。"),
+        ("三、处理时间",
+         "我们会在收到反馈后的 1~3 个工作日内答复。涉及支付与退款的事项，需由 Apple 按其退款政策处理，我们会协助核对订单信息。"),
+        ("四、账号与数据",
+         "如需注销账号或删除使用记录，可通过上述渠道提出。账号注销后，账号内的积分、会话记录与偏好设置将一并删除且不可恢复。"),
+        ("五、运营方",
+         "本应用由语幕团队开发与运营。服务条款、计费规则与隐私实践以本应用内展示的最新版本为准。"),
     ]
 }
