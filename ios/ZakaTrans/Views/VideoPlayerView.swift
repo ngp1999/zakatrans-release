@@ -293,7 +293,7 @@ struct VideoPlayerScreen: View {
             .padding(.vertical, 8)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color(uiColor: p.backgroundColor).opacity(0.82))
+                    .fill(p.backgroundColor.opacity(0.82))
             )
             .padding(.horizontal, 18)
             .padding(.bottom, controls ? 96 : 34)
