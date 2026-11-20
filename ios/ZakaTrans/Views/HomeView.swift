@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// 首页：一个按钮开始，字幕就在下面滚。
+/// 字幕翻译：一个按钮开始，字幕就在下面滚。
 struct HomeView: View {
     @ObservedObject private var app = AppState.shared
     @ObservedObject private var cloud = Cloud.shared
@@ -12,23 +12,15 @@ struct HomeView: View {
     private let haptic = UIImpactFeedbackGenerator(style: .light)
 
     var body: some View {
-        ZStack {
-            Theme.bg.ignoresSafeArea()
+        VStack(spacing: 0) {
+            subtitlePanel
+                .padding(.horizontal, 20)
+                .padding(.top, 6)
 
-            VStack(spacing: 0) {
-                header
-                    .padding(.horizontal, 20)
-                    .padding(.top, 6)
-
-                subtitlePanel
-                    .padding(.horizontal, 16)
-                    .padding(.top, 14)
-
-                controls
-                    .padding(.horizontal, 20)
-                    .padding(.top, 14)
-                    .padding(.bottom, 6)
-            }
+            controls
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+                .padding(.bottom, 8)
         }
         .sheet(isPresented: $showCredit) {
             NavigationStack { CreditView() }
@@ -47,43 +39,12 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - 顶部
-
-    private var header: some View {
-        HStack(alignment: .center, spacing: 10) {
-            HStack(spacing: 9) {
-                // App 图标（就是桌面那个，纯色青绿 + 两条字幕条）
-                Image("Logo")
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: 32, height: 32)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("语幕-实时翻译")
-                        .font(.system(size: 17, weight: .bold))
-                        .foregroundStyle(Theme.ink)
-                        .lineLimit(1)
-                }
-
-                if app.running {
-                    Circle()
-                        .fill(Theme.accent)
-                        .frame(width: 6, height: 6)
-                        .padding(.leading, 2)
-                }
-            }
-            Spacer(minLength: 8)
-            CreditPill(credits: cloud.balanceCredits) { showCredit = true }
-        }
-    }
-
     // MARK: - 字幕
 
     private var subtitlePanel: some View {
         ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
-                LazyVStack(alignment: .leading, spacing: 14) {
+                LazyVStack(alignment: .leading, spacing: 16) {
                     if app.lines.isEmpty && app.liveSource.isEmpty && app.liveTrans.isEmpty {
                         emptyState
                     }
@@ -93,7 +54,6 @@ struct HomeView: View {
                     if !app.liveSource.isEmpty || !app.liveTrans.isEmpty {
                         liveRow.id("live")
                     }
-                    // 滚动锚点：新一句进来时滚到这里，字幕是从下往上走的
                     Color.clear.frame(height: 1).id("bottom")
                 }
                 .padding(.horizontal, 18)
@@ -111,71 +71,46 @@ struct HomeView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Theme.card)
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .background(Theme.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .strokeBorder(app.running ? Theme.accent.opacity(0.3) : Color.clear, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(app.running ? Theme.accent.opacity(0.35) : Theme.hairline, lineWidth: 0.8)
         )
     }
 
-    /// 没开始时的引导：告诉用户这三步会发生什么，别让中间空一大片
+    /// 没开始时的引导：只留三步，别的说明文字全去掉
     private var emptyState: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("把任何声音变成中文字幕")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(Theme.ink)
-                Text("视频、会议、播客、网课，播放什么就翻译什么。")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Theme.sub)
-            }
+        VStack(alignment: .leading, spacing: 20) {
+            Text("把任何声音变成中文字幕")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(Theme.ink)
+                .padding(.top, 8)
 
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 16) {
                 step(1, "点下面的「开始字幕翻译」")
                 step(2, "在系统面板里选「语幕」并开始录屏")
                 step(3, "字幕浮窗自动出现，回桌面也继续显示")
             }
-
-            Divider().opacity(0.5)
-
-            VStack(alignment: .leading, spacing: 8) {
-                tip("globe", "源语言自动识别，输出中文")
-                tip("speaker.wave.2", "开着音频输出时，别的视频声音会自动降低")
-                tip("rectangle.on.rectangle", "窗口大小、字号、颜色都在「我的 → 字幕样式」里")
-                tip("mic.slash", "不说话的部分不计费，按识别出的文字量算")
-            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.top, 24)
+        .padding(.top, 14)
         .padding(.horizontal, 2)
     }
 
     private func step(_ n: Int, _ text: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: 12) {
             Text("\(n)")
-                .font(.system(size: 12, weight: .bold).monospacedDigit())
+                .font(.system(size: 13, weight: .bold).monospacedDigit())
                 .foregroundStyle(Theme.accent)
-                .frame(width: 20, height: 20)
+                .frame(width: 24, height: 24)
                 .background(Theme.accentSoft)
                 .clipShape(Circle())
             Text(text)
-                .font(.system(size: 14))
+                .font(.system(size: 15))
                 .foregroundStyle(Theme.ink)
                 .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private func tip(_ icon: String, _ text: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: icon)
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.accent)
-                .frame(width: 16)
-            Text(text)
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.faint)
-                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 2)
         }
     }
 
@@ -192,7 +127,7 @@ struct HomeView: View {
             }
             if !line.source.isEmpty, line.source != line.trans {
                 Text(line.source)
-                    .font(.system(size: max(12, app.prefs.size - 4)))
+                    .font(.system(size: max(14, app.prefs.size - 5)))
                     .foregroundStyle(Theme.sub)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -211,7 +146,7 @@ struct HomeView: View {
             }
             if !app.liveSource.isEmpty, app.liveSource != app.liveTrans {
                 Text(app.liveSource)
-                    .font(.system(size: max(12, app.prefs.size - 4)))
+                    .font(.system(size: max(14, app.prefs.size - 5)))
                     .foregroundStyle(Theme.sub)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -222,63 +157,23 @@ struct HomeView: View {
     // MARK: - 控制
 
     private var controls: some View {
-        VStack(spacing: 10) {
-            Button {
-                haptic.impactOccurred(intensity: 0.7)
-                if app.running || app.preparing {
-                    withAnimation(.easeOut(duration: 0.2)) { app.stop() }
-                } else if !app.preparing {
-                    Task {
-                        await app.start()
-                        if app.running { BroadcastTrigger.shared.fire() }
-                    }
-                }
-            } label: {
-                HStack(spacing: 9) {
-                    if app.preparing {
-                        ProgressView()
-                            .progressViewStyle(.circular)
-                            .tint(.white)
-                            .scaleEffect(0.85)
-                    } else {
-                        Image(systemName: (app.running && !app.preparing) ? "stop.fill" : "play.fill")
-                            .font(.system(size: 15, weight: .bold))
-                    }
-                    Text(app.preparing ? "正在加载字幕浮窗" : (app.running ? "停止" : "开始字幕翻译"))
-                        .font(.system(size: 17, weight: .semibold))
-                        .contentTransition(.opacity)
-                }
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(PrimaryButtonStyle(tint: (app.running && !app.preparing) ? Theme.warn : Theme.accent))
-            // 加载态的呼吸光圈：让人一眼看出「在等浮窗，不是没反应」
-            .overlay(PreparingGlow(on: app.preparing).allowsHitTesting(false))
-
-            // 音频状态：一眼看出是「没收到音频」还是「收到了没翻出来」
+        VStack(spacing: 8) {
             if app.running && !app.preparing && !app.audioHint.isEmpty {
                 Text(app.audioHint)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.faint)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.warn)
                     .frame(maxWidth: .infinity, alignment: .center)
-                    .transition(.opacity)
             }
 
             HStack(spacing: 10) {
-                // 朗读设置：点进去调语速、压低、音色
-                Button {
+                iconButton(
+                    icon: speaker.enabled ? "speaker.wave.2.fill" : "speaker.slash.fill",
+                    on: speaker.enabled
+                ) {
                     haptic.impactOccurred()
                     showAudio = true
-                } label: {
-                    tile(
-                        icon: speaker.enabled ? "speaker.wave.2.fill" : "speaker.slash.fill",
-                        title: "音频输出",
-                        detail: speaker.enabled ? String(format: "已开启 · %.2fx", app.prefs.speechRate) : "已关闭",
-                        on: speaker.enabled
-                    )
                 }
-                .buttonStyle(TileButtonStyle())
 
-                // 窗口：选哪个，画中画开出来就是多大（含开关）
                 Menu {
                     ForEach(SubtitlePrefs.pipOptions, id: \.0) { opt in
                         Button {
@@ -289,9 +184,9 @@ struct HomeView: View {
                             }
                         } label: {
                             if app.prefs.pip == opt.0 {
-                                Label("窗口\(opt.1) · \(SubtitlePrefs.pipSizeText(opt.0))", systemImage: "checkmark")
+                                Label("窗口\(opt.1)", systemImage: "checkmark")
                             } else {
-                                Text("窗口\(opt.1) · \(SubtitlePrefs.pipSizeText(opt.0))")
+                                Text("窗口\(opt.1)")
                             }
                         }
                     }
@@ -300,52 +195,62 @@ struct HomeView: View {
                         haptic.impactOccurred()
                         app.setPip(!app.pipOn)
                     } label: {
-                        Label(app.pipOn ? "关闭画中画" : "打开画中画",
+                        Label(app.pipOn ? "关闭窗口" : "打开窗口",
                               systemImage: app.pipOn ? "pip.remove" : "pip.fill")
                     }
                 } label: {
-                    tile(
-                        icon: app.pipOn ? (app.prefs.pip == "S" ? "rectangle.wide" : "pip.fill") : "pip.remove",
-                        title: "窗口",
-                        detail: app.pipOn ? "窗口\(pipLabel) · \(SubtitlePrefs.pipSizeText(app.prefs.pip))" : "已关闭",
-                        on: app.pipOn
-                    )
+                    Image(systemName: app.pipOn ? (app.prefs.pip == "S" ? "rectangle.wide" : "pip.fill") : "pip.remove")
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(app.pipOn ? Theme.accent : Theme.sub)
+                        .frame(width: 54, height: 54)
+                        .background(app.pipOn ? Theme.accentSoft : Theme.surface)
+                        .clipShape(Circle())
                 }
                 .buttonStyle(TileButtonStyle())
+
+                Button {
+                    haptic.impactOccurred(intensity: 0.8)
+                    if app.running || app.preparing {
+                        withAnimation(.easeOut(duration: 0.2)) { app.stop() }
+                    } else if !app.preparing {
+                        Task {
+                            await app.start()
+                            if app.running { BroadcastTrigger.shared.fire() }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 9) {
+                        if app.preparing {
+                            ProgressView()
+                                .progressViewStyle(.circular)
+                                .tint(.white)
+                                .scaleEffect(0.85)
+                        } else {
+                            Image(systemName: (app.running && !app.preparing) ? "stop.fill" : "play.fill")
+                                .font(.system(size: 15, weight: .bold))
+                        }
+                        Text(app.preparing ? "正在加载" : (app.running ? "停止" : "开始字幕翻译"))
+                            .font(.system(size: 17, weight: .semibold))
+                            .contentTransition(.opacity)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PrimaryButtonStyle(tint: (app.running && !app.preparing) ? Theme.warn : Theme.accent))
+                .overlay(PreparingGlow(on: app.preparing).allowsHitTesting(false))
             }
         }
     }
 
-    /// 大 / 中 / 小
-    private var pipLabel: String {
-        SubtitlePrefs.pipOptions.first { $0.0 == app.prefs.pip }?.1 ?? "大"
-    }
-
-    private func tile(icon: String, title: String, detail: String, on: Bool) -> some View {
-        HStack(spacing: 9) {
+    private func iconButton(icon: String, on: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(on ? Theme.accent : Theme.sub)
-                .frame(width: 22)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(Theme.ink)
-                Text(detail)
-                    .font(.system(size: 11))
-                    .foregroundStyle(on ? Theme.accent : Theme.sub)
-            }
-            Spacer(minLength: 0)
+                .frame(width: 54, height: 54)
+                .background(on ? Theme.accentSoft : Theme.surface)
+                .clipShape(Circle())
         }
-        .padding(.horizontal, 14)
-        .frame(height: 56)
-        .frame(maxWidth: .infinity)
-        .background(on ? Theme.accentSoft : Theme.fill)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(on ? Theme.accent.opacity(0.35) : Color.clear, lineWidth: 1)
-        )
+        .buttonStyle(TileButtonStyle())
     }
 }
 
