@@ -55,6 +55,13 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
     AVAudioEngine *_engine;
     AVAudioPlayerNode *_player;
 
+    // 收音模式为「麦克风收音」时，这一套负责把手机麦克风的声音送进同一条通道
+    AVAudioEngine *_micEngine;
+    AVAudioConverter *_micConv;
+    AVAudioFormat *_micOutFmt;
+    double _micInRate;
+    double _micGateChecked;
+
     NSString *_backendSig;
     NSString *_localeCode;
 
@@ -129,6 +136,9 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
         if (self.onDiag) self.onDiag([self diag]);
     }
 
+    ZKCrumb("speech.source");
+    @try { [self applyAudioSource]; } @catch (NSException *e) { [ZKStore log:@"source ex %@", e.reason]; }
+
     if (!_pollTimer) {
         _pollTimer = [NSTimer scheduledTimerWithTimeInterval:0.4
                                                      target:self
@@ -140,6 +150,7 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
 
 - (void)stop {
     _running = NO;
+    @try { [self stopMicFeed]; } @catch (__unused NSException *e) {}
     @try { [[ZKDoubaoAST shared] stop]; } @catch (__unused NSException *e) {}
     if (_listenFd >= 0) { close(_listenFd); _listenFd = -1; }
     if (_connFd >= 0) { close(_connFd); _connFd = -1; }
@@ -299,6 +310,12 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
         uint32_t seq = ((uint32_t)hdr[5] << 24) | ((uint32_t)hdr[6] << 16) |
                        ((uint32_t)hdr[7] << 8) | hdr[8];
         if (len == 0 || len > (4u << 20)) return;
+        // 收音模式选了麦克风：扩展那边就算还连着，声音也不往里灌，免得两路一起喂
+        if (type == 0 && [[self audioSource] isEqualToString:@"mic"]) {
+            NSMutableData *skip = [NSMutableData dataWithLength:len];
+            if (!recvFull(fd, skip.mutableBytes, len)) return;
+            continue;
+        }
         NSMutableData *d = [NSMutableData dataWithLength:len];
         if (!recvFull(fd, d.mutableBytes, len)) return;
         _packets++;
@@ -312,6 +329,112 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
         }
         }
     }
+}
+
+#pragma mark - 收音模式：内部收音 / 麦克风收音
+
+/// 收音模式：system = 系统声音（录屏扩展送过来，跟别的 App 播放的声音走）
+///           mic    = 手机麦克风（跟现场说话走）
+- (NSString *)audioSource {
+    NSString *v = [ZKStore setting:@"audio_src"];
+    return v.length ? v : @"system";
+}
+
+- (void)applyAudioSource {
+    if ([[self audioSource] isEqualToString:@"mic"]) {
+        [self startMicFeed];
+    } else {
+        [self stopMicFeed];
+    }
+    [ZKStore log:@"speech: 收音模式 %@", [self audioSource]];
+}
+
+/// 把麦克风接进来。参数和录屏扩展那条路完全一致（16k 单声道 float32），
+/// 所以下游的识别、计费、字幕都不用改。
+- (void)startMicFeed {
+    if (_micEngine) return;
+    @try {
+        AVAudioSession *s = [AVAudioSession sharedInstance];
+        NSError *se = nil;
+        [s setCategory:AVAudioSessionCategoryPlayAndRecord
+                  mode:AVAudioSessionModeVoiceChat
+               options:AVAudioSessionCategoryOptionDefaultToSpeaker |
+                       AVAudioSessionCategoryOptionAllowBluetooth |
+                       AVAudioSessionCategoryOptionMixWithOthers
+                 error:&se];
+        [s setPreferredIOBufferDuration:0.01 error:nil];
+        [s setActive:YES error:&se];
+        if (se) {
+            [ZKStore log:@"mic: session %@", se.localizedDescription];
+            if (self.onDiag) self.onDiag([self diag]);
+            return;
+        }
+
+        _micEngine = [AVAudioEngine new];
+        AVAudioInputNode *input = _micEngine.inputNode;
+        AVAudioFormat *inFmt = [input inputFormatForBus:0];
+        if (!inFmt || inFmt.sampleRate < 8000) {
+            [ZKStore log:@"mic: 没有可用的输入格式"];
+            _micEngine = nil;
+            return;
+        }
+        _micInRate = inFmt.sampleRate;
+        _micOutFmt = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatFloat32
+                                                      sampleRate:16000
+                                                        channels:1
+                                                     interleaved:NO];
+        _micConv = [[AVAudioConverter alloc] initFromFormat:inFmt toFormat:_micOutFmt];
+
+        __weak typeof(self) weakSelf = self;
+        [input installTapOnBus:0 bufferSize:1024 format:inFmt block:^(AVAudioPCMBuffer *buf, AVAudioTime *when) {
+            __strong typeof(weakSelf) s2 = weakSelf;
+            if (!s2 || !s2->_running || !buf.frameLength) return;
+
+            // 朗读自己念译文的时候不收音，否则念出去的话又被识别一遍
+            double nowS = [[NSDate date] timeIntervalSince1970];
+            if (nowS - s2->_micGateChecked > 0.05) {
+                s2->_micGateChecked = nowS;
+            }
+            double g = [[ZKStore setting:@"tts_gate"] doubleValue];
+            if (g > nowS && g < nowS + 6) return;
+
+            NSUInteger cap = (NSUInteger)(buf.frameLength * 16000.0 / MAX(8000.0, s2->_micInRate)) + 64;
+            AVAudioPCMBuffer *out = [[AVAudioPCMBuffer alloc] initWithPCMFormat:s2->_micOutFmt frameCapacity:cap];
+            __block BOOL fed = NO;
+            NSError *err = nil;
+            AVAudioConverterInputBlock ib = ^AVAudioBuffer *(AVAudioPacketCount need, AVAudioConverterInputStatus *st) {
+                if (fed) { *st = AVAudioConverterInputStatus_NoDataNow; return nil; }
+                fed = YES;
+                *st = AVAudioConverterInputStatus_HaveData;
+                return buf;
+            };
+            [s2->_micConv convertToBuffer:out error:&err withInputFromBlock:ib];
+            if (err || !out.floatChannelData || out.frameLength == 0) return;
+            [s2 feedPCM:out.floatChannelData[0] length:out.frameLength * 4 seq:-1];
+        }];
+
+        NSError *e = nil;
+        [_micEngine prepare];
+        [_micEngine startAndReturnError:&e];
+        if (e) {
+            [ZKStore log:@"mic: start %@", e.localizedDescription];
+            [self stopMicFeed];
+            return;
+        }
+        [ZKStore log:@"mic: 已接入字幕通道"];
+    } @catch (NSException *ex) {
+        [ZKStore log:@"mic: ex %@", ex.reason];
+        _micEngine = nil;
+        _micConv = nil;
+    }
+}
+
+- (void)stopMicFeed {
+    if (!_micEngine) return;
+    @try { [_micEngine.inputNode removeTapOnBus:0]; } @catch (__unused NSException *ex) {}
+    [_micEngine stop];
+    _micEngine = nil;
+    _micConv = nil;
 }
 
 #pragma mark - 音频
