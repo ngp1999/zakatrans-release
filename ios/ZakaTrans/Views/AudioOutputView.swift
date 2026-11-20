@@ -2,17 +2,21 @@ import SwiftUI
 import AVFoundation
 
 /// 朗读设置：开关、语速、压低其他 App、音色。
-/// 改一项立刻生效，并同步到云端（换手机回来还是这套）。
+/// 半屏弹窗里展示，一屏放得下，不用来回滚。
 struct AudioOutputView: View {
     @ObservedObject private var app = AppState.shared
     @ObservedObject private var speaker = Speaker.shared
     private let haptic = UIImpactFeedbackGenerator(style: .light)
 
-    private var voices: [AVSpeechSynthesisVoice] { Speaker.zhVoices() }
+    /// 只列婷婷、美嘉两个
+    private var voices: [(String, String)] { Speaker.voiceChoices() }
+
+    @State private var draftRate: Double = 0.62
+    @State private var draftDuck: Double = 60
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 16) {
+            VStack(spacing: 14) {
                 switchCard
                 rateCard
                 duckCard
@@ -20,11 +24,17 @@ struct AudioOutputView: View {
             }
             .padding(.horizontal, 16)
             .padding(.top, 8)
-            .padding(.bottom, 28)
+            .padding(.bottom, 24)
         }
         .background(Theme.bg)
-        .navigationTitle("朗读设置")
+        .navigationTitle("音频输出")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            draftRate = app.prefs.speechRate
+            draftDuck = app.prefs.duckLevel
+        }
+        .onChange(of: app.prefs.speechRate) { v in draftRate = v }
+        .onChange(of: app.prefs.duckLevel) { v in draftDuck = v }
     }
 
     private var switchCard: some View {
@@ -53,23 +63,21 @@ struct AudioOutputView: View {
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(Theme.ink)
                 Spacer()
-                Text(String(format: "%.2fx", app.prefs.speechRate))
+                Text(String(format: "%.2fx", draftRate))
                     .font(.system(size: 14, weight: .medium).monospacedDigit())
                     .foregroundStyle(Theme.sub)
             }
-            Slider(value: Binding(
-                get: { app.prefs.speechRate },
-                set: { v in app.updatePrefs { $0.speechRate = v } }
-            ), in: 0.42...0.80, step: 0.01)
-            .tint(Theme.accent)
-
-            HStack {
-                Text("慢")
-                    .font(.system(size: 11)).foregroundStyle(Theme.faint)
-                Spacer()
-                Text("快")
-                    .font(.system(size: 11)).foregroundStyle(Theme.faint)
-            }
+            FluidSlider(
+                value: app.prefs.speechRate,
+                range: 0.42...0.80,
+                step: 0.01,
+                onChanged: { v in draftRate = v },
+                onEnded: { v in
+                    draftRate = v
+                    app.updatePrefs { $0.speechRate = v }
+                    Speaker.shared.rate = v
+                }
+            )
 
             Button {
                 Speaker.shared.rate = app.prefs.speechRate
@@ -91,30 +99,40 @@ struct AudioOutputView: View {
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(Theme.ink)
                 Spacer()
-                Text(app.prefs.duckLevel < 1 ? "不压低" : String(format: "%.0f%%", app.prefs.duckLevel))
+                Text(draftDuck < 1 ? "不压低" : String(format: "%.0f%%", draftDuck))
                     .font(.system(size: 14, weight: .medium).monospacedDigit())
                     .foregroundStyle(Theme.sub)
             }
-            Slider(value: Binding(
-                get: { app.prefs.duckLevel },
-                set: { v in app.updatePrefs { $0.duckLevel = v } }
-            ), in: 0...100, step: 5)
-            .tint(Theme.accent)
+            FluidSlider(
+                value: app.prefs.duckLevel,
+                range: 0...100,
+                step: 5,
+                onChanged: { v in draftDuck = v },
+                onEnded: { v in
+                    draftDuck = v
+                    app.updatePrefs { $0.duckLevel = v }
+                    Speaker.shared.duckLevel = v
+                }
+            )
         }
         .card(padding: 16)
     }
 
     private var voiceCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 6) {
             Text("音色")
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(Theme.ink)
 
             VStack(spacing: 0) {
-                voiceRow(id: "", name: "系统默认（推荐）")
-                ForEach(voices, id: \.identifier) { v in
-                    Divider().opacity(0.4)
-                    voiceRow(id: v.identifier, name: v.name)
+                if voices.isEmpty {
+                    // 设备上还没下载中文语音包时的兜底，不让这一栏变空白
+                    voiceRow(id: "", name: "系统默认")
+                } else {
+                    ForEach(Array(voices.enumerated()), id: \.offset) { i, v in
+                        if i > 0 { Divider().opacity(0.4) }
+                        voiceRow(id: v.0, name: v.1)
+                    }
                 }
             }
         }
@@ -126,14 +144,14 @@ struct AudioOutputView: View {
             haptic.impactOccurred()
             app.updatePrefs { $0.voiceId = id }
             Speaker.shared.voiceId = id
-            Speaker.shared.preview("你好，这是这个音色的效果。")
+            Speaker.shared.preview("你好，这是\(name)的声音。")
         } label: {
             HStack(spacing: 10) {
                 Text(name)
                     .font(.system(size: 15))
                     .foregroundStyle(Theme.ink)
                 Spacer(minLength: 0)
-                if app.prefs.voiceId == id {
+                if app.prefs.voiceId == id || (id.isEmpty && app.prefs.voiceId.isEmpty) {
                     Image(systemName: "checkmark")
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(Theme.accent)
@@ -144,6 +162,4 @@ struct AudioOutputView: View {
         }
         .buttonStyle(.plain)
     }
-
 }
-
