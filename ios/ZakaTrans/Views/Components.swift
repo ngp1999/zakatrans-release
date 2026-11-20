@@ -57,12 +57,14 @@ struct PipAnchor: UIViewRepresentable {
 
 // MARK: - 顺手的滑动条
 
-/// 自己画的滑动条。
+/// 滑动条。
 ///
-/// 系统 Slider 放在 ScrollView 里有个老毛病：横向拖动时会被纵向滚动抢走手势，
-/// 手指划过去要么不动、要么跳一下，用起来就是"卡"。这里用高优先级拖拽手势接管，
-/// 并且只在松手时回写设置（拖动过程只更新本地值），不每一帧都触发同步。
-struct FluidSlider: View {
+/// 原来是 SwiftUI 手绘 + 高优先级拖拽手势，放在 ScrollView 里横拖会被纵向滚动抢走，
+/// 拖起来一顿一顿的（用户实测：语速、压低音量这两根最明显）。
+/// 现在直接用系统 UISlider：手势仲裁交给 UIKit，横拖永远优先，跟手且不掉帧；
+/// 外观只改轨道和圆点颜色，跟 App 的青绿主色一致。
+/// 拖动过程只回调 onChanged（本地即时显示），松手才回调 onEnded 落库。
+struct FluidSlider: UIViewRepresentable {
     let value: Double
     let range: ClosedRange<Double>
     var step: Double = 0
@@ -71,62 +73,54 @@ struct FluidSlider: View {
     /// 松手（落库 / 同步用）
     var onEnded: (Double) -> Void = { _ in }
 
-    @State private var dragValue: Double?
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
 
-    private var current: Double { dragValue ?? value }
+    func makeUIView(context: Context) -> UISlider {
+        let s = UISlider()
+        s.minimumValue = Float(range.lowerBound)
+        s.maximumValue = Float(range.upperBound)
+        s.value = Float(min(range.upperBound, max(range.lowerBound, value)))
+        s.isContinuous = true
+        s.minimumTrackTintColor = UIColor(Theme.accent)
+        s.maximumTrackTintColor = UIColor.tertiarySystemFill
+        s.thumbTintColor = .white
+        s.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        s.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .valueChanged)
+        s.addTarget(context.coordinator, action: #selector(Coordinator.ended(_:)),
+                    for: [.touchUpInside, .touchUpOutside, .touchCancel])
+        return s
+    }
 
-    var body: some View {
-        GeometryReader { geo in
-            let w = max(1, geo.size.width)
-            let knob: CGFloat = 26
-            let travel = max(1, w - knob)
-            let span = range.upperBound - range.lowerBound
-            let frac = span > 0 ? min(1, max(0, (current - range.lowerBound) / span)) : 0
-            let x = travel * CGFloat(frac)
-
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(Theme.fill)
-                    .frame(height: 4)
-
-                Capsule()
-                    .fill(Theme.accent)
-                    .frame(width: x + knob / 2, height: 4)
-
-                Circle()
-                    .fill(Color.white)
-                    .frame(width: knob, height: knob)
-                    .shadow(color: .black.opacity(0.18), radius: 4, y: 1)
-                    .overlay(Circle().strokeBorder(Theme.hairline, lineWidth: 0.5))
-                    .offset(x: x)
-            }
-            .frame(height: knob)
-            .frame(maxHeight: .infinity)
-            .contentShape(Rectangle())
-            .highPriorityGesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { g in
-                        var v = range.lowerBound
-                        if travel > 0 {
-                            let ratio = Double(min(travel, max(0, g.location.x - knob / 2)) / travel)
-                            v = range.lowerBound + ratio * span
-                        }
-                        if step > 0 { v = (v / step).rounded() * step }
-                        v = min(range.upperBound, max(range.lowerBound, v))
-                        if let d = dragValue, abs(d - v) < 0.0001 { return }
-                        dragValue = v
-                        onChanged(v)
-                    }
-                    .onEnded { _ in
-                        let v = dragValue ?? value
-                        dragValue = nil
-                        onEnded(v)
-                    }
-            )
+    func updateUIView(_ uiView: UISlider, context: Context) {
+        context.coordinator.parent = self
+        // 拖动中不回写：手指按着的时候被外部值拽回去会「粘住」
+        if !context.coordinator.dragging,
+           abs(Double(uiView.value) - value) > 0.0001 {
+            uiView.value = Float(min(range.upperBound, max(range.lowerBound, value)))
         }
-        .frame(height: 34)
-        .accessibilityElement()
-        .accessibilityValue(String(format: "%.1f", current))
+    }
+
+    final class Coordinator: NSObject {
+        var parent: FluidSlider
+        var dragging = false
+
+        init(_ p: FluidSlider) { parent = p }
+
+        @objc func changed(_ s: UISlider) {
+            dragging = true
+            var v = Double(s.value)
+            // 拖动过程不取整，避免一格一格地跳；数值标签自己取整显示
+            v = min(parent.range.upperBound, max(parent.range.lowerBound, v))
+            parent.onChanged(v)
+        }
+
+        @objc func ended(_ s: UISlider) {
+            dragging = false
+            var v = Double(s.value)
+            if parent.step > 0 { v = (v / parent.step).rounded() * parent.step }
+            v = min(parent.range.upperBound, max(parent.range.lowerBound, v))
+            parent.onEnded(v)
+        }
     }
 }
 
