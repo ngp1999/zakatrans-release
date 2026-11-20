@@ -1,7 +1,8 @@
 import SwiftUI
+import UIKit
 
-/// 对话记录：一场一条，点进去能看完整转写，还能让 AI 总结。
-/// 数据在云端，换设备也在。
+/// 对话记录：一场一条，点进去能看完整转写、让 AI 总结、导出字幕。
+/// 列表一行说清四件事：什么时候、聊了多久、花了多少积分、这一场讲了什么。
 struct HistoryView: View {
     @ObservedObject private var cloud = Cloud.shared
     @State private var items: [Cloud.UsageSession] = []
@@ -34,31 +35,30 @@ struct HistoryView: View {
                     }
                 }
                 .listStyle(.insetGrouped)
-                .refreshable { await load() }
             }
         }
         .background(Theme.bg)
         .navigationTitle("对话记录")
         .navigationBarTitleDisplayMode(.inline)
-        .task { await load() }
+        .refreshable { await load() }
+        .task { if items.isEmpty { await load() } }
     }
 
-    /// 按天分组：标题是「今天 / 昨天 / 11月19日 周三」
     private var grouped: [(String, [Cloud.UsageSession])] {
+        var map: [String: [Cloud.UsageSession]] = [:]
+        for s in items {
+            map[Self.dayKey(s.startedAt), default: []].append(s)
+        }
+        return map.keys.sorted(by: >).map { key in
+            (Self.dayTitle(key), map[key] ?? [])
+        }
+    }
+
+    static func dayKey(_ d: Date) -> String {
         let df = DateFormatter()
         df.locale = Locale(identifier: "zh_CN")
         df.dateFormat = "yyyy-MM-dd"
-
-        var order: [String] = []
-        var map: [String: [Cloud.UsageSession]] = [:]
-        for s in items {
-            let k = df.string(from: s.startedAt)
-            if map[k] == nil { order.append(k) }
-            map[k, default: []].append(s)
-        }
-        return order.map { key in
-            (Self.dayTitle(key), map[key] ?? [])
-        }
+        return df.string(from: d)
     }
 
     static func dayTitle(_ key: String) -> String {
@@ -79,24 +79,51 @@ struct HistoryView: View {
         return out.string(from: d)
     }
 
+    // MARK: - 列表行
+
+    /// 标题取自这一场的 AI 总结首句；没总结过就退回「实时翻译会话」。
+    private func title(_ s: Cloud.UsageSession) -> String {
+        guard let sum = s.summary?.trimmingCharacters(in: .whitespacesAndNewlines), !sum.isEmpty else {
+            return "实时翻译会话"
+        }
+        let first = sum
+            .replacingOccurrences(of: "**", with: "")
+            .split(whereSeparator: { $0 == "\n" || $0 == "。" })
+            .first
+            .map(String.init) ?? sum
+        return first.trimmingCharacters(in: .whitespaces)
+    }
+
     private func row(_ s: Cloud.UsageSession) -> some View {
         HStack(alignment: .top, spacing: 12) {
-            Text(Self.timeText(s.startedAt))
-                .font(.system(size: 16, weight: .semibold).monospacedDigit())
-                .foregroundStyle(Theme.ink)
-                .frame(width: 52, alignment: .leading)
-                .padding(.top, 1)
+            VStack(spacing: 3) {
+                Text(Self.timeText(s.startedAt))
+                    .font(.system(size: 16, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(Theme.ink)
+                Text(s.durationText)
+                    .font(.system(size: 11).monospacedDigit())
+                    .foregroundStyle(Theme.sub)
+            }
+            .frame(width: 54, alignment: .leading)
+            .padding(.top, 1)
 
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 10) {
-                    Label(s.durationText, systemImage: "clock")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.sub)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title(s))
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
 
+                HStack(spacing: 8) {
                     Text("\(s.creditsText) 积分")
                         .font(.system(size: 12, weight: .medium).monospacedDigit())
                         .foregroundStyle(Theme.accent)
-
+                    Text("·")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.faint)
+                    Text(s.reasonText)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.sub)
                     if s.hasSummary {
                         Text("已总结")
                             .font(.system(size: 10))
@@ -106,17 +133,10 @@ struct HistoryView: View {
                             .clipShape(Capsule())
                     }
                 }
-
-                if let sum = s.summary, !sum.isEmpty {
-                    Text(sum.replacingOccurrences(of: "\n", with: " "))
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.sub)
-                        .lineLimit(2)
-                }
             }
             Spacer(minLength: 0)
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, 4)
     }
 
     static func timeText(_ d: Date) -> String {
@@ -150,7 +170,7 @@ struct HistoryView: View {
     }
 }
 
-/// 单场详情：摘要 + 完整转写
+/// 单场详情：摘要 + 完整转写 + 导出字幕
 struct SessionDetailView: View {
     let session: Cloud.UsageSession
     @ObservedObject private var cloud = Cloud.shared
@@ -160,6 +180,7 @@ struct SessionDetailView: View {
     @State private var loading = true
     @State private var summarizing = false
     @State private var error: String?
+    @State private var showExport = false
 
     var body: some View {
         ScrollView {
@@ -175,6 +196,22 @@ struct SessionDetailView: View {
         .background(Theme.bg)
         .navigationTitle("对话详情")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showExport = true
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 15, weight: .medium))
+                }
+                .disabled((detail?.lines.count ?? 0) == 0)
+            }
+        }
+        .sheet(isPresented: $showExport) {
+            SubtitleExportView(session: session, lines: detail?.lines ?? [])
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
         .task { await load() }
     }
 
@@ -192,6 +229,7 @@ struct SessionDetailView: View {
             HStack(spacing: 16) {
                 Label(session.durationText, systemImage: "clock")
                 Label("\(detail?.lines.count ?? 0) 句", systemImage: "text.bubble")
+                Label(session.reasonText, systemImage: "info.circle")
             }
             .font(.system(size: 12))
             .foregroundStyle(Theme.sub)
@@ -232,8 +270,14 @@ struct SessionDetailView: View {
                     Task { await makeSummary() }
                 } label: {
                     Text("生成总结")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 46)
+                        .background(Theme.accentSoft)
+                        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
                 }
-                .buttonStyle(SecondaryButtonStyle(tint: Theme.accent))
+                .buttonStyle(TileButtonStyle())
                 .disabled((detail?.lines.count ?? 0) == 0)
             }
 
@@ -246,9 +290,17 @@ struct SessionDetailView: View {
 
     private var transcriptCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("对话内容")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(Theme.ink)
+            HStack {
+                Text("对话内容")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Theme.ink)
+                Spacer()
+                if (detail?.lines.count ?? 0) > 0 {
+                    Button("导出字幕") { showExport = true }
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(Theme.accent)
+                }
+            }
 
             if loading {
                 ProgressView().frame(maxWidth: .infinity).padding(.vertical, 20)
@@ -300,5 +352,160 @@ struct SessionDetailView: View {
         } catch {
             self.error = error.localizedDescription
         }
+    }
+}
+
+// MARK: - 导出字幕
+
+/// 字幕导出：SRT / TXT 两种格式，内容可选原文、译文、双语。
+/// 生成的文件放进临时目录，用系统分享面板存到「文件」、发给别人都行。
+struct SubtitleExportView: View {
+    let session: Cloud.UsageSession
+    let lines: [Cloud.TranscriptLine]
+
+    @State private var format = "srt"
+    @State private var content = "both"
+    @State private var fileURL: URL?
+    @Environment(\.dismiss) private var dismiss
+
+    private let formats = [("srt", "SRT 字幕"), ("txt", "TXT 文本")]
+    private let contents = [("source", "原文"), ("trans", "译文"), ("both", "双语")]
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("格式")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.sub)
+                    Picker("格式", selection: $format) {
+                        ForEach(formats, id: \.0) { Text($0.1).tag($0.0) }
+                    }
+                    .pickerStyle(.segmented)
+                }
+                .card(padding: 14)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("内容")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.sub)
+                    Picker("内容", selection: $content) {
+                        ForEach(contents, id: \.0) { Text($0.1).tag($0.0) }
+                    }
+                    .pickerStyle(.segmented)
+                }
+                .card(padding: 14)
+
+                Text("共 \(lines.count) 句 · 时长 \(session.durationText) · 文件名 \(fileName)")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.faint)
+                    .multilineTextAlignment(.center)
+
+                Spacer(minLength: 0)
+
+                if let url = fileURL {
+                    ShareLink(item: url) {
+                        Text("保存 / 分享")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 54)
+                            .background(Theme.accent)
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    }
+                } else {
+                    Text("没有可导出的内容")
+                        .font(.system(size: 14))
+                        .foregroundStyle(Theme.sub)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 20)
+            .background(Theme.bg)
+            .navigationTitle("导出字幕")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { dismiss() }
+                }
+            }
+            .onAppear { rebuild() }
+            .onChange(of: format) { _ in rebuild() }
+            .onChange(of: content) { _ in rebuild() }
+        }
+    }
+
+    private var fileName: String {
+        "语幕字幕_\(Self.stamp(session.startedAt)).\(format)"
+    }
+
+    private static func stamp(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "zh_CN")
+        f.dateFormat = "yyyyMMdd_HHmm"
+        return f.string(from: d)
+    }
+
+    private func rebuild() {
+        let text = format == "srt" ? srtText() : plainText()
+        guard !text.isEmpty else {
+            fileURL = nil
+            return
+        }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+        do {
+            try text.data(using: .utf8)?.write(to: url, options: .atomic)
+            fileURL = url
+        } catch {
+            fileURL = nil
+        }
+    }
+
+    private var usable: [Cloud.TranscriptLine] {
+        lines.filter { !$0.trans.isEmpty || !$0.source.isEmpty }
+    }
+
+    private func lineText(_ l: Cloud.TranscriptLine) -> String {
+        switch content {
+        case "source": return l.source
+        case "trans": return l.trans
+        default:
+            if l.trans.isEmpty { return l.source }
+            if l.source.isEmpty || l.source == l.trans { return l.trans }
+            return l.trans + "\n" + l.source
+        }
+    }
+
+    private func plainText() -> String {
+        let rows = usable.map { lineText($0) }.filter { !$0.isEmpty }
+        guard !rows.isEmpty else { return "" }
+        return rows.joined(separator: "\n\n") + "\n"
+    }
+
+    /// SRT：序号 + 时间码 + 文本，时间码按每句的落定时刻算，末句给 3 秒
+    private func srtText() -> String {
+        let rows = usable
+        guard !rows.isEmpty else { return "" }
+        let start = rows.first?.at ?? session.startedAt
+        var out = ""
+        for (i, l) in rows.enumerated() {
+            let from = max(0, l.at.timeIntervalSince(start))
+            let next = i + 1 < rows.count ? max(0, rows[i + 1].at.timeIntervalSince(start)) : from + 3
+            let to = next > from ? next : from + 3
+            out += "\(i + 1)\n"
+            out += "\(Self.timecode(from)) --> \(Self.timecode(to))\n"
+            out += "\(lineText(l))\n\n"
+        }
+        return out
+    }
+
+    private static func timecode(_ t: TimeInterval) -> String {
+        let total = Int(t.rounded())
+        let h = total / 3600
+        let m = (total % 3600) / 60
+        let s = total % 60
+        let ms = Int(((t - floor(t)) * 1000).rounded())
+        return String(format: "%02d:%02d:%02d,%03d", h, m, s, ms)
     }
 }
