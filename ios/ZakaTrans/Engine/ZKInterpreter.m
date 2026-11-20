@@ -64,6 +64,33 @@ static NSString *ZKShort(NSString *bcp) {
     return r.location == NSNotFound ? bcp : [bcp substringToIndex:r.location];
 }
 
+/// 这句是不是真有内容。
+/// 上游在「语言对不上」那条通道上会吐纯标点（。，… —— 之类），
+/// 以前这些原样进了界面，就成了用户看到的「说完一句，对面多一个符号」。
+static BOOL ZKHasContent(NSString *s) {
+    if (s.length == 0) return NO;
+    NSCharacterSet *alnum = [NSCharacterSet alphanumericCharacterSet];
+    for (NSUInteger i = 0; i < s.length; i++) {
+        unichar c = [s characterAtIndex:i];
+        if ([alnum characterIsMember:c]) return YES;
+        if (c >= 0x4E00 && c <= 0x9FFF) return YES;   // 汉字
+        if (c >= 0x3040 && c <= 0x30FF) return YES;   // 假名
+        if (c >= 0xAC00 && c <= 0xD7AF) return YES;   // 韩文
+        if (c >= 0x0400 && c <= 0x04FF) return YES;   // 西里尔
+        if (c >= 0x0E00 && c <= 0x0E7F) return YES;   // 泰文
+    }
+    return NO;
+}
+
+/// 去掉首尾空白、把连续空白压成一个空格，空行不要
+static NSString *ZKClean(NSString *s) {
+    if (!s.length) return @"";
+    NSString *t = [s stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    t = [t stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
+    while ([t containsString:@"  "]) t = [t stringByReplacingOccurrencesOfString:@"  " withString:@" "];
+    return t;
+}
+
 @implementation ZKInterpreter {
     ZKDoubaoAST *_toOther;   // 我 → 对方
     ZKDoubaoAST *_toMine;    // 对方 → 我
@@ -77,10 +104,27 @@ static NSString *ZKShort(NSString *bcp) {
     NSString *_other;  // en-US
 
     BOOL _running;
-    // 每条通道最近一句原文 + 译文，整句到达时成对推出
-    NSString *_pendSrcA, *_pendDstA, *_pendSrcB, *_pendDstB;
-    // 已经推过整句的原文，防止同一条增量又拼一遍
-    NSString *_lastFinalA, *_lastFinalB;
+
+    // 每边当前这一句：消息 id、原文、译文（译文可能还没到）
+    NSString *_idA, *_idB;
+    NSString *_srcA, *_srcB;
+    NSString *_dstA, *_dstB;
+    // 原文还在滚的时候先攒着，等落定了再把 id 定下来
+    NSString *_draftSrcA, *_draftSrcB;
+    NSString *_draftDstA, *_draftDstB;
+    // 译文先于原文到达时暂存
+    NSString *_earlyDstA, *_earlyDstB;
+
+    // 去重：同一条原文被推两遍、或两个方向听成同一句
+    NSString *_lastSrcA, *_lastSrcB;
+    NSTimeInterval _lastAtA, _lastAtB;
+
+    NSInteger _seq;
+    NSTimeInterval _lastLevelAt;
+
+    // 当前在说话的是哪一边：用来压掉另一条通道的碎渣
+    NSString *_activeSide;
+    NSTimeInterval _activeUntil;
 }
 
 + (instancetype)shared {
@@ -114,6 +158,8 @@ static NSString *ZKShort(NSString *bcp) {
               mode:AVAudioSessionModeVoiceChat
            options:AVAudioSessionCategoryOptionDefaultToSpeaker | AVAudioSessionCategoryOptionAllowBluetooth
              error:&err];
+    // 缓冲给到最小：麦克风这一环少 20ms，字幕就早 20ms
+    [s setPreferredIOBufferDuration:0.01 error:nil];
     [s setActive:YES error:&err];
     if (err) { [self fail:@"麦克风没有权限，请在系统设置里允许"]; return; }
 
@@ -124,8 +170,8 @@ static NSString *ZKShort(NSString *bcp) {
     [self wire:_toMine side:@"b"];
     [self applyLangs];
 
+    [self resetLines];
     _running = YES;
-    [self state:@"启动中"];
     [_toOther start];
     [_toMine start];
 
@@ -146,14 +192,26 @@ static NSString *ZKShort(NSString *bcp) {
     _toMine.dstLang = ZKShort(_mine);
 }
 
+- (void)resetLines {
+    _idA = _idB = nil;
+    _srcA = _srcB = nil;
+    _dstA = _dstB = nil;
+    _draftSrcA = _draftSrcB = nil;
+    _draftDstA = _draftDstB = nil;
+    _earlyDstA = _earlyDstB = nil;
+    _lastSrcA = _lastSrcB = nil;
+    _lastAtA = _lastAtB = 0;
+    _activeSide = nil;
+    _activeUntil = 0;
+}
+
 - (void)stop {
     _running = NO;
     [self stopMic];
     [_toOther stop]; _toOther = nil;
     [_toMine stop];  _toMine = nil;
-    _pendSrcA = _pendDstA = _pendSrcB = _pendDstB = nil;
-    _lastFinalA = _lastFinalB = nil;
-    [self state:@"已停止"];
+    [self resetLines];
+    if (self.onLevel) self.onLevel(0);
     NSError *e = nil;
     [[AVAudioSession sharedInstance] setActive:NO
                                    withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation
@@ -168,27 +226,22 @@ static NSString *ZKShort(NSString *bcp) {
     ast.onSourcePartial = ^(NSString *delta) {
         __strong typeof(weakSelf) s = weakSelf;
         if (!s) return;
-        [s partial:side source:delta];
+        [s sourcePartial:side text:delta];
     };
     ast.onSourceEnd = ^(NSString *full) {
         __strong typeof(weakSelf) s = weakSelf;
         if (!s) return;
-        if (side == nil) return;
-        if ([side isEqualToString:@"a"]) s->_pendSrcA = full;
-        else s->_pendSrcB = full;
-        [s emitIfReady:side final:NO];
+        [s sourceEnd:side text:full];
     };
     ast.onTransPartial = ^(NSString *delta) {
         __strong typeof(weakSelf) s = weakSelf;
         if (!s) return;
-        [s partial:side trans:delta];
+        [s transPartial:side text:delta];
     };
     ast.onTransEnd = ^(NSString *full) {
         __strong typeof(weakSelf) s = weakSelf;
         if (!s) return;
-        if ([side isEqualToString:@"a"]) s->_pendDstA = full;
-        else s->_pendDstB = full;
-        [s emitIfReady:side final:YES];
+        [s transEnd:side text:full];
     };
     ast.onState = ^(NSString *st) {
         __strong typeof(weakSelf) s = weakSelf;
@@ -215,49 +268,126 @@ static NSString *ZKShort(NSString *bcp) {
     return [side isEqualToString:@"a"] ? (sc == mine) : (sc == other);
 }
 
-- (void)partial:(NSString *)side source:(NSString *)text {
-    if (!_running) return;
-    if (![self belongs:side src:text]) return;
-    if (self.onLine) {
-        NSString *line = [NSString stringWithFormat:@"%@", text ?: @""];
-        self.onLine(side, line, @"", NO);
+/// 两个方向同时听同一段声音，偶发会把同一句认成两边都在说
+- (BOOL)isEcho:(NSString *)side src:(NSString *)src {
+    if (!src.length) return NO;
+    BOOL a = [side isEqualToString:@"a"];
+    NSString *otherLast = a ? _lastSrcB : _lastSrcA;
+    NSTimeInterval otherAt = a ? _lastAtB : _lastAtA;
+    if (otherLast.length && [otherLast isEqualToString:src] && [NSDate date].timeIntervalSince1970 - otherAt < 2.5) {
+        return YES;
     }
+    return NO;
 }
 
-- (void)partial:(NSString *)side trans:(NSString *)text {
-    if (!_running) return;
-    NSString *src = [side isEqualToString:@"a"] ? _pendSrcA : _pendSrcB;
-    if (src.length && ![self belongs:side src:src]) return;
-    if (src.length == 0) {
-        // 还没拿到原文：先按通道默认归属
-        if (![side isEqualToString:@"a"]) return;
+/// 同时在跑的还有另一条通道，它对「不是自己这种语言」的声音也会硬认，
+/// 认出来就是一句短碎的乱码（几个字母、一个语气词）。
+/// 真人对话很少同时开口，所以：另一边刚说完 1 秒内的短句一律不收，长句照收。
+- (BOOL)acceptSide:(NSString *)side length:(NSUInteger)n {
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    if (_activeSide && ![_activeSide isEqualToString:side] && now < _activeUntil && n <= 6) {
+        return NO;
     }
-    if (self.onLine) self.onLine(side, @"", text ?: @"", NO);
+    if (n >= 3) { _activeSide = side; _activeUntil = now + 1.0; }
+    return YES;
 }
 
-- (void)emitIfReady:(NSString *)side final:(BOOL)final {
-    NSString *src = [side isEqualToString:@"a"] ? (_pendSrcA ?: _pendSrcB) : _pendSrcB;
-    if (!src.length) return;
-    if (![self belongs:side src:src]) return;
+- (void)sourcePartial:(NSString *)side text:(NSString *)text {
+    if (!_running) return;
+    NSString *t = ZKClean(text);
+    if (!ZKHasContent(t)) return;
+    if (![self belongs:side src:t]) return;
+    if (![self acceptSide:side length:t.length]) return;
 
-    NSString *dst = [side isEqualToString:@"a"] ? _pendDstA : _pendDstB;
-    if (!final) return;
+    BOOL a = [side isEqualToString:@"a"];
+    NSString *dst = a ? _draftDstA : _draftDstB;
+    if (a) _draftSrcA = t; else _draftSrcB = t;
+    [self emit:[NSString stringWithFormat:@"draft-%@", side] side:side src:t dst:dst kind:ZKLineKindDraft];
+}
 
-    NSString *last = [side isEqualToString:@"a"] ? _lastFinalA : _lastFinalB;
-    if (last.length && [last isEqualToString:src]) {
-        // 同一条原文重复推送：清掉待发，不再发一遍
-        if ([side isEqualToString:@"a"]) { _pendSrcA = nil; _pendDstA = nil; }
-        else { _pendSrcB = nil; _pendDstB = nil; }
+- (void)sourceEnd:(NSString *)side text:(NSString *)text {
+    if (!_running) return;
+    NSString *t = ZKClean(text);
+    if (!ZKHasContent(t)) return;          // 纯标点、空串——直接丢
+    if (![self belongs:side src:t]) return;
+    if (![self acceptSide:side length:t.length]) return;
+    if ([self isEcho:side src:t]) return;
+
+    BOOL a = [side isEqualToString:@"a"];
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    NSString *last = a ? _lastSrcA : _lastSrcB;
+    NSTimeInterval lastAt = a ? _lastAtA : _lastAtB;
+
+    // 同一句被上游重复推一遍
+    if (last.length && [last isEqualToString:t] && now - lastAt < 3.0) {
+        if (a) { _draftSrcA = nil; _draftDstA = nil; } else { _draftSrcB = nil; _draftDstB = nil; }
         return;
     }
-    if ([side isEqualToString:@"a"]) { _lastFinalA = src; _pendSrcA = nil; _pendDstA = nil; }
-    else { _lastFinalB = src; _pendSrcB = nil; _pendDstB = nil; }
+    if (a) { _lastSrcA = t; _lastAtA = now; } else { _lastSrcB = t; _lastAtB = now; }
 
-    if (self.onLine) self.onLine(side, src, dst ?: @"", YES);
+    // 这一句定 id：原文一到就推出去，不等译文
+    NSString *lid = [NSString stringWithFormat:@"%@-%ld", side, (long)++_seq];
+    NSString *early = a ? _earlyDstA : _earlyDstB;
+    if (a) {
+        _idA = lid; _srcA = t; _dstA = early ?: @"";
+        _draftSrcA = nil; _draftDstA = nil; _earlyDstA = nil;
+    } else {
+        _idB = lid; _srcB = t; _dstB = early ?: @"";
+        _draftSrcB = nil; _draftDstB = nil; _earlyDstB = nil;
+    }
+    [self emit:lid side:side src:t dst:(early ?: @"") kind:ZKLineKindFinal];
+}
+
+- (void)transPartial:(NSString *)side text:(NSString *)text {
+    if (!_running) return;
+    NSString *t = ZKClean(text);
+    if (!t.length) return;
+
+    BOOL a = [side isEqualToString:@"a"];
+    NSString *lid = a ? _idA : _idB;
+    NSString *src = a ? _srcA : _srcB;
+
+    if (lid.length) {
+        // 这句已经落定，译文原地补进去
+        if (a) _dstA = t; else _dstB = t;
+        [self emit:lid side:side src:src ?: @"" dst:t kind:ZKLineKindUpdate];
+    } else {
+        // 译文比原文先到：先攒着，等原文落定一起发
+        if (a) { _earlyDstA = t; _draftDstA = t; } else { _earlyDstB = t; _draftDstB = t; }
+        NSString *draftSrc = a ? _draftSrcA : _draftSrcB;
+        if (draftSrc.length) {
+            [self emit:[NSString stringWithFormat:@"draft-%@", side] side:side src:draftSrc dst:t kind:ZKLineKindDraft];
+        }
+    }
+}
+
+- (void)transEnd:(NSString *)side text:(NSString *)text {
+    if (!_running) return;
+    NSString *t = ZKClean(text);
+    if (!t.length) return;
+
+    BOOL a = [side isEqualToString:@"a"];
+    NSString *lid = a ? _idA : _idB;
+    NSString *src = a ? _srcA : _srcB;
+    if (!lid.length) { if (a) _earlyDstA = t; else _earlyDstB = t; return; }
+
+    if (a) _dstA = t; else _dstB = t;
+    // 收尾再推一次 Final，界面把它当成这句的最终状态
+    [self emit:lid side:side src:src ?: @"" dst:t kind:ZKLineKindFinal];
+
+    // 这句已经完整，把这一边的“当前句”清空：
+    // 下一句的译文再早到，也不会串到已经完成的这条上
+    if (a) { _idA = nil; _srcA = nil; _dstA = nil; }
+    else   { _idB = nil; _srcB = nil; _dstB = nil; }
+}
+
+- (void)emit:(NSString *)lid side:(NSString *)side src:(NSString *)src dst:(NSString *)dst kind:(NSInteger)kind {
+    if (!_running) return;
+    if (self.onLine) self.onLine(lid ?: @"", side ?: @"a", src ?: @"", dst ?: @"", kind);
 }
 
 - (void)state:(NSString *)s {
-    if (!_running && ![s isEqualToString:@"已停止"]) return;
+    if (!_running) return;
     dispatch_async(dispatch_get_main_queue(), ^{
         if (self.onState) self.onState(s);
     });
@@ -309,8 +439,10 @@ static NSString *ZKShort(NSString *bcp) {
         if (err || !out.floatChannelData || out.frameLength == 0) return;
 
         const float *p = out.floatChannelData[0];
+        // 两路同时喂：谁说话由文字体系判定
         [s->_toOther pushFloat32:p count:out.frameLength];
         [s->_toMine pushFloat32:p count:out.frameLength];
+        [s reportLevel:p count:out.frameLength];
     }];
 
     NSError *e = nil;
@@ -321,6 +453,26 @@ static NSString *ZKShort(NSString *bcp) {
         [self stopMic];
         [self fail:@"麦克风启动失败"];
     }
+}
+
+/// 输入电平，给界面做跳动指示。最多 15 次/秒，别把主线程刷爆
+- (void)reportLevel:(const float *)p count:(NSUInteger)n {
+    if (!self.onLevel || !n) return;
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    if (now - _lastLevelAt < 0.066) return;
+    _lastLevelAt = now;
+
+    double sum = 0;
+    for (NSUInteger i = 0; i < n; i++) sum += (double)p[i] * p[i];
+    float rms = sqrt(sum / (double)n);
+    float db = 20.0f * log10f(rms + 1e-6f);       // 大约 -100 ~ 0
+    float level = (db + 52.0f) / 46.0f;            // 映射到 0~1
+    if (level < 0) level = 0;
+    if (level > 1) level = 1;
+    level = powf(level, 0.7f);                     // 小音量也看得见
+
+    void (^cb)(float) = self.onLevel;
+    dispatch_async(dispatch_get_main_queue(), ^{ if (cb) cb(level); });
 }
 
 - (void)stopMic {
