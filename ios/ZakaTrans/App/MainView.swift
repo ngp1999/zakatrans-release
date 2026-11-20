@@ -41,31 +41,43 @@ struct RootView: View {
     }
 }
 
-/// 四个 Tab：字幕翻译 / 同声传译 / 网页 / 我的
+/// 主界面。
+///
+/// 只有两个功能（字幕翻译、同声传译），再给它们套一个系统 TabBar 就太笨重了：
+/// 底部一整条黑/白栏，占掉几十 pt，还只放两个图标。
+/// 这一版改成「一个工作台」：
+///   · 顶部一行：品牌 + 头像（点头像进「我的」，不再占一个 Tab）
+///   · 下面两个模式用一条细下划线切换，切换时内容淡入淡出
+///   · 中间整块交给当前功能，底部只留一个主操作
+/// 三个入口变成两个模式 + 一个抽屉，屏效比原来高，也更像专业工具。
 struct MainView: View {
-    @State private var tab = 0
+    @ObservedObject private var app = AppState.shared
+
+    enum Mode: String, CaseIterable, Identifiable {
+        case subtitle = "字幕翻译"
+        case interpreter = "同声传译"
+        var id: String { rawValue }
+    }
+
+    @State private var mode: Mode = .subtitle
+    @State private var showProfile = false
+    @Namespace private var segAnim
 
     var body: some View {
-        TabView(selection: $tab) {
-            HomeView()
-                .tabItem { Label("字幕翻译", systemImage: "captions.bubble.fill") }
-                .tag(0)
+        ZStack {
+            Theme.bg.ignoresSafeArea()
 
-            InterpreterView()
-                .tabItem { Label("同声传译", systemImage: "arrow.left.arrow.right.circle.fill") }
-                .tag(1)
-
-            BrowserView()
-                .tabItem { Label("网页", systemImage: "safari.fill") }
-                .tag(2)
-
-            ProfileView()
-                .tabItem { Label("我的", systemImage: "person.crop.circle.fill") }
-                .tag(3)
+            VStack(spacing: 0) {
+                header
+                segment
+                content
+            }
         }
-        .tint(Theme.accent)
+        .sheet(isPresented: $showProfile) {
+            NavigationStack { ProfileView() }
+        }
         // 画中画的锚点必须挂在整个 App 的最外层，而不是某个页面里：
-        // 锚点一离开窗口，系统就会把画中画收掉——切 Tab、进后台都属于这种情况。
+        // 锚点一离开窗口，系统就会把画中画收掉——切模式、进后台都属于这种情况。
         // 系统录屏面板也放这里，首页的按钮只是"借"它的点击。
         .overlay(
             ZStack {
@@ -75,5 +87,89 @@ struct MainView: View {
             .opacity(0.01)
             .allowsHitTesting(false)
         )
+    }
+
+    // MARK: - 顶部
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            Image("Logo")
+                .resizable()
+                .scaledToFill()
+                .frame(width: 26, height: 26)
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+
+            Text("语幕")
+                .font(.system(size: 19, weight: .bold))
+                .tracking(2)
+                .foregroundStyle(Theme.ink)
+
+            Spacer(minLength: 8)
+
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                showProfile = true
+            } label: {
+                AvatarView(index: app.avatarIndex, size: 32)
+                    .overlay(
+                        Circle().strokeBorder(Theme.hairline, lineWidth: 0.8)
+                    )
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 4)
+        .padding(.bottom, 14)
+    }
+
+    // MARK: - 模式切换
+
+    private var segment: some View {
+        HStack(spacing: 26) {
+            ForEach(Mode.allCases) { m in
+                Button {
+                    guard mode != m else { return }
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    withAnimation(.easeOut(duration: 0.22)) { mode = m }
+                } label: {
+                    VStack(spacing: 7) {
+                        Text(m.rawValue)
+                            .font(.system(size: 16, weight: mode == m ? .semibold : .regular))
+                            .foregroundStyle(mode == m ? Theme.ink : Theme.sub)
+                        ZStack {
+                            Capsule().fill(Color.clear).frame(height: 2)
+                            if mode == m {
+                                Capsule()
+                                    .fill(Theme.accent)
+                                    .frame(height: 2)
+                                    .matchedGeometryEffect(id: "seg", in: segAnim)
+                            }
+                        }
+                        .frame(width: 44)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 6)
+    }
+
+    // MARK: - 内容
+
+    @ViewBuilder
+    private var content: some View {
+        Group {
+            switch mode {
+            case .subtitle:
+                HomeView()
+            case .interpreter:
+                InterpreterView()
+            }
+        }
+        .transition(.opacity)
+        .animation(.easeOut(duration: 0.18), value: mode)
     }
 }
