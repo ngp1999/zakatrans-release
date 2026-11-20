@@ -1,12 +1,14 @@
 import SwiftUI
+import PhotosUI
+import UIKit
 
-/// 「我的」：账号、积分、字幕样式、对话记录、协议。
-/// 所有数据都在云端，换手机登录同一个 Apple ID 就自动回来。
+/// 「我的」：账号、积分、对话记录、关于。
+/// 翻译相关的设置都在首页按钮里，这一页只管和"我"有关的东西。
 struct ProfileView: View {
     @ObservedObject private var cloud = Cloud.shared
     @ObservedObject private var app = AppState.shared
     @State private var showLogout = false
-    @State private var showAvatarPicker = false
+    @State private var picked: PhotosPickerItem?
 
     private var version: String {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
@@ -17,44 +19,47 @@ struct ProfileView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-            ScrollView {
-                VStack(spacing: 14) {
-                    accountCard
-                    creditRow
+        ScrollView {
+            VStack(spacing: 14) {
+                accountCard
+                creditRow
 
-                    SectionLabel("翻译设置")
-                    menuGroup
+                SectionLabel("数据")
+                dataGroup
 
-                    SectionLabel("数据与支持")
-                    dataGroup
+                SectionLabel("关于")
+                aboutGroup
 
-                    SectionLabel("关于")
-                    aboutGroup
-                    Text("版本 \(version)")
-                        .font(.system(size: 13).monospacedDigit())
-                        .foregroundStyle(Theme.faint)
-                        .padding(.top, 6)
-                        .padding(.bottom, 10)
+                Text("版本 \(version)")
+                    .font(.system(size: 13).monospacedDigit())
+                    .foregroundStyle(Theme.faint)
+                    .padding(.top, 6)
+                    .padding(.bottom, 10)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+        }
+        .background(Theme.bg)
+        .navigationTitle("我的")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("完成") { dismiss() }
+                    .fontWeight(.semibold)
+                    .foregroundStyle(Theme.accent)
+            }
+        }
+        .task { await cloud.refresh() }
+        .onChange(of: picked) { item in
+            guard let item else { return }
+            Task {
+                if let data = try? await item.loadTransferable(type: Data.self),
+                   let img = UIImage(data: data) {
+                    app.setAvatar(img)
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 10)
+                picked = nil
             }
-            .background(Theme.bg)
-            .navigationTitle("我的")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") { dismiss() }
-                        .fontWeight(.semibold)
-                        .foregroundStyle(Theme.accent)
-                }
-            }
-            .task { await cloud.refresh() }
-            .sheet(isPresented: $showAvatarPicker) {
-                AvatarPicker()
-                    .presentationDetents([.height(300)])
-                    .presentationDragIndicator(.visible)
-            }
+        }
         .alert("退出登录？", isPresented: $showLogout) {
             Button("取消", role: .cancel) {}
             Button("退出", role: .destructive) { cloud.logout() }
@@ -67,18 +72,22 @@ struct ProfileView: View {
 
     private var accountCard: some View {
         HStack(spacing: 14) {
-            Button {
-                showAvatarPicker = true
-            } label: {
-                AvatarView(index: app.avatarIndex, size: 54)
+            PhotosPicker(selection: $picked, matching: .images, photoLibrary: .shared()) {
+                AvatarView(size: 58)
                     .overlay(alignment: .bottomTrailing) {
-                        Image(systemName: "pencil.circle.fill")
-                            .font(.system(size: 16))
-                            .foregroundStyle(.white, Theme.accent)
+                        Image(systemName: "camera.fill")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 20, height: 20)
+                            .background(Theme.accent, in: Circle())
+                            .overlay(Circle().strokeBorder(Theme.card, lineWidth: 2))
                             .offset(x: 2, y: 2)
                     }
             }
             .buttonStyle(.plain)
+            .contextMenu {
+                Button("使用默认头像", role: .destructive) { app.setAvatar(nil) }
+            }
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(cloud.profile?.displayName ?? "语幕用户")
@@ -98,7 +107,7 @@ struct ProfileView: View {
         .card(padding: 18)
     }
 
-    // MARK: - 积分（一行，点进去看）
+    // MARK: - 积分
 
     private var creditRow: some View {
         NavigationLink {
@@ -130,23 +139,7 @@ struct ProfileView: View {
         .buttonStyle(RowButtonStyle())
     }
 
-    // MARK: - 菜单
-
-    private var menuGroup: some View {
-        VStack(spacing: 0) {
-            navRow(icon: "textformat.size", title: "字幕样式", tint: .blue) {
-                SubtitleSettingsView()
-            }
-            divider
-            navRow(icon: "speaker.wave.2", title: "朗读设置", tint: .purple) {
-                AudioOutputView()
-            }
-        }
-        .background(Theme.card)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
-    }
-
-    // MARK: - 数据与支持
+    // MARK: - 数据
 
     private var dataGroup: some View {
         VStack(spacing: 0) {
@@ -203,18 +196,20 @@ struct ProfileView: View {
 
     private var aboutGroup: some View {
         VStack(spacing: 0) {
-            NavigationLink { TermsView(kind: .terms) } label: { plainRow("用户协议") }
-                .buttonStyle(RowButtonStyle())
-            divider
-            NavigationLink { TermsView(kind: .privacy) } label: { plainRow("隐私政策") }
-                .buttonStyle(RowButtonStyle())
+            NavigationLink {
+                AboutView()
+            } label: {
+                rowContent(icon: "info.circle.fill", title: "关于语幕",
+                           tint: .gray, detail: "v\(version)", chevron: true)
+            }
+            .buttonStyle(RowButtonStyle())
             divider
             Button { showLogout = true } label: {
                 HStack {
-                    Text("退出登录").font(.system(size: 15)).foregroundStyle(Theme.warn)
+                    Text("退出登录").font(.system(size: 16)).foregroundStyle(Theme.warn)
                     Spacer()
                 }
-                .padding(.horizontal, 16).frame(height: 48)
+                .padding(.horizontal, 16).frame(height: 52)
                 .contentShape(Rectangle())
             }
             .buttonStyle(RowButtonStyle())
@@ -222,79 +217,31 @@ struct ProfileView: View {
         .background(Theme.card)
         .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
     }
-
-    private func plainRow(_ title: String) -> some View {
-        HStack {
-            Text(title).font(.system(size: 15)).foregroundStyle(Theme.ink)
-            Spacer()
-            Image(systemName: "chevron.right")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Theme.faint)
-        }
-        .padding(.horizontal, 16).frame(height: 48)
-        .contentShape(Rectangle())
-    }
 }
 
 // MARK: - 头像
 
-/// 默认头像：苹果系统人像 + 四种底色（男女各两款），不自己画脸，也不放 AI 图。
+/// 默认头像是系统灰底人像；换过头像就显示用户自己选的图。
+/// 不预置一堆卡通脸，免得用户觉得被塞了不喜欢的东西。
 struct AvatarView: View {
-    let index: Int
-    let size: CGFloat
-
-    static let tints: [Color] = [
-        Color(red: 0.55, green: 0.58, blue: 0.62),   // 石墨
-        Color(red: 0.30, green: 0.52, blue: 0.86),   // 蓝
-        Color(red: 0.20, green: 0.66, blue: 0.58),   // 青绿
-        Color(red: 0.86, green: 0.48, blue: 0.56),   // 粉
-    ]
+    var size: CGFloat
+    @ObservedObject private var app = AppState.shared
 
     var body: some View {
         ZStack {
-            Circle().fill(Self.tints[max(0, min(Self.tints.count - 1, index))])
-            Image(systemName: "person.fill")
-                .font(.system(size: size * 0.46, weight: .regular))
-                .foregroundStyle(.white.opacity(0.95))
-                .offset(y: size * 0.04)
+            if let img = app.avatarImage {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Circle().fill(Color(uiColor: .systemGray4))
+                Image(systemName: "person.fill")
+                    .font(.system(size: size * 0.46, weight: .regular))
+                    .foregroundStyle(.white.opacity(0.95))
+                    .offset(y: size * 0.04)
+            }
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
-    }
-}
-
-struct AvatarPicker: View {
-    @ObservedObject private var app = AppState.shared
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        VStack(spacing: 22) {
-            Text("选择头像")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(Theme.ink)
-                .padding(.top, 18)
-
-            HStack(spacing: 18) {
-                ForEach(0..<AvatarView.tints.count, id: \.self) { i in
-                    Button {
-                        app.avatarIndex = i
-                        dismiss()
-                    } label: {
-                        AvatarView(index: i, size: 62)
-                            .overlay(
-                                Circle().strokeBorder(
-                                    app.avatarIndex == i ? Theme.accent : Color.clear,
-                                    lineWidth: 3
-                                )
-                            )
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 20)
-        .background(Theme.bg)
     }
 }
