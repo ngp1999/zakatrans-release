@@ -11,9 +11,9 @@ on:
   workflow_dispatch:
     inputs:
       marketing_version:
-        description: "版本号（如 3.1.1）"
+        description: "版本号（必须高于 TestFlight 上已有的最高版本，如 3.5.1）"
         required: false
-        default: "3.2.0"
+        default: "3.5.1"
       upload:
         description: "上传到 TestFlight（true/false）"
         required: false
@@ -92,6 +92,16 @@ jobs:
           set -euo pipefail
           BUILD_NO="$(date +%s)"
           echo "BUILD_NO=$BUILD_NO" >> "$GITHUB_ENV"
+          # 版本号：没传就用 project.yml 里的；传了但不高于 project.yml 的一律以 project.yml 为准。
+          # 原因：TestFlight 按版本号排序，传低版本会被已有高版本盖住，用户装到的还是旧版。
+          FILE_MV="$(sed -n 's/.*MARKETING_VERSION: "\(.*\)".*/\1/p' ios/project.yml | head -1)"
+          MV_FINAL="${MV:-$FILE_MV}"
+          if [ "$(printf '%s\n%s\n' "$MV_FINAL" "$FILE_MV" | sort -V | tail -1)" != "$MV_FINAL" ]; then
+            echo "⚠️ 传入版本 $MV_FINAL 低于 project.yml 的 $FILE_MV，改用 $FILE_MV"
+            MV_FINAL="$FILE_MV"
+          fi
+          echo "📦 本次构建版本号 = $MV_FINAL"
+          echo "MV_FINAL=$MV_FINAL" >> "$GITHUB_ENV"
           xcodebuild -project ios/ZakaTrans.xcodeproj \
             -scheme ZakaTrans \
             -configuration Release \
@@ -101,7 +111,7 @@ jobs:
             -authenticationKeyPath "$ASC_KEY_FILE" \
             -authenticationKeyID "$ASC_KEY_ID" \
             -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
-            MARKETING_VERSION="${MV:-3.2.0}" \
+            MARKETING_VERSION="$MV_FINAL" \
             CURRENT_PROJECT_VERSION="$BUILD_NO" \
             DEVELOPMENT_TEAM=9VSZ8M2JL5 \
             CODE_SIGN_STYLE=Automatic \
