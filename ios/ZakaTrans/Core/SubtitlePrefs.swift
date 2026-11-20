@@ -18,8 +18,9 @@ struct SubtitlePrefs: Codable, Equatable {
     /// 语言模式：bilingual（双语）| zh（仅中文）| source（仅原文）
     var mode: String = "bilingual"
     /// 画中画窗口大小：
-    /// L 大（4:3 480×360）| M 中（16:9 576×324）| S 小（21:9 840×360）| W 全宽（5:1 1080×216）
-    var pip: String = "L"
+    /// W 全宽（5:1 1080×216，默认，最不挡画面）| L 大（4:3 480×360）
+    /// M 中（16:9 576×324）| S 小（21:9 840×360）
+    var pip: String = "W"
     /// 输出音频（把译文读出来）
     var tts: Bool = false
     /// 朗读语速 0.4~0.62（0.5 是系统正常语速）
@@ -33,7 +34,7 @@ struct SubtitlePrefs: Codable, Equatable {
     /// 译文语言：固定中文
     var destLang: String = "zh"
 
-    static let key = "zt_subtitle_prefs_v4"
+    static let key = "zt_subtitle_prefs_v5"
 
     init() {}
 
@@ -73,12 +74,24 @@ struct SubtitlePrefs: Codable, Equatable {
     }
 
     static func load() -> SubtitlePrefs {
-        for k in [key, "zt_subtitle_prefs_v3", "zt_subtitle_prefs_v2"] {
-            if let data = UserDefaults.standard.data(forKey: k),
-               var v = try? JSONDecoder().decode(SubtitlePrefs.self, from: data) {
-                if v.size == 19 { v.size = 20 }
-                return v
+        // v5 之前默认是大窗（4:3）。全宽档做成默认后，老存档一次性迁过来，
+        // 其它设置（字号、颜色、背景、朗读）原样保留。
+        if UserDefaults.standard.data(forKey: key) == nil {
+            for k in ["zt_subtitle_prefs_v4", "zt_subtitle_prefs_v3", "zt_subtitle_prefs_v2"] {
+                if let data = UserDefaults.standard.data(forKey: k),
+                   var v = try? JSONDecoder().decode(SubtitlePrefs.self, from: data) {
+                    if v.size == 19 { v.size = 20 }
+                    v.pip = "W"
+                    v.saveLocal()
+                    return v
+                }
             }
+            return SubtitlePrefs()
+        }
+        if let data = UserDefaults.standard.data(forKey: key),
+           var v = try? JSONDecoder().decode(SubtitlePrefs.self, from: data) {
+            if v.size == 19 { v.size = 20 }
+            return v
         }
         return SubtitlePrefs()
     }
@@ -202,9 +215,9 @@ struct SubtitlePrefs: Codable, Equatable {
         ("bilingual", "双语"), ("zh", "仅中文"), ("source", "仅原文"),
     ]
 
-    /// 窗口三档：选哪个，画中画开出来就是多大
+    /// 窗口四档：选哪个，画中画开出来就是多大。全宽排第一，也是默认。
     static let pipOptions: [(String, String)] = [
-        ("L", "大"), ("M", "中"), ("S", "小"), ("W", "全宽"),
+        ("W", "全宽"), ("L", "大"), ("M", "中"), ("S", "小"),
     ]
 
     /// 每档的实际尺寸，设置页拿来做说明
