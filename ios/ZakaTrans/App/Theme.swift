@@ -13,12 +13,17 @@ import UIKit
 enum Theme {
     // 品牌色：唯一强调色
     static let accent = Color(red: 0.06, green: 0.62, blue: 0.56)
-    static let accentSoft = Color(red: 0.06, green: 0.62, blue: 0.56).opacity(0.12)
+    static let accentSoft = Color(red: 0.06, green: 0.62, blue: 0.56).opacity(0.10)
 
-    // 系统语义色：深色模式自动适配
-    static let bg = Color(uiColor: .systemGroupedBackground)
+    // 系统语义色：深色模式自动适配。
+    // 底色用纯白/纯黑的 systemBackground，分组面用 secondarySystemBackground，
+    // 层次靠一块淡淡的填充 + 一根极细的分隔线，不靠投影——这样看起来像成品工具，不像模板。
+    static let bg = Color(uiColor: .systemBackground)
     static let bgElevated = Color(uiColor: .systemBackground)
-    static let card = Color(uiColor: .secondarySystemGroupedBackground)
+    static let card = Color(uiColor: .secondarySystemBackground)
+    static let surface = Color(uiColor: .secondarySystemBackground)
+    static let surfaceDeep = Color(uiColor: .tertiarySystemFill)
+    static let hairline = Color(uiColor: .separator).opacity(0.5)
     static let ink = Color(uiColor: .label)
     static let sub = Color(uiColor: .secondaryLabel)
     static let faint = Color(uiColor: .tertiaryLabel)
