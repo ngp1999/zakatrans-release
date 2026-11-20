@@ -29,6 +29,9 @@ static UIColor *gTextColor = nil;
 static NSString *gMode = @"bilingual";         // bilingual | zh | source
 static NSString *gBackground = @"black";       // 7 种实色背景，见 ZKBackgroundColor()
 static CGSize gPipSize = {480, 360};           // 4:3 大窗（默认）
+// 小窗兜底：窗口被拖得很小、字号已压到下限还是放不下时，原文限行（0 = 不限）。
+// 优先保住中文主字幕的完整，原文宁可截一行，也不把两个字都缩到看不清。
+static NSInteger gEnMaxLines = 0;
 static const CGFloat ZK_PARA_GAP = 14.0;      // 句与句之间的空档
 static const CGFloat ZK_MAX_BLOCKS = 120.0;   // 历史句上限（正常一场对话到不了）
 
@@ -61,6 +64,7 @@ static const CGFloat ZK_SPRING_W_BIG = 13.0;
     NSString *_appliedZh;
     CGFloat _appliedW;
     BOOL _appliedFirst;
+    NSInteger _appliedMaxLines;
     BOOL _faded;        // 淡入只做一次：这块已经露过脸了就不再闪
 }
 
@@ -205,7 +209,9 @@ static UIColor *ZKBackgroundColor(void) {
     self.zhText = zh;
 
     // 内容一个字都没变、宽度也没变：上一帧的排版结果直接复用，一次 sizeThatFits 都不做
+    // 注意：限行档位（小窗/大窗）也算排版输入的一部分，否则窗口缩小时字号变了却复用了旧排版
     if (!force && _appliedW == w && _appliedFirst == first &&
+        _appliedMaxLines == gEnMaxLines &&
         [_appliedEn isEqualToString:en] && [_appliedZh isEqualToString:zh]) {
         return;
     }
@@ -213,6 +219,8 @@ static UIColor *ZKBackgroundColor(void) {
     _appliedZh = [zh copy];
     _appliedW = w;
     _appliedFirst = first;
+    _appliedMaxLines = gEnMaxLines;
+    self.enLabel.numberOfLines = gEnMaxLines > 0 ? gEnMaxLines : 0;
 
     CGFloat padTop = first ? 0 : ZK_PARA_GAP;
 
@@ -265,6 +273,7 @@ static UIColor *ZKBackgroundColor(void) {
 - (void)freezeTailEn:(NSString *)en zh:(NSString *)zh;
 - (void)clearTail;
 - (void)relayoutAll;
+- (void)relayoutAllForce:(BOOL)force;
 - (void)rebuildWithLines:(NSArray *)lines;
 - (NSString *)liveZhText;
 - (NSString *)liveEnText;
@@ -310,16 +319,23 @@ static UIColor *ZKBackgroundColor(void) {
 }
 
 - (void)relayoutAll {
+    [self relayoutAllForce:NO];
+}
+
+// force=YES 时无视"文字没变就复用"的缓存，强制按当前字号重新排版。
+// 字号自适应必须走这条：窗口缩放时文字和宽度可能一模一样，只有字号变了，
+// 走缓存会直接被 return 掉——那正是「窗口变了但字没变」的根因。
+- (void)relayoutAllForce:(BOOL)force {
     CGFloat y = 0;
     NSUInteger i = 0;
     for (ZKBlockView *b in _blocks) {
-        [b applyEn:b.enText zh:b.zhText first:(i == 0) width:_w];
+        [b applyEn:b.enText zh:b.zhText first:(i == 0) width:_w force:force];
         b.frame = CGRectMake(0, y, _w, b.blockH);
         y += b.blockH;
         i++;
     }
     if (_tail) {
-        [_tail applyEn:_tail.enText zh:_tail.zhText first:(_blocks.count == 0) width:_w];
+        [_tail applyEn:_tail.enText zh:_tail.zhText first:(_blocks.count == 0) width:_w force:force];
         _tailFloorH = _tail.blockH;
         _tail.frame = CGRectMake(0, y, _w, _tail.blockH);
     }
@@ -446,6 +462,11 @@ static UIColor *ZKBackgroundColor(void) {
 - (void)appendLine:(NSDictionary *)d;
 - (void)setLiveEn:(NSString *)en zh:(NSString *)zh;
 - (void)setOffsetY:(CGFloat)y;
+- (CGSize)containerSize;
+- (void)startSizeProbe;
+- (void)stopSizeProbe;
+- (void)probeSize:(NSString *)why;
+- (void)applyAdaptiveFontForWidth:(CGFloat)w height:(CGFloat)h;
 @end
 
 // 按当前宽度量一段文字要占多高（和 UILabel 走同一套换行规则，用来判断放不放得下）
@@ -463,9 +484,25 @@ static CGFloat ZKTextHeight(NSString *text, CGFloat width, UIFont *font, CGFloat
     return isfinite(h) && h > 0 ? h : 0;
 }
 
+// 限行版：maxLines > 0 表示 UILabel 最多显示这么多行，高度也不能超过它。
+// 小窗兜底要用这个量，否则算出来的高度是"全文高度"，永远判成放不下、字号一路缩到底。
+static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CGFloat lineSpacing, NSInteger maxLines) {
+    CGFloat h = ZKTextHeight(text, width, font, lineSpacing);
+    if (maxLines <= 0 || h <= 0) return h;
+    CGFloat cap = ceil((font.lineHeight + lineSpacing) * maxLines + 1.0);
+    return MIN(h, cap);
+}
+
 @implementation ZKSubtitleVC {
     CGFloat _lastLayoutW;
     CGFloat _lastLayoutH;
+    // 画中画窗口尺寸探测：系统的 PiP 窗口可以被用户随时拖着放大缩小，
+    // 而 viewDidLayoutSubviews 不一定每次都来（后台渲染、系统只换 surface）。
+    // 所以这里存一份"上次看到的真实尺寸"，由 布局回调 / 轮询 / 转场回调 三路一起喂。
+    CGFloat _probeW;
+    CGFloat _probeH;
+    NSTimer *_probeTimer;
+    NSInteger _adaptMask;       // 上次生效的 (字号×10, 原文限行) 组合，用来判断要不要重排
     NSString *_lastKey;
     NSMutableArray<NSString *> *_recentKeys;
     CADisplayLink *_link;
@@ -529,6 +566,8 @@ static CGFloat ZKTextHeight(NSString *text, CGFloat width, UIFont *font, CGFloat
     rise.duration = 0.36;
     rise.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
     [self.stream.layer addAnimation:rise forKey:@"zkrise"];
+
+    [self startSizeProbe];
 }
 
 - (void)onFrame:(CADisplayLink *)link {
@@ -593,56 +632,165 @@ static CGFloat ZKTextHeight(NSString *text, CGFloat width, UIFont *font, CGFloat
 - (void)shutdown {
     [_link invalidate];
     _link = nil;
+    [self stopSizeProbe];
+}
+
+#pragma mark 窗口尺寸探测
+
+// 内容视图的真实尺寸。画中画里系统把 content VC 的 view 放进 PiP 窗口，尺寸跟着窗口走。
+// 这几层（自己 / 父视图 / 宿主控制器 / 展示层）里取"有效且最小"的那个：
+// 宁可少算、绝不用一个更大的容器尺寸去算字号，否则窗口小的时候字还是大的。
+- (CGSize)containerSize {
+    NSMutableArray<NSValue *> *cands = [NSMutableArray array];
+    void (^add)(CGRect) = ^(CGRect r) {
+        if (isfinite(r.size.width) && isfinite(r.size.height) && r.size.width >= 1 && r.size.height >= 1) {
+            [cands addObject:[NSValue valueWithCGSize:r.size]];
+        }
+    };
+    add(self.view.bounds);
+    if (self.view.superview) add(self.view.superview.bounds);
+    if (self.parentViewController.isViewLoaded) add(self.parentViewController.view.bounds);
+    CALayer *pl = self.view.layer.presentationLayer;
+    if (pl) add(pl.bounds);
+
+    CGSize content = CGSizeZero;
+    CGFloat bestArea = CGFLOAT_MAX;
+    for (NSValue *v in cands) {
+        CGSize s = v.CGSizeValue;
+        CGFloat area = s.width * s.height;
+        if (area < bestArea) { bestArea = area; content = s; }
+    }
+    if (content.width < 1 || content.height < 1) return CGSizeZero;
+
+    // 画中画窗口本身：系统有时不同步改内容视图的尺寸，只换 surface 做整体缩放，
+    // 那时窗口的 bounds 才是"用户实际拖到多大"。
+    // 只在「比内容区小」且「宽高比接近」时采信——否则会把 App 主窗口（竖屏、
+    // 比例完全不同）误当成画中画窗口，把 21:9 宽条档的字号算小。
+    CGRect wr = self.view.window.bounds;
+    CGSize ws = wr.size;
+    if (isfinite(ws.width) && isfinite(ws.height) && ws.width >= 1 && ws.height >= 1) {
+        CGFloat contentRatio = content.width / MAX(1.0, content.height);
+        CGFloat windowRatio = ws.width / MAX(1.0, ws.height);
+        BOOL closeAspect = (windowRatio > contentRatio * 0.78 && windowRatio < contentRatio * 1.28);
+        if ((ws.width * ws.height) < bestArea && closeAspect) return ws;
+    }
+    return content;
+}
+
+// 系统的画中画窗口随时可以被用户拖着放大缩小，而且不保证每次都走 layout 回调
+// （内容视图在后台渲染，系统有时只换 surface、不重排 view）。
+// 所以除了 layout / 转场回调，再加一条 0.25s 的轻量轮询——只读几个 bounds 做比较，
+// 不触发任何绘制，这是"任意时刻都能发现窗口变化"的兜底。
+- (void)startSizeProbe {
+    if (_probeTimer) return;
+    __weak typeof(self) weakSelf = self;
+    NSTimer *t = [NSTimer timerWithTimeInterval:0.25 repeats:YES block:^(NSTimer *tm) {
+        typeof(self) s = weakSelf;
+        if (!s) { [tm invalidate]; return; }
+        [s probeSize:@"tick"];
+    }];
+    _probeTimer = t;
+    [[NSRunLoop mainRunLoop] addTimer:t forMode:NSRunLoopCommonModes];
+}
+
+- (void)stopSizeProbe {
+    [_probeTimer invalidate];
+    _probeTimer = nil;
+}
+
+- (void)probeSize:(NSString *)why {
+    CGSize s = [self containerSize];
+    if (s.width < 1 || s.height < 1) return;
+    if (_probeW > 0 && fabs(s.width - _probeW) <= 0.5 && fabs(s.height - _probeH) <= 0.5) return;
+    _probeW = s.width;
+    _probeH = s.height;
+    _lastLayoutW = s.width;
+    _lastLayoutH = s.height;
+    [ZKStore log:@"pip size %@ %.0fx%.0f", why, s.width, s.height];
+    [self applyAdaptiveFontForWidth:s.width height:s.height];
+    [self applyGeometry];
 }
 
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
-    CGFloat w = self.scroll.bounds.size.width;
-    CGFloat h = self.scroll.bounds.size.height;
-    if (w <= 0 || h <= 0) return;
-    if (fabs(w - _lastLayoutW) > 0.5 || fabs(h - _lastLayoutH) > 0.5) {
-        _lastLayoutW = w;
-        _lastLayoutH = h;
-        // 系统画中画窗口是能被人手拖大拖小的，字号必须跟着窗口走，
-        // 否则拖成小窗后就只剩半行英文——这是这版要解决的核心体验问题
-        [self applyAdaptiveFontForWidth:w height:h];
-        [self applyGeometry];
-    }
+    [self probeSize:@"layout"];
+}
+
+- (void)viewWillTransitionToSize:(CGSize)size
+       withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
+    [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
+    __weak typeof(self) weakSelf = self;
+    [coordinator animateAlongsideTransition:nil
+                                 completion:^(id<UIViewControllerTransitionCoordinatorContext> ctx) {
+        [weakSelf probeSize:@"transition"];
+    }];
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    [self startSizeProbe];
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+    [super viewWillDisappear:animated];
+    [self stopSizeProbe];
 }
 
 #pragma mark 字号自适应
 
-// 窗口尺寸变了就重算字号：
-// 1) 先按窗口相对基准窗口（480×360）的比例缩放用户选的字号；
-// 2) 再按"最后这一句（原文 + 译文）能不能整段塞进当前窗口"往下收，
-//    小窗里宁可字小一点，也要让中英两行同时看得全。
+// 窗口尺寸变了就重算字号。
+// 1) 以 480×360 为基准窗，按面积比（开方）缩放用户选的字号；
+//    不用 min(宽比, 高比)——用户拖窗口时宽高同时变，min 会让"窗口大了两圈字只涨一点"，
+//    看着就是没有自适应。
+// 2) 再按"最后这一句（译文 + 原文）能不能整段塞进当前窗口"往下收；
+//    字号收到下限还放不下，才把原文限成一行——中文主字幕优先保完整。
 - (void)applyAdaptiveFontForWidth:(CGFloat)w height:(CGFloat)h {
     if (w < 1 || h < 1) return;
 
-    CGFloat scale = MIN(w / 480.0, h / 360.0);
-    scale = MAX(0.45, MIN(1.30, scale));
-    CGFloat zh = MAX(9.0, MIN(34.0, gZhBase * scale));
+    CGFloat areaRatio = (w * h) / (480.0 * 360.0);
+    CGFloat scale = sqrt(MAX(0.04, areaRatio));
+    scale = MAX(0.40, MIN(2.20, scale));
+
+    CGFloat zh = MAX(9.0, MIN(60.0, gZhBase * scale));
     CGFloat en = MAX(8.0, zh * 0.66);
+    NSInteger enLines = 0;
 
     NSString *zt = [self.stream liveZhText];
     NSString *et = [self.stream liveEnText];
-    // 窗口特别矮的时候，别把原文字号压得比译文字还大
-    for (int i = 0; i < 6; i++) {
-        CGFloat zhH = ZKTextHeight(zt, w, [UIFont boldSystemFontOfSize:zh], 2.0);
-        CGFloat enH = ZKTextHeight(et, w, [UIFont systemFontOfSize:en], 1.0);
+
+    for (int i = 0; i < 10; i++) {
+        CGFloat zhH = ZKTextHeightLines(zt, w, [UIFont boldSystemFontOfSize:zh], 2.0, 0);
+        CGFloat enH = ZKTextHeightLines(et, w, [UIFont systemFontOfSize:en], 1.0, enLines);
         CGFloat gap = (zhH > 0 && enH > 0) ? 2.0 : 0.0;
         CGFloat need = zhH + enH + gap;
-        if (need <= 0 || need <= h * 0.92) break;
-        CGFloat k = MAX(0.60, (h * 0.92) / need);
-        zh = MAX(8.5, zh * k);
-        en = MAX(7.5, en * k);
-        if (k >= 0.999) break;
+        if (need <= 0 || need <= h * 0.94) break;
+
+        if (zh > 10.0) {                       // 先缩字号
+            CGFloat k = MAX(0.62, (h * 0.94) / need);
+            zh = MAX(10.0, zh * k);
+            en = MAX(8.0, zh * 0.66);
+            continue;
+        }
+        if (enLines == 0) { enLines = 1; continue; }   // 字号到底了：原文限一行
+        CGFloat k2 = MAX(0.55, (h * 0.94) / need);
+        zh = MAX(8.5, zh * k2);
+        en = MAX(7.5, en * k2);
+        break;
     }
 
-    if (fabs(zh - gZhSize) < 0.6 && fabs(en - gEnSize) < 0.6) return;
+    NSInteger mask = (NSInteger)lround(zh * 10.0);
+    BOOL changed = (mask != _adaptMask) || (enLines != gEnMaxLines)
+                   || fabs(zh - gZhSize) > 0.25 || fabs(en - gEnSize) > 0.25;
     gZhSize = zh;
     gEnSize = en;
-    [self.stream relayoutAll];
+    gEnMaxLines = enLines;
+    if (!changed) return;
+    _adaptMask = mask;
+    [ZKStore log:@"pip adapt %.0fx%.0f zh=%.1f en=%.1f lines=%ld", w, h, zh, en, (long)enLines];
+
+    // 必须 force：窗口缩放时文字内容往往一字没变，走缓存就把这次重排吞掉了，
+    // 表现就是"字号算了新的、屏幕上还是老字号"。
+    [self.stream relayoutAllForce:YES];
 }
 
 #pragma mark 几何
@@ -725,11 +873,18 @@ static CGFloat ZKTextHeight(NSString *text, CGFloat width, UIFont *font, CGFloat
         ? [UIColor colorWithWhite:0.35 alpha:1]
         : [UIColor colorWithWhite:1.0 alpha:0.55];
     _lastLayoutW = 0;
+    _probeW = 0;        // 让探测重新认一次尺寸：改字号后必须重新算自适应
+    _probeH = 0;
     [self.view setNeedsLayout];
     [self.view layoutIfNeeded];
-    [self applyAdaptiveFontForWidth:self.scroll.bounds.size.width
-                             height:self.scroll.bounds.size.height];
-    [self.stream relayoutAll];
+    CGSize cs = [self containerSize];
+    if (cs.width >= 1 && cs.height >= 1) {
+        _probeW = cs.width;
+        _probeH = cs.height;
+        [self applyAdaptiveFontForWidth:cs.width height:cs.height];
+    }
+    // 用户改字号/颜色时文字内容没变，走缓存就不生效 → 这里必须强制重排
+    [self.stream relayoutAllForce:YES];
     [self applyGeometry];
 }
 
