@@ -21,7 +21,7 @@ struct AudioOutputView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            ScrollView {
+            FitScroll(cap: UIScreen.main.bounds.height * 0.60 - SafeArea.bottom) {
                 VStack(spacing: 14) {
                     switchCard
                     RateCard()
@@ -29,10 +29,9 @@ struct AudioOutputView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 6)
-                .padding(.bottom, 24)
+                .padding(.bottom, 10)
             }
         }
-        .background(Theme.bg)
     }
 
     private var header: some View {
