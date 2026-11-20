@@ -182,12 +182,26 @@ final class WebBrowserModel: NSObject, ObservableObject {
         """, completionHandler: nil)
     }
 
+    /// 从抓到的媒体地址里挑一个能整段播的：
+    /// HLS 主播放列表（m3u8）优先，其次 mp4 这类整文件，分片地址一律不用。
+    private var bestMediaURL: String? {
+        if let hls = mediaURLs.last(where: { $0.lowercased().contains("m3u8") }) { return hls }
+        if let f = mediaURLs.last(where: {
+            let l = $0.lowercased()
+            return l.contains(".mp4") || l.contains(".mov") || l.contains(".webm")
+        }) { return f }
+        return nil
+    }
+
     /// 点「用字幕播放」：把地址、Referer、Cookie 一起整理好
     func startPlaying() {
         pauseWebMedia()
         guard var v = detected ?? lastVideo else { hint = "还没检测到视频"; return }
-        if v.url.isEmpty || v.url.hasPrefix("blob:") {
-            if let m = mediaURLs.last { v.url = m }
+        // 空地址、blob:、或者抓到的是分片/未知格式 —— 都换成能整段播的那个
+        let l = v.url.lowercased()
+        let whole = l.contains("m3u8") || l.contains(".mp4") || l.contains(".mov") || l.contains(".webm")
+        if v.url.isEmpty || v.url.hasPrefix("blob:") || !whole {
+            if let m = bestMediaURL { v.url = m }
         }
         guard !v.url.isEmpty, !v.url.hasPrefix("blob:"), let u = URL(string: v.url) else {
             hint = "这个视频的地址拿不到，回网页里点播放再试一次"
@@ -235,7 +249,7 @@ final class WebBrowserModel: NSObject, ObservableObject {
         if (!u) return false;
         var s = String(u).toLowerCase();
         if (s.indexOf('blob:') === 0 || s.indexOf('data:') === 0) return false;
-        if (/\\.(m3u8|mp4|flv|mkv|webm|mov|ts|m4s)([?#]|$)/.test(s)) return true;
+        if (/\\.(m3u8|mp4|flv|mkv|webm|mov)([?#]|$)/.test(s)) return true;
         if (s.indexOf('m3u8') >= 0) return true;
         if (s.indexOf('/hls/') >= 0) return true;
         return false;
