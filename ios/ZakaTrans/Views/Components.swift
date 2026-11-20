@@ -54,3 +54,78 @@ struct PipAnchor: UIViewRepresentable {
         AppState.shared.anchorView = uiView
     }
 }
+
+// MARK: - 顺手的滑动条
+
+/// 自己画的滑动条。
+///
+/// 系统 Slider 放在 ScrollView 里有个老毛病：横向拖动时会被纵向滚动抢走手势，
+/// 手指划过去要么不动、要么跳一下，用起来就是"卡"。这里用高优先级拖拽手势接管，
+/// 并且只在松手时回写设置（拖动过程只更新本地值），不每一帧都触发同步。
+struct FluidSlider: View {
+    let value: Double
+    let range: ClosedRange<Double>
+    var step: Double = 0
+    /// 拖动中（本地即时刷新用）
+    var onChanged: (Double) -> Void = { _ in }
+    /// 松手（落库 / 同步用）
+    var onEnded: (Double) -> Void = { _ in }
+
+    @State private var dragValue: Double?
+
+    private var current: Double { dragValue ?? value }
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = max(1, geo.size.width)
+            let knob: CGFloat = 26
+            let travel = max(1, w - knob)
+            let span = range.upperBound - range.lowerBound
+            let frac = span > 0 ? min(1, max(0, (current - range.lowerBound) / span)) : 0
+            let x = travel * CGFloat(frac)
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Theme.fill)
+                    .frame(height: 4)
+
+                Capsule()
+                    .fill(Theme.accent)
+                    .frame(width: x + knob / 2, height: 4)
+
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: knob, height: knob)
+                    .shadow(color: .black.opacity(0.18), radius: 4, y: 1)
+                    .overlay(Circle().strokeBorder(Theme.hairline, lineWidth: 0.5))
+                    .offset(x: x)
+            }
+            .frame(height: knob)
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { g in
+                        var v = range.lowerBound
+                        if travel > 0 {
+                            let ratio = Double(min(travel, max(0, g.location.x - knob / 2)) / travel)
+                            v = range.lowerBound + ratio * span
+                        }
+                        if step > 0 { v = (v / step).rounded() * step }
+                        v = min(range.upperBound, max(range.lowerBound, v))
+                        if let d = dragValue, abs(d - v) < 0.0001 { return }
+                        dragValue = v
+                        onChanged(v)
+                    }
+                    .onEnded { _ in
+                        let v = dragValue ?? value
+                        dragValue = nil
+                        onEnded(v)
+                    }
+            )
+        }
+        .frame(height: 34)
+        .accessibilityElement()
+        .accessibilityValue(String(format: "%.1f", current))
+    }
+}
