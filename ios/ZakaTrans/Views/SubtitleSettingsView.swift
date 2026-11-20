@@ -1,59 +1,64 @@
 import SwiftUI
 
-/// 字幕样式：字号、颜色、背景、显示什么、字幕浮窗大小。
-/// 以 80% 高度的面板弹出（不再整屏），点面板外空白处关闭，右上角不放关闭按钮。
-/// 改一处立刻生效，并自动同步到云端。
+/// 字幕样式：颜色、背景、字幕内容、悬浮窗大小、收音模式。
+/// 设置项一律「左边文字、右边控件」排在一行，行与行之间一条细线，好扫读。
+/// 上面是一块真预览：窗口比例、字号、行数、滚动方式都跟画中画里一模一样。
 struct SubtitleSettingsView: View {
     @ObservedObject private var app = AppState.shared
 
-    /// 预览播放：跟真实字幕一模一样——一句一句推上来，不是一张静态图
-    @State private var rollIndex: Int = 0
+    /// 预览里正在往上滚的那几行（中档 / 大档）
+    @State private var feed: [PreviewLine] = []
     @State private var ticker: Timer?
+    /// 小档（5:1）：一次上一批，整批换
+    @State private var wideIndex = 0
+
+    private struct PreviewLine: Identifiable, Equatable {
+        let id = UUID()
+        let zh: String
+        let src: String
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            FitScroll(cap: UIScreen.main.bounds.height * 0.72 - SafeArea.bottom) {
-                VStack(spacing: 14) {
+            FitScroll(cap: UIScreen.main.bounds.height * 0.70 - SafeArea.bottom) {
+                VStack(spacing: 12) {
                     previewCard
-                    styleCard
-                    pipCard
+                    lookCard
+                    windowCard
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, 4)
-                .padding(.bottom, 12)
+                .padding(.top, 2)
+                .padding(.bottom, 10)
             }
         }
-        .onAppear {
-            startPreviewLoop()
-        }
+        .onAppear { restartPreview() }
         .onDisappear {
             ticker?.invalidate()
             ticker = nil
         }
-        .onChange(of: app.prefs.pip) { _ in rollIndex += 1 }
+        .onChange(of: app.prefs.pip) { _ in restartPreview() }
+        .onChange(of: app.prefs.mode) { _ in restartPreview() }
     }
 
     private var header: some View {
-        ZStack {
-            VStack(spacing: 5) {
-                Capsule()
-                    .fill(Theme.faint.opacity(0.45))
-                    .frame(width: 36, height: 4.5)
-                Text("字幕样式")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Theme.ink)
-            }
+        VStack(spacing: 5) {
+            Capsule()
+                .fill(Theme.faint.opacity(0.45))
+                .frame(width: 36, height: 4.5)
+            Text("字幕样式")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(Theme.ink)
         }
         .padding(.top, 8)
         .padding(.bottom, 6)
         .frame(maxWidth: .infinity)
-        .frame(height: 56)
+        .frame(height: 54)
     }
 
-    // MARK: - 预览
+    // MARK: - 预览窗口的尺寸
 
-    /// 三档窗口的真实尺寸，和画中画里开出来的一模一样
+    /// 三档窗口的真实像素，跟画中画里开出来的一致
     private var realDim: CGSize {
         switch app.prefs.pip {
         case "M": return CGSize(width: 840, height: 360)
@@ -62,64 +67,44 @@ struct SubtitleSettingsView: View {
         }
     }
 
-    /// 预览框：按真实窗口的宽高等比缩小，比例跟画中画完全一致
-    private var previewMetrics: (w: CGFloat, h: CGFloat, k: CGFloat) {
+    /// 预览框：**一律铺满可用宽度**，高度按各自比例算。
+    /// 以前是按高度上限反推缩放比，大窗反而被压窄了——越大越窄，看着就不对。
+    private var metrics: (w: CGFloat, h: CGFloat, k: CGFloat) {
         let dim = realDim
-        let maxW = UIScreen.main.bounds.width - 32 - 32
-        let maxH: CGFloat = app.prefs.pip == "X" ? 92 : 196
-        let k = min(maxW / dim.width, maxH / dim.height)
-        return (dim.width * k, dim.height * k, k)
+        let w = UIScreen.main.bounds.width - 32 - 32
+        let k = w / dim.width
+        let h = dim.height * k
+        let cap: CGFloat = 224
+        if h > cap {                       // 只有特别矮的屏才会走到这里
+            let k2 = cap / dim.height
+            return (dim.width * k2, cap, k2)
+        }
+        return (w, h, k)
     }
 
-    /// 字号算法跟画中画里同一套，只是整体乘上缩放比 k
-    private func previewFonts(width w: CGFloat, height h: CGFloat, k: CGFloat) -> (zh: CGFloat, src: CGFloat) {
+    /// 字号：跟画中画同一套算法，再乘以预览的缩放比
+    private func previewFonts(k: CGFloat) -> (zh: CGFloat, src: CGFloat) {
+        let dim = realDim
         if app.prefs.pip == "X" {
-            // 小档：只跟窗口长宽走，跟句子长短无关
-            let f = min(realDim.width / 24.0, realDim.height / 4.5)
+            let f = min(dim.width / 24.0, dim.height / 4.5)
             let font = max(11.0, min(46.0, f)) * k
             return (font, font * 0.68)
         }
-        // 竖排档：以 480×360 为基准，按面积比（开方）缩放
-        let scale = max(0.45, min(2.10, sqrt((realDim.width * realDim.height) / (480.0 * 360.0))))
+        let scale = max(0.45, min(2.10, sqrt((dim.width * dim.height) / (480.0 * 360.0))))
         let zh = max(9.5, min(58.0, app.prefs.size * scale)) * k
         return (zh, zh * 0.66)
     }
 
-    /// 小档上屏的那一批：一两句，整批一起换
-    private var wideBatch: (zh: String, src: String) {
-        let n = Self.samples.count
-        let a = Self.samples[rollIndex % n]
-        let b = Self.samples[(rollIndex + 1) % n]
-        // 两句拼一行常常塞不下，那就只放一句——跟真窗口的整批判定是同一个取舍
-        let zhW = a.zh.count + b.zh.count
-        if zhW <= 14 { return (a.zh + "\u{3000}" + b.zh, a.src + "  " + b.src) }
-        return (a.zh, a.src)
-    }
-
-    /// 中档 / 大档：竖向多行，最新的在最下面，满了往上游——跟真实字幕流一样。
-    /// 每句「中文在上、原文在下」，能站几行按窗口算，不写死。
-    private var stackedBatch: [(zh: String, src: String)] {
-        let m = previewMetrics
-        let f = previewFonts(width: m.w, height: m.h, k: m.k)
-        let rowH = (f.zh * 1.24 + f.src * 1.26) * (app.prefs.mode == "bilingual" ? 1.0 : 0.62)
-        let can = max(2, Int((m.h - 10) / max(8, rowH + 3)))
-        let total = Self.samples.count
-        let start = rollIndex % total
-        var out: [(zh: String, src: String)] = []
-        for i in 0..<min(can, total) {
-            out.append(Self.samples[(start + i) % total])
-        }
-        return out
-    }
+    // MARK: - 预览
 
     private var previewCard: some View {
-        let m = previewMetrics
+        let m = metrics
         return ZStack {
             app.prefs.backgroundColor
             if app.prefs.pip == "X" {
                 widePreview(m)
             } else {
-                stackedPreview(m)
+                rollingPreview(m)
             }
         }
         .frame(width: m.w, height: m.h)
@@ -133,11 +118,13 @@ struct SubtitleSettingsView: View {
 
     /// 小档（5:1）：中文一行在上、原文一行在下，整批换
     private func widePreview(_ m: (w: CGFloat, h: CGFloat, k: CGFloat)) -> some View {
-        let f = previewFonts(width: m.w, height: m.h, k: m.k)
-        let batch = wideBatch
-        return VStack(spacing: max(1, m.h * 0.05)) {
+        let f = previewFonts(k: m.k)
+        let a = Self.samples[wideIndex % Self.samples.count]
+        let b = Self.samples[(wideIndex + 1) % Self.samples.count]
+        let two = (a.zh.count + b.zh.count) <= 14
+        return VStack(spacing: max(1, m.h * 0.06)) {
             if app.prefs.mode != "source" {
-                Text(batch.zh)
+                Text(two ? a.zh + "\u{3000}" + b.zh : a.zh)
                     .font(.system(size: f.zh, weight: .bold))
                     .foregroundStyle(Color(uiColor: app.prefs.effectiveColor))
                     .lineLimit(2)
@@ -145,171 +132,271 @@ struct SubtitleSettingsView: View {
                     .multilineTextAlignment(.center)
             }
             if app.prefs.mode != "zh" {
-                Text(batch.src)
+                Text(two ? a.src + "  " + b.src : a.src)
                     .font(.system(size: f.src))
-                    .foregroundStyle(Color(uiColor: app.prefs.secondaryColor).opacity(0.72))
+                    .foregroundStyle(Color(uiColor: app.prefs.secondaryColor))
                     .lineLimit(2)
                     .minimumScaleFactor(1)
                     .multilineTextAlignment(.center)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-        .padding(.horizontal, 5)
-        .id(rollIndex)
-        .transition(.asymmetric(insertion: .offset(y: 5).combined(with: .opacity), removal: .opacity))
+        .padding(.horizontal, 6)
+        .id(wideIndex)
+        .transition(.opacity)
     }
 
-    /// 中档 / 大档：竖排多行，看得见好几句在往上游
-    private func stackedPreview(_ m: (w: CGFloat, h: CGFloat, k: CGFloat)) -> some View {
-        let f = previewFonts(width: m.w, height: m.h, k: m.k)
-        let items = stackedBatch
-        return VStack(alignment: .leading, spacing: max(2, m.h * 0.012)) {
-            ForEach(items.indices, id: \.self) { i in
-                let it = items[i]
-                VStack(alignment: .leading, spacing: max(0.5, m.h * 0.003)) {
+    /// 中档 / 大档：真正的字幕流——新句从底下进来，整排一起往上推，最上面那行推出去。
+    /// 以前是整块内容一起换（三行同时变），看着像图片切换；现在每行单独进出，
+    /// 观感就是「由下往上滚」。
+    private func rollingPreview(_ m: (w: CGFloat, h: CGFloat, k: CGFloat)) -> some View {
+        let f = previewFonts(k: m.k)
+        let rowH = rowHeight(f: f)
+        let gap = max(2, m.h * 0.014)
+        return VStack(alignment: .leading, spacing: gap) {
+            ForEach(feed) { it in
+                VStack(alignment: .leading, spacing: max(0.5, m.h * 0.004)) {
                     if app.prefs.mode != "source" {
                         Text(it.zh)
                             .font(.system(size: f.zh, weight: .bold))
                             .foregroundStyle(Color(uiColor: app.prefs.effectiveColor))
-                            .lineLimit(2)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.5)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     if app.prefs.mode != "zh" {
                         Text(it.src)
                             .font(.system(size: f.src))
-                            .foregroundStyle(Color(uiColor: app.prefs.secondaryColor).opacity(0.72))
-                            .lineLimit(2)
+                            .foregroundStyle(Color(uiColor: app.prefs.secondaryColor))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.5)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
+                .frame(height: app.prefs.mode == "bilingual" ? rowH : rowH * 0.6, alignment: .center)
+                .transition(.asymmetric(
+                    insertion: .move(edge: .bottom).combined(with: .opacity),
+                    removal: .move(edge: .top).combined(with: .opacity)
+                ))
             }
-            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .id(rollIndex)
-        .transition(.asymmetric(insertion: .offset(y: 8).combined(with: .opacity), removal: .opacity))
+        .padding(.vertical, 6)
+        .clipped()
     }
 
-    /// 预览里念的是一段励志的话
+    private func rowHeight(f: (zh: CGFloat, src: CGFloat)) -> CGFloat {
+        app.prefs.mode == "bilingual" ? (f.zh * 1.22 + f.src * 1.22 + 2) : f.zh * 1.3
+    }
+
+    /// 这块窗口能站几行
+    private var visibleRows: Int {
+        let m = metrics
+        let f = previewFonts(k: m.k)
+        let h = rowHeight(f: f) + max(2, m.h * 0.014)
+        return max(1, Int((m.h - 12) / max(6, h)))
+    }
+
+    private func restartPreview() {
+        ticker?.invalidate()
+        ticker = nil
+        feed = Self.tail(count: visibleRows, endingAt: 0)
+        wideIndex = 0
+        let t = Timer.scheduledTimer(withTimeInterval: 1.9, repeats: true) { _ in
+            advance()
+        }
+        RunLoop.main.add(t, forMode: .common)
+        ticker = t
+    }
+
+    private func advance() {
+        if app.prefs.pip == "X" {
+            withAnimation(.easeInOut(duration: 0.28)) { wideIndex += 1 }
+            return
+        }
+        let next = (feed.last.flatMap { Self.indexOf($0) } ?? -1) + 1
+        let line = PreviewLine(zh: Self.samples[wrap(next)].zh, src: Self.samples[wrap(next)].src)
+        withAnimation(.easeInOut(duration: 0.46)) {
+            if feed.count >= visibleRows { feed.removeFirst() }
+            feed.append(line)
+        }
+    }
+
+    private func wrap(_ i: Int) -> Int {
+        let n = Self.samples.count
+        return ((i % n) + n) % n
+    }
+
+    private static func indexOf(_ line: PreviewLine) -> Int? {
+        samples.firstIndex { $0.zh == line.zh }
+    }
+
+    /// 从 endingAt 这一句往前数 count 行（最后一句在最下面）
+    private static func tail(count: Int, endingAt end: Int) -> [PreviewLine] {
+        var out: [PreviewLine] = []
+        for i in stride(from: count - 1, through: 0, by: -1) {
+            let idx = ((end - i) % samples.count + samples.count) % samples.count
+            out.append(PreviewLine(zh: samples[idx].zh, src: samples[idx].src))
+        }
+        return out
+    }
+
+    /// 预览念的这段：安静积累的那类励志文字，句子长短都有，正好试排版
     private static let samples: [(zh: String, src: String)] = [
-        ("你走过的每一步都算数", "Every step you take counts"),
-        ("慢一点没关系，别停下来", "Slow down if you must, just don't stop"),
-        ("真正拉开差距的，是没人看见的时候", "What sets you apart happens when unseen"),
-        ("把今天过好，明天自然会来", "Live today well and tomorrow will come"),
-        ("你还年轻，可以成为任何你想成为的人", "You are young enough to be anyone you want"),
+        ("学会和生活里的平淡相处", "Learn to live with the ordinariness of life"),
+        ("不必时刻追求轰轰烈烈的进展", "No need to chase dramatic progress all the time"),
+        ("不用因为日子缺少惊喜就觉得失落", "Don't feel lost just because days lack surprises"),
+        ("我们大多时候都处在安静积累的阶段", "Most of the time we are quietly accumulating"),
+        ("不用强迫自己每天都有亮眼的收获", "Don't force yourself to shine every single day"),
+        ("不用拿短暂的结果评判自己的付出", "Don't judge your effort by short-term results"),
+        ("守住内心的安稳 专注手中的事情", "Keep an inner calm and focus on the task at hand"),
+        ("不用被外界嘈杂的声音打乱步调", "Don't let the noise outside break your pace"),
+        ("不用跟风追赶别人前行的速度", "No need to chase the speed others are moving at"),
+        ("允许过程缓慢 允许暂时没有回响", "Allow slow progress, allow no echo for a while"),
+        ("允许自己偶尔疲惫 偶尔陷入迷茫", "Allow yourself to be tired, to feel lost sometimes"),
+        ("不用一没有起色就着急否定自己", "Don't rush to deny yourself when nothing shows yet"),
+        ("把注意力放回当下要完成的小事", "Bring your attention back to the small thing at hand"),
+        ("保持松弛而坚定的状态慢慢往前走", "Stay relaxed but steady, and keep moving"),
+        ("不用预想未来所有未知的困难", "Don't pre-imagine every unknown difficulty ahead"),
+        ("也不用纠结当下一时的得失起落", "Don't agonize over momentary gains and losses"),
+        ("只要持续做该做的事 不轻易停下", "Just keep doing what should be done, don't stop easily"),
+        ("慢慢就会发现很多改变都在悄悄发生", "Slowly you'll find many changes happening quietly"),
+        ("那些安静度过的时光从不会被辜负", "The quiet hours you spend are never wasted"),
+        ("它们一点点沉淀下来 成为前行的底气", "They settle bit by bit and become your strength"),
     ]
 
-    private func startPreviewLoop() {
-        ticker?.invalidate()
-        ticker = Timer.scheduledTimer(withTimeInterval: 2.4, repeats: true) { _ in
-            withAnimation(.easeOut(duration: 0.22)) { rollIndex += 1 }
+    // MARK: - 外观
+
+    private var lookCard: some View {
+        VStack(spacing: 0) {
+            settingRow(label: "字体颜色") {
+                HStack(spacing: 7) {
+                    ForEach(SubtitlePrefs.colors, id: \.0) { opt in
+                        Button {
+                            Haptics.tap()
+                            withAnimation(.easeOut(duration: 0.14)) {
+                                app.updatePrefs { $0.color = opt.0 }
+                            }
+                        } label: {
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(Color(uiColor: opt.2))
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 26)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(
+                                        app.prefs.color == opt.0 ? Theme.ink : Color(uiColor: .separator),
+                                        lineWidth: app.prefs.color == opt.0 ? 2 : 0.7
+                                    )
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            divider
+
+            settingRow(label: "背景颜色") {
+                HStack(spacing: 7) {
+                    ForEach(SubtitlePrefs.backgrounds, id: \.0) { opt in
+                        Button {
+                            Haptics.tap()
+                            withAnimation(.easeOut(duration: 0.14)) {
+                                app.updatePrefs { $0.background = opt.0 }
+                            }
+                        } label: {
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(Color(uiColor: opt.2))
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 26)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(
+                                        app.prefs.background == opt.0 ? Theme.ink : Color(uiColor: .separator),
+                                        lineWidth: app.prefs.background == opt.0 ? 2 : 0.7
+                                    )
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            divider
+
+            settingRow(label: "字幕内容") {
+                Picker("字幕内容", selection: Binding(
+                    get: { app.prefs.mode },
+                    set: { v in app.updatePrefs { $0.mode = v } }
+                )) {
+                    ForEach(SubtitlePrefs.modeOptions, id: \.0) { opt in
+                        Text(opt.1).tag(opt.0)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
         }
+        .card(padding: 14)
     }
 
-    // MARK: - 样式
+    // MARK: - 窗口与收音
 
-    private var styleCard: some View {
-        VStack(spacing: 14) {
-            // 字号已经全自动：每个窗口按自己的长宽算，长句靠换行，不再缩字。
-            // 手动调字号那一栏因此没有意义了，整栏去掉。
-            // 文字颜色：一行色块，均分整行
-            HStack(spacing: 6) {
-                ForEach(SubtitlePrefs.colors, id: \.0) { opt in
-                    Button {
+    private var windowCard: some View {
+        VStack(spacing: 0) {
+            settingRow(label: "悬浮窗大小") {
+                Picker("窗口大小", selection: Binding(
+                    get: { app.prefs.pip },
+                    set: { v in
                         Haptics.tap()
-                        withAnimation(.easeOut(duration: 0.15)) {
-                            app.updatePrefs { $0.color = opt.0 }
-                        }
-                    } label: {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color(uiColor: opt.2))
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 34)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(
-                                    app.prefs.color == opt.0 ? Theme.ink : Color.white.opacity(0.20),
-                                    lineWidth: app.prefs.color == opt.0 ? 2.2 : 0.8
-                                )
-                            )
+                        app.updatePrefs { $0.pip = v }
+                        app.setPip(true)
                     }
-                    .buttonStyle(.plain)
+                )) {
+                    ForEach(SubtitlePrefs.pipOptions, id: \.0) { opt in
+                        Text(opt.1).tag(opt.0)
+                    }
                 }
+                .pickerStyle(.segmented)
             }
 
             divider
 
-            // 背景颜色：7 个色块等分一整行、之间只留细缝，右边不留空
-            HStack(spacing: 6) {
-                ForEach(SubtitlePrefs.backgrounds, id: \.0) { opt in
-                    Button {
+            settingRow(label: "收音模式") {
+                Picker("收音模式", selection: Binding(
+                    get: { app.prefs.audioSource },
+                    set: { v in
                         Haptics.tap()
-                        withAnimation(.easeOut(duration: 0.15)) {
-                            app.updatePrefs { $0.background = opt.0 }
-                        }
-                    } label: {
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .fill(Color(uiColor: opt.2))
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 42)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                    .strokeBorder(
-                                        app.prefs.background == opt.0 ? Theme.ink : Color.white.opacity(0.22),
-                                        lineWidth: app.prefs.background == opt.0 ? 2.5 : 0.8
-                                    )
-                            )
+                        app.updatePrefs { $0.audioSource = v }
                     }
-                    .buttonStyle(.plain)
+                )) {
+                    ForEach(SubtitlePrefs.audioSourceOptions, id: \.0) { opt in
+                        Text(opt.1).tag(opt.0)
+                    }
                 }
+                .pickerStyle(.segmented)
             }
-
-            divider
-
-            HStack {
-                Text("字幕内容").font(.system(size: 15)).foregroundStyle(Theme.ink)
-                Spacer()
-            }
-            Picker("字幕内容", selection: Binding(
-                get: { app.prefs.mode },
-                set: { v in app.updatePrefs { $0.mode = v } }
-            )) {
-                ForEach(SubtitlePrefs.modeOptions, id: \.0) { opt in
-                    Text(opt.1).tag(opt.0)
-                }
-            }
-            .pickerStyle(.segmented)
         }
-        .card(padding: 16)
+        .card(padding: 14)
+    }
+
+    // MARK: - 行
+
+    /// 统一的行：左边说明文字（固定宽，上下行对齐），右边控件撑满剩下的宽度
+    private func settingRow<Content: View>(label: String,
+                                          @ViewBuilder content: () -> Content) -> some View {
+        HStack(spacing: 12) {
+            Text(label)
+                .font(.system(size: 14))
+                .foregroundStyle(Theme.ink)
+                .frame(width: 68, alignment: .leading)
+            content()
+                .frame(maxWidth: .infinity)
+        }
+        .frame(minHeight: 42)
+        .padding(.vertical, 2)
     }
 
     private var divider: some View {
         Rectangle().fill(Theme.line).frame(height: 0.5)
-    }
-
-    // MARK: - 字幕浮窗大小
-
-    private var pipCard: some View {
-        VStack(spacing: 10) {
-            HStack {
-                Text("字幕浮窗大小").font(.system(size: 15)).foregroundStyle(Theme.ink)
-                Spacer()
-            }
-            Picker("窗口大小", selection: Binding(
-                get: { app.prefs.pip },
-                set: { v in
-                    Haptics.tap()
-                    app.updatePrefs { $0.pip = v }
-                    app.setPip(true)
-                }
-            )) {
-                ForEach(SubtitlePrefs.pipOptions, id: \.0) { opt in
-                    Text(opt.1).tag(opt.0)
-                }
-            }
-            .pickerStyle(.segmented)
-        }
-        .card(padding: 14)
     }
 }
