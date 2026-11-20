@@ -244,11 +244,19 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
     a.sin_family = AF_INET;
     a.sin_port = htons(ZK_PORT);
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    if (bind(s, (struct sockaddr *)&a, sizeof(a)) != 0) {
-        close(s);
-        _asrState = @"端口被占用";
-        [ZKStore log:@"speech: bind failed"];
-        return;
+    // 端口被上一场没退干净的进程占着时，重试几次；一直失败才放弃。
+    // 监听起不来，扩展就只能走文件备份通道，表现就是「有字幕但很慢 / 干脆不出字」。
+    int tries = 0;
+    while (bind(s, (struct sockaddr *)&a, sizeof(a)) != 0) {
+        tries++;
+        [ZKStore log:@"speech: bind failed (第 %d 次)", tries];
+        if (tries >= 5) {
+            close(s);
+            _asrState = @"端口被占用";
+            if (self.onDiag) self.onDiag([self diag]);
+            return;
+        }
+        usleep(150000);
     }
     listen(s, 4);
     _listenFd = s;
