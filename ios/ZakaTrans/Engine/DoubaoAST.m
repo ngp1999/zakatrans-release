@@ -77,6 +77,13 @@ static NSString *ZTSign(NSString *token, NSString *method, NSString *path,
     return s;
 }
 
+// 另开一条独立会话：同声传译要两条，各走各的连接、各带各的回调。
+// 注意这里必须真 new（不能返回单例）——两条通道共用一个实例时，
+// 后 wire 的回调会把前一条覆盖掉，结果只有一个方向能出字。
++ (instancetype)session {
+    return [ZKDoubaoAST new];
+}
+
 - (instancetype)init {
     if ((self = [super init])) {
         _q = dispatch_queue_create("zaka.cloud.ast", DISPATCH_QUEUE_SERIAL);
