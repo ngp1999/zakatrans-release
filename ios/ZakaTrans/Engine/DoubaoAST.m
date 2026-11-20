@@ -259,22 +259,24 @@ static NSString *ZTSign(NSString *token, NSString *method, NSString *path,
         NSString *t = m[@"text"];
         if (!t.length) return;
         BOOL final = [m[@"final"] boolValue];
+        NSInteger seg = [m[@"seg"] integerValue];
         dispatch_async(dispatch_get_main_queue(), ^{
             if (final) {
-                if (self.onSourceEnd) self.onSourceEnd(t);
+                if (self.onSourceEnd) self.onSourceEnd(t, seg);
             } else {
-                if (self.onSourcePartial) self.onSourcePartial(t);
+                if (self.onSourcePartial) self.onSourcePartial(t, seg);
             }
         });
     } else if ([type isEqualToString:@"trans"]) {
         NSString *t = m[@"text"];
         if (!t.length) return;
         BOOL final = [m[@"final"] boolValue];
+        NSInteger seg = [m[@"seg"] integerValue];
         dispatch_async(dispatch_get_main_queue(), ^{
             if (final) {
-                if (self.onTransEnd) self.onTransEnd(t);
+                if (self.onTransEnd) self.onTransEnd(t, seg);
             } else {
-                if (self.onTransPartial) self.onTransPartial(t);
+                if (self.onTransPartial) self.onTransPartial(t, seg);
             }
         });
     } else if ([type isEqualToString:@"state"]) {
