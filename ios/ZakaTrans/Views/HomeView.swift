@@ -254,6 +254,15 @@ struct HomeView: View {
             // 加载态的呼吸光圈：让人一眼看出「在等浮窗，不是没反应」
             .overlay(PreparingGlow(on: app.preparing).allowsHitTesting(false))
 
+            // 音频状态：一眼看出是「没收到音频」还是「收到了没翻出来」
+            if app.running && !app.preparing && !app.audioHint.isEmpty {
+                Text(app.audioHint)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.faint)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .transition(.opacity)
+            }
+
             HStack(spacing: 10) {
                 // 朗读设置：点进去调语速、压低、音色
                 Button {
