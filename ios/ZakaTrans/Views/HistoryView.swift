@@ -154,11 +154,6 @@ struct HistoryView: View {
             Text("还没有记录")
                 .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(Theme.ink)
-            Text("开始一次实时翻译，这里就会出现每场的完整对话。")
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.sub)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
