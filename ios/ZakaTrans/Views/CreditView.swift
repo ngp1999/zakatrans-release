@@ -51,9 +51,6 @@ struct CreditView: View {
                         .foregroundStyle(Theme.sub)
                 }
 
-                Text("按有效识别内容扣减，静音不计")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.faint)
             }
             .frame(maxWidth: .infinity)
             .padding(.top, 26)
@@ -123,7 +120,7 @@ struct CreditView: View {
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(Theme.ink)
                 Text(body)
-                    .font(.system(size: 13))
+                    .font(.system(size: 14))
                     .foregroundStyle(Theme.sub)
                     .lineSpacing(4)
                     .fixedSize(horizontal: false, vertical: true)
