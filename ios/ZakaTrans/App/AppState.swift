@@ -206,7 +206,17 @@ final class AppState: ObservableObject {
     func syncPrefsFromCloud() async {
         guard let d = await Cloud.shared.loadPrefs(),
               let remote = SubtitlePrefs.from(dict: d) else { return }
-        prefs = remote
+        var r = remote
+        // 全宽改成默认档后，老账号云端存的还是旧的 4:3 默认值，
+        // 拉回来会把刚改好的默认值顶掉。这里只迁一次，之后用户怎么选就怎么存。
+        let migrated = "zt_pip_default_w_done"
+        if !UserDefaults.standard.bool(forKey: migrated) {
+            r.pip = "W"
+            UserDefaults.standard.set(true, forKey: migrated)
+            let snapshot = r
+            Task { await Cloud.shared.savePrefs(snapshot.dict()) }
+        }
+        prefs = r
         applyPrefsToEngine()
     }
 
