@@ -179,15 +179,18 @@ struct HomeView: View {
         }
     }
 
+    // 对话记录永远两条都在（译文在上、原文在下）。
+    // 字幕浮窗上的"只看译文 / 只看原文"只管浮窗，不能把记录也一起裁掉——
+    // 之前记录里只剩英文，就是因为这个开关把译文那行也藏了。
     private func lineRow(_ line: AppState.SubtitleLine) -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            if app.prefs.mode != "source", !line.trans.isEmpty {
+            if !line.trans.isEmpty {
                 Text(line.trans)
                     .font(.system(size: app.prefs.size, weight: .semibold))
-                    .foregroundStyle(app.prefs.mode == "zh" ? Theme.ink : app.prefs.swiftUIColor)
+                    .foregroundStyle(app.prefs.swiftUIColor)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if app.prefs.mode != "zh", !line.source.isEmpty {
+            if !line.source.isEmpty, line.source != line.trans {
                 Text(line.source)
                     .font(.system(size: max(12, app.prefs.size - 4)))
                     .foregroundStyle(Theme.sub)
@@ -200,13 +203,13 @@ struct HomeView: View {
 
     private var liveRow: some View {
         VStack(alignment: .leading, spacing: 5) {
-            if app.prefs.mode != "source", !app.liveTrans.isEmpty {
+            if !app.liveTrans.isEmpty {
                 Text(app.liveTrans)
                     .font(.system(size: app.prefs.size, weight: .semibold))
                     .foregroundStyle(Theme.accent)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if app.prefs.mode != "zh", !app.liveSource.isEmpty {
+            if !app.liveSource.isEmpty, app.liveSource != app.liveTrans {
                 Text(app.liveSource)
                     .font(.system(size: max(12, app.prefs.size - 4)))
                     .foregroundStyle(Theme.sub)
