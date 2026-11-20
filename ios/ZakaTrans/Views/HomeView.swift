@@ -158,16 +158,22 @@ struct HomeView: View {
 
     /// 没开始时的引导：三步，按实际的系统流程写
     private var emptyState: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text("把任何声音变成中文字幕")
+        let mic = app.prefs.audioSource == "mic"
+        return VStack(alignment: .leading, spacing: 20) {
+            Text(mic ? "把现场说话变成中文字幕" : "把任何声音变成中文字幕")
                 .font(.system(size: 20, weight: .semibold))
                 .foregroundStyle(Theme.ink)
                 .padding(.top, 8)
 
             VStack(alignment: .leading, spacing: 16) {
                 step(1, "点下面的「开始实时翻译」")
-                step(2, "在系统面板中打开「语幕实时翻译」的直播录屏权限")
-                step(3, "等待出现字幕浮窗后即可开始使用")
+                if mic {
+                    step(2, "第一次会问麦克风权限，点「允许」")
+                    step(3, "直接说话，字幕跟着声音出来")
+                } else {
+                    step(2, "在系统面板中打开「语幕实时翻译」的直播录屏权限")
+                    step(3, "等待出现字幕浮窗后即可开始使用")
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
