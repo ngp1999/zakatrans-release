@@ -1,13 +1,14 @@
 import SwiftUI
 import UIKit
 
-/// 字幕翻译：一个按钮开始，字幕就在下面滚。
+/// 实时翻译：一个按钮开始，字幕就在下面滚。
 struct HomeView: View {
     @ObservedObject private var app = AppState.shared
     @ObservedObject private var cloud = Cloud.shared
     @ObservedObject private var speaker = Speaker.shared
     @State private var showCredit = false
     @State private var showAudio = false
+    @State private var showStyle = false
 
     private let haptic = UIImpactFeedbackGenerator(style: .light)
 
@@ -25,8 +26,26 @@ struct HomeView: View {
         .sheet(isPresented: $showCredit) {
             NavigationStack { CreditView() }
         }
+        // 朗读设置走半屏：内容一屏能放下，弹满屏反而像换了个页面
         .sheet(isPresented: $showAudio) {
             NavigationStack { AudioOutputView() }
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        // 字幕样式（含浮窗开关与窗口大小）挂在这个按钮里，半屏就够
+        .sheet(isPresented: $showStyle) {
+            NavigationStack {
+                SubtitleSettingsView()
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("完成") { showStyle = false }
+                                .fontWeight(.semibold)
+                                .foregroundStyle(Theme.accent)
+                        }
+                    }
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
         .alert("积分不足", isPresented: Binding(
             get: { app.alert != nil },
@@ -73,13 +92,14 @@ struct HomeView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.surface)
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        // 边框固定一根细线：运行中不再套绿框，界面只在按钮上表达状态
         .overlay(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .strokeBorder(app.running ? Theme.accent.opacity(0.35) : Theme.hairline, lineWidth: 0.8)
+                .strokeBorder(Theme.hairline, lineWidth: 0.8)
         )
     }
 
-    /// 没开始时的引导：只留三步，别的说明文字全去掉
+    /// 没开始时的引导：三步，按实际的系统流程写
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 20) {
             Text("把任何声音变成中文字幕")
@@ -88,9 +108,9 @@ struct HomeView: View {
                 .padding(.top, 8)
 
             VStack(alignment: .leading, spacing: 16) {
-                step(1, "点下面的「开始字幕翻译」")
-                step(2, "在系统面板里选「语幕」并开始录屏")
-                step(3, "字幕浮窗自动出现，回桌面也继续显示")
+                step(1, "点下面的「开始实时翻译」")
+                step(2, "在系统面板中打开「语幕实时翻译」的直播录屏权限")
+                step(3, "等待出现字幕浮窗后即可开始使用")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -114,20 +134,19 @@ struct HomeView: View {
         }
     }
 
-    // 对话记录永远两条都在（译文在上、原文在下）。
-    // 字幕浮窗上的"只看译文 / 只看原文"只管浮窗，不能把记录也一起裁掉——
-    // 之前记录里只剩英文，就是因为这个开关把译文那行也藏了。
+    // 对话记录是「记录」，不是字幕浮窗：固定用系统字号和系统文字颜色，
+    // 不跟字幕样式走——否则把浮窗字号调到 30、颜色改成粉色，记录也跟着变，读起来很累。
     private func lineRow(_ line: AppState.SubtitleLine) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             if !line.trans.isEmpty {
                 Text(line.trans)
-                    .font(.system(size: app.prefs.size, weight: .semibold))
-                    .foregroundStyle(app.prefs.swiftUIColor)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Theme.ink)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if !line.source.isEmpty, line.source != line.trans {
                 Text(line.source)
-                    .font(.system(size: max(14, app.prefs.size - 5)))
+                    .font(.system(size: 15))
                     .foregroundStyle(Theme.sub)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -140,13 +159,13 @@ struct HomeView: View {
         VStack(alignment: .leading, spacing: 5) {
             if !app.liveTrans.isEmpty {
                 Text(app.liveTrans)
-                    .font(.system(size: app.prefs.size, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Theme.ink)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if !app.liveSource.isEmpty, app.liveSource != app.liveTrans {
                 Text(app.liveSource)
-                    .font(.system(size: max(14, app.prefs.size - 5)))
+                    .font(.system(size: 15))
                     .foregroundStyle(Theme.sub)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -166,6 +185,7 @@ struct HomeView: View {
             }
 
             HStack(spacing: 10) {
+                // 音频输出：点开是半屏设置，图标反映当前开关
                 iconButton(
                     icon: speaker.enabled ? "speaker.wave.2.fill" : "speaker.slash.fill",
                     on: speaker.enabled
@@ -174,39 +194,11 @@ struct HomeView: View {
                     showAudio = true
                 }
 
-                Menu {
-                    ForEach(SubtitlePrefs.pipOptions, id: \.0) { opt in
-                        Button {
-                            haptic.impactOccurred()
-                            withAnimation(.easeOut(duration: 0.18)) {
-                                app.updatePrefs { $0.pip = opt.0 }
-                                app.setPip(true)
-                            }
-                        } label: {
-                            if app.prefs.pip == opt.0 {
-                                Label("窗口\(opt.1)", systemImage: "checkmark")
-                            } else {
-                                Text("窗口\(opt.1)")
-                            }
-                        }
-                    }
-                    Divider()
-                    Button {
-                        haptic.impactOccurred()
-                        app.setPip(!app.pipOn)
-                    } label: {
-                        Label(app.pipOn ? "关闭窗口" : "打开窗口",
-                              systemImage: app.pipOn ? "pip.remove" : "pip.fill")
-                    }
-                } label: {
-                    Image(systemName: app.pipOn ? (app.prefs.pip == "S" ? "rectangle.wide" : "pip.fill") : "pip.remove")
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(app.pipOn ? Theme.accent : Theme.sub)
-                        .frame(width: 54, height: 54)
-                        .background(app.pipOn ? Theme.accentSoft : Theme.surface)
-                        .clipShape(Circle())
+                // 字幕样式：颜色、字号、背景、浮窗开关、窗口大小都在里面
+                iconButton(icon: "textformat.size", on: app.pipOn) {
+                    haptic.impactOccurred()
+                    showStyle = true
                 }
-                .buttonStyle(TileButtonStyle())
 
                 Button {
                     haptic.impactOccurred(intensity: 0.8)
@@ -229,14 +221,15 @@ struct HomeView: View {
                             Image(systemName: (app.running && !app.preparing) ? "stop.fill" : "play.fill")
                                 .font(.system(size: 15, weight: .bold))
                         }
-                        Text(app.preparing ? "正在加载" : (app.running ? "停止" : "开始字幕翻译"))
+                        Text(app.preparing ? "正在加载字幕浮窗" : (app.running ? "停止" : "开始实时翻译"))
                             .font(.system(size: 17, weight: .semibold))
                             .contentTransition(.opacity)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
                     }
                     .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(PrimaryButtonStyle(tint: (app.running && !app.preparing) ? Theme.warn : Theme.accent))
-                .overlay(PreparingGlow(on: app.preparing).allowsHitTesting(false))
             }
         }
     }
@@ -267,20 +260,4 @@ struct TileButtonStyle: ButtonStyle {
 struct AlertText: Identifiable {
     let id = UUID()
     let text: String
-}
-
-/// 加载态光环：按钮外面一圈呼吸的描边
-private struct PreparingGlow: View {
-    let on: Bool
-    @State private var flip = false
-
-    var body: some View {
-        RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .stroke(Theme.accent.opacity(0.6), lineWidth: 2)
-            .scaleEffect(flip ? 1.035 : 1.0)
-            .opacity(flip ? 0 : 0.9)
-            .animation(on ? .easeInOut(duration: 0.95).repeatForever(autoreverses: true) : .easeOut(duration: 0.2), value: flip)
-            .onChange(of: on) { v in flip = v }
-            .onAppear { if on { flip = true } }
-    }
 }
