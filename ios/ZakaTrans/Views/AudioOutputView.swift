@@ -17,7 +17,6 @@ struct AudioOutputView: View {
                 rateCard
                 duckCard
                 voiceCard
-                noteCard
             }
             .padding(.horizontal, 16)
             .padding(.top, 8)
@@ -38,14 +37,9 @@ struct AudioOutputView: View {
                     if !v { Speaker.shared.stop() }
                 }
             )) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("开启音频输出")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(Theme.ink)
-                    Text("把译文用语音读出来，边说边显示")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.sub)
-                }
+                Text("开启音频输出")
+                    .font(.system(size: 16))
+                    .foregroundStyle(Theme.ink)
             }
             .tint(Theme.accent)
         }
@@ -106,11 +100,6 @@ struct AudioOutputView: View {
                 set: { v in app.updatePrefs { $0.duckLevel = v } }
             ), in: 0...100, step: 5)
             .tint(Theme.accent)
-
-            Text("朗读时把视频、音乐的音量压下去，念完自动还原。滑到最左边就是不压，两边一起响。")
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.faint)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .card(padding: 16)
     }
@@ -122,19 +111,17 @@ struct AudioOutputView: View {
                 .foregroundStyle(Theme.ink)
 
             VStack(spacing: 0) {
-                voiceRow(id: "", name: "系统默认（推荐）", detail: "中文女声，清楚不费劲")
+                voiceRow(id: "", name: "系统默认（推荐）")
                 ForEach(voices, id: \.identifier) { v in
                     Divider().opacity(0.4)
-                    voiceRow(id: v.identifier,
-                             name: v.name,
-                             detail: v.quality == .enhanced ? "增强音质 · \(v.language)" : v.language)
+                    voiceRow(id: v.identifier, name: v.name)
                 }
             }
         }
         .card(padding: 16)
     }
 
-    private func voiceRow(id: String, name: String, detail: String) -> some View {
+    private func voiceRow(id: String, name: String) -> some View {
         Button {
             haptic.impactOccurred()
             app.updatePrefs { $0.voiceId = id }
@@ -142,14 +129,9 @@ struct AudioOutputView: View {
             Speaker.shared.preview("你好，这是这个音色的效果。")
         } label: {
             HStack(spacing: 10) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(name)
-                        .font(.system(size: 14))
-                        .foregroundStyle(Theme.ink)
-                    Text(detail)
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.faint)
-                }
+                Text(name)
+                    .font(.system(size: 15))
+                    .foregroundStyle(Theme.ink)
                 Spacer(minLength: 0)
                 if app.prefs.voiceId == id {
                     Image(systemName: "checkmark")
@@ -163,17 +145,5 @@ struct AudioOutputView: View {
         .buttonStyle(.plain)
     }
 
-    private var noteCard: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("关于声音")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(Theme.ink)
-            Text("开着朗读时，手机自己念出来的声音也会被录屏一起录进去一点。App 会自动把这类回声滤掉，不会重复显示、也不会重复念。")
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.sub)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .card(padding: 16)
-    }
 }
+
