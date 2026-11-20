@@ -22,8 +22,9 @@ static const CGFloat ZK_ZH_SIZE = 20.0;
 static const CGFloat ZK_EN_SIZE = 13.0;
 
 // 字幕外观（从 App 的字幕设置同步过来）
-static CGFloat gZhSize = 20.0;
+static CGFloat gZhSize = 20.0;        // 当前真正生效的字号（会随画中画窗口大小自动变）
 static CGFloat gEnSize = 13.0;
+static CGFloat gZhBase = 20.0;        // 用户在设置里选的字号：自适应以它为中心放大/缩小
 static UIColor *gTextColor = nil;
 static NSString *gMode = @"bilingual";         // bilingual | zh | source
 static NSString *gBackground = @"black";       // 7 种实色背景，见 ZKBackgroundColor()
@@ -265,6 +266,8 @@ static UIColor *ZKBackgroundColor(void) {
 - (void)clearTail;
 - (void)relayoutAll;
 - (void)rebuildWithLines:(NSArray *)lines;
+- (NSString *)liveZhText;
+- (NSString *)liveEnText;
 @end
 
 @implementation ZKStreamView {
@@ -388,6 +391,17 @@ static UIColor *ZKBackgroundColor(void) {
     if (_tail) _tail.frame = CGRectMake(0, y, _w, _tail.blockH);
 }
 
+// 最后一句（正在说的那句；没有的话就是最后说定的一句）的文本，供字号自适应算高度用
+- (NSString *)liveZhText {
+    if (_tail && _tail.blockH > 0.5) return _tail.zhText;
+    return _blocks.lastObject.zhText;
+}
+
+- (NSString *)liveEnText {
+    if (_tail && _tail.blockH > 0.5) return _tail.enText;
+    return _blocks.lastObject.enText;
+}
+
 - (void)rebuildWithLines:(NSArray *)lines {
     for (ZKBlockView *b in _blocks) [b removeFromSuperview];
     [_blocks removeAllObjects];
@@ -433,6 +447,21 @@ static UIColor *ZKBackgroundColor(void) {
 - (void)setLiveEn:(NSString *)en zh:(NSString *)zh;
 - (void)setOffsetY:(CGFloat)y;
 @end
+
+// 按当前宽度量一段文字要占多高（和 UILabel 走同一套换行规则，用来判断放不放得下）
+static CGFloat ZKTextHeight(NSString *text, CGFloat width, UIFont *font, CGFloat lineSpacing) {
+    if (!text.length || width <= 1) return 0;
+    NSMutableParagraphStyle *p = [NSMutableParagraphStyle new];
+    p.lineSpacing = lineSpacing;
+    p.lineBreakMode = NSLineBreakByWordWrapping;
+    NSDictionary *attrs = @{NSFontAttributeName: font, NSParagraphStyleAttributeName: p};
+    CGRect r = [text boundingRectWithSize:CGSizeMake(width, CGFLOAT_MAX)
+                                 options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
+                              attributes:attrs
+                                 context:nil];
+    CGFloat h = ceil(r.height);
+    return isfinite(h) && h > 0 ? h : 0;
+}
 
 @implementation ZKSubtitleVC {
     CGFloat _lastLayoutW;
@@ -574,8 +603,46 @@ static UIColor *ZKBackgroundColor(void) {
     if (fabs(w - _lastLayoutW) > 0.5 || fabs(h - _lastLayoutH) > 0.5) {
         _lastLayoutW = w;
         _lastLayoutH = h;
+        // 系统画中画窗口是能被人手拖大拖小的，字号必须跟着窗口走，
+        // 否则拖成小窗后就只剩半行英文——这是这版要解决的核心体验问题
+        [self applyAdaptiveFontForWidth:w height:h];
         [self applyGeometry];
     }
+}
+
+#pragma mark 字号自适应
+
+// 窗口尺寸变了就重算字号：
+// 1) 先按窗口相对基准窗口（480×360）的比例缩放用户选的字号；
+// 2) 再按"最后这一句（原文 + 译文）能不能整段塞进当前窗口"往下收，
+//    小窗里宁可字小一点，也要让中英两行同时看得全。
+- (void)applyAdaptiveFontForWidth:(CGFloat)w height:(CGFloat)h {
+    if (w < 1 || h < 1) return;
+
+    CGFloat scale = MIN(w / 480.0, h / 360.0);
+    scale = MAX(0.45, MIN(1.30, scale));
+    CGFloat zh = MAX(9.0, MIN(34.0, gZhBase * scale));
+    CGFloat en = MAX(8.0, zh * 0.66);
+
+    NSString *zt = [self.stream liveZhText];
+    NSString *et = [self.stream liveEnText];
+    // 窗口特别矮的时候，别把原文字号压得比译文字还大
+    for (int i = 0; i < 6; i++) {
+        CGFloat zhH = ZKTextHeight(zt, w, [UIFont boldSystemFontOfSize:zh], 2.0);
+        CGFloat enH = ZKTextHeight(et, w, [UIFont systemFontOfSize:en], 1.0);
+        CGFloat gap = (zhH > 0 && enH > 0) ? 2.0 : 0.0;
+        CGFloat need = zhH + enH + gap;
+        if (need <= 0 || need <= h * 0.92) break;
+        CGFloat k = MAX(0.60, (h * 0.92) / need);
+        zh = MAX(8.5, zh * k);
+        en = MAX(7.5, en * k);
+        if (k >= 0.999) break;
+    }
+
+    if (fabs(zh - gZhSize) < 0.6 && fabs(en - gEnSize) < 0.6) return;
+    gZhSize = zh;
+    gEnSize = en;
+    [self.stream relayoutAll];
 }
 
 #pragma mark 几何
@@ -660,6 +727,8 @@ static UIColor *ZKBackgroundColor(void) {
     _lastLayoutW = 0;
     [self.view setNeedsLayout];
     [self.view layoutIfNeeded];
+    [self applyAdaptiveFontForWidth:self.scroll.bounds.size.width
+                             height:self.scroll.bounds.size.height];
     [self.stream relayoutAll];
     [self applyGeometry];
 }
@@ -739,8 +808,9 @@ static __weak id gActiveSub = nil;
     if (![p isKindOfClass:[NSDictionary class]]) return;
     NSNumber *size = p[@"size"];
     if ([size isKindOfClass:[NSNumber class]] && size.doubleValue > 8) {
-        gZhSize = size.doubleValue;
-        gEnSize = MAX(11.0, size.doubleValue - 6.0);
+        gZhBase = size.doubleValue;
+        gZhSize = gZhBase;
+        gEnSize = MAX(11.0, gZhBase - 6.0);
     }
     NSString *color = p[@"color"];
     if ([color isKindOfClass:[NSString class]]) {
