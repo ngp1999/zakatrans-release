@@ -10,12 +10,6 @@ struct ProfileView: View {
     @State private var showLogout = false
     @State private var picked: PhotosPickerItem?
 
-    private var version: String {
-        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
-        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? ""
-        return b.isEmpty ? v : "\(v) (\(b))"
-    }
-
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -23,21 +17,11 @@ struct ProfileView: View {
             VStack(spacing: 14) {
                 accountCard
                 creditRow
-
-                SectionLabel("数据")
-                dataGroup
-
-                SectionLabel("关于")
-                aboutGroup
-
-                Text("版本 \(version)")
-                    .font(.system(size: 13).monospacedDigit())
-                    .foregroundStyle(Theme.faint)
-                    .padding(.top, 6)
-                    .padding(.bottom, 10)
+                mainGroup
             }
             .padding(.horizontal, 16)
             .padding(.top, 10)
+            .padding(.bottom, 24)
         }
         .background(Theme.bg)
         .navigationTitle("我的")
@@ -114,8 +98,8 @@ struct ProfileView: View {
             CreditView()
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: "bolt.fill")
-                    .font(.system(size: 14, weight: .semibold))
+                Image(systemName: "diamond.fill")
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(width: 28, height: 28)
                     .background(Theme.accent)
@@ -139,15 +123,37 @@ struct ProfileView: View {
         .buttonStyle(RowButtonStyle())
     }
 
-    // MARK: - 数据
+    // MARK: - 对话记录 / 关于 / 退出
 
-    private var dataGroup: some View {
+    private var mainGroup: some View {
         VStack(spacing: 0) {
             NavigationLink {
                 HistoryView()
             } label: {
                 rowContent(icon: "clock.arrow.circlepath", title: "对话记录",
                            tint: .orange, detail: "", chevron: true)
+            }
+            .buttonStyle(RowButtonStyle())
+
+            divider
+
+            NavigationLink {
+                AboutView()
+            } label: {
+                rowContent(icon: "info.circle.fill", title: "关于",
+                           tint: .gray, detail: "", chevron: true)
+            }
+            .buttonStyle(RowButtonStyle())
+
+            divider
+
+            Button { showLogout = true } label: {
+                HStack {
+                    Text("退出登录").font(.system(size: 16)).foregroundStyle(Theme.warn)
+                    Spacer()
+                }
+                .padding(.horizontal, 16).frame(height: 52)
+                .contentShape(Rectangle())
             }
             .buttonStyle(RowButtonStyle())
         }
@@ -157,15 +163,6 @@ struct ProfileView: View {
 
     private var divider: some View {
         Rectangle().fill(Theme.line).frame(height: 0.5).padding(.leading, 56)
-    }
-
-    @ViewBuilder
-    private func navRow<Destination: View>(icon: String, title: String, tint: Color,
-                                           @ViewBuilder destination: () -> Destination) -> some View {
-        NavigationLink(destination: destination()) {
-            rowContent(icon: icon, title: title, tint: tint, detail: "", chevron: true)
-        }
-        .buttonStyle(RowButtonStyle())
     }
 
     private func rowContent(icon: String, title: String, tint: Color, detail: String, chevron: Bool) -> some View {
@@ -190,32 +187,6 @@ struct ProfileView: View {
         .padding(.horizontal, 16)
         .frame(height: 52)
         .contentShape(Rectangle())
-    }
-
-    // MARK: - 关于
-
-    private var aboutGroup: some View {
-        VStack(spacing: 0) {
-            NavigationLink {
-                AboutView()
-            } label: {
-                rowContent(icon: "info.circle.fill", title: "关于语幕",
-                           tint: .gray, detail: "v\(version)", chevron: true)
-            }
-            .buttonStyle(RowButtonStyle())
-            divider
-            Button { showLogout = true } label: {
-                HStack {
-                    Text("退出登录").font(.system(size: 16)).foregroundStyle(Theme.warn)
-                    Spacer()
-                }
-                .padding(.horizontal, 16).frame(height: 52)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(RowButtonStyle())
-        }
-        .background(Theme.card)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
     }
 }
 
