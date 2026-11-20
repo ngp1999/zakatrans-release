@@ -597,7 +597,7 @@ static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CG
     CGRect r = [s boundingRectWithSize:CGSizeMake(CGFLOAT_MAX, _h)
                                options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
                                context:nil];
-    return ceil(r.width);
+    return ceil(CGRectGetWidth(r));
 }
 
 - (CGFloat)widthFor:(NSArray<NSDictionary *> *)items font:(CGFloat)f {
