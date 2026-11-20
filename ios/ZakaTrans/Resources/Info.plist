@@ -81,6 +81,15 @@
 			<string>AppIcon</string>
 		</dict>
 	</dict>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- 内置浏览器要能打开任意网址（有些站还在用 http） -->
+		<key>NSAllowsArbitraryLoadsInWebContent</key>
+		<true/>
+		<!-- 播放器要能直接播 http 的视频流 -->
+		<key>NSAllowsArbitraryLoadsForMedia</key>
+		<true/>
+	</dict>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
