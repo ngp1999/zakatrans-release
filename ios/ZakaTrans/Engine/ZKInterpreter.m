@@ -1,5 +1,6 @@
 #import "ZKInterpreter.h"
 #import "DoubaoAST.h"
+#import "Shared.h"
 #import <AVFoundation/AVFoundation.h>
 
 // 文字体系判定：判断这句原文是哪国话，决定归谁
@@ -142,6 +143,18 @@ static NSString *ZKClean(NSString *s) {
     NSInteger _seq;
     NSTimeInterval _lastLevelAt;
 
+    // 朗读门：TTS 正在出声的这段时间，麦克风收到的是手机自己的声音。
+    // 不挡住的话，念出去的译文会被当成对方说话又识别一遍，
+    // 界面上就出现「同一句原文/译文重复一条」，还会把真正的对话切碎。
+    NSTimeInterval _gateUntil;
+    NSTimeInterval _gateCheckedAt;
+    // 每边「已经落定、还在等译文」的句子，按落定顺序排队。
+    // 上游的译文回调只给文字、不说是哪一句的译文。以前用一个「当前句」槽位去接：
+    // 连着说两句时，第一句的译文回来会盖到第二句头上，第一句就永远停在只有原文。
+    // 现在按队列接，先落定的先等到译文，串不了。
+    NSMutableArray<NSMutableDictionary *> *_waitA;
+    NSMutableArray<NSMutableDictionary *> *_waitB;
+
     // 当前在说话的是哪一边：用来压掉另一条通道的碎渣
     NSString *_activeSide;
     NSTimeInterval _activeUntil;
@@ -158,6 +171,8 @@ static NSString *ZKClean(NSString *s) {
     if ((self = [super init])) {
         _mine = @"zh-CN";
         _other = @"en-US";
+        _waitA = [NSMutableArray array];
+        _waitB = [NSMutableArray array];
     }
     return self;
 }
@@ -224,6 +239,8 @@ static NSString *ZKClean(NSString *s) {
     _lastAtA = _lastAtB = 0;
     _activeSide = nil;
     _activeUntil = 0;
+    [_waitA removeAllObjects];
+    [_waitB removeAllObjects];
 }
 
 - (void)stop {
@@ -379,6 +396,18 @@ static NSString *ZKClean(NSString *s) {
         _idB = lid; _srcB = t; _dstB = early ?: @"";
         _draftIdB = nil; _draftSrcB = nil; _draftDstB = nil; _earlyDstB = nil;
     }
+    // 挂进等待队列：译文晚到也能认回这一句
+    NSMutableArray *q = a ? _waitA : _waitB;
+    if (!early.length) {
+        [q addObject:[@{@"id": lid, @"src": t, @"at": @(now)} mutableCopy]];
+    }
+    // 太久没等到译文的先摘掉，别让它一直占着队首、把后面每句的译文都接错
+    while (q.count) {
+        NSMutableDictionary *head = q.firstObject;
+        double at = [head[@"at"] doubleValue];
+        if (now - at < 12.0) break;
+        [q removeObjectAtIndex:0];
+    }
     [self emit:lid side:side src:t dst:(early ?: @"") kind:ZKLineKindFinal];
 }
 
@@ -388,14 +417,15 @@ static NSString *ZKClean(NSString *s) {
     if (!t.length) return;
 
     BOOL a = [side isEqualToString:@"a"];
-    NSString *lid = a ? _idA : _idB;
-    NSString *src = a ? _srcA : _srcB;
+    NSMutableArray *q = a ? _waitA : _waitB;
+    NSMutableDictionary *cur = q.lastObject;
 
-    if (lid.length) {
-        // 这句已经落定，译文原地补进去
-        NSString *merged = ZKMergeTrans(a ? _dstA : _dstB, t);
+    if (cur) {
+        // 这句已经落定，译文原地补进去：滚动中的那条气泡直接变成正式气泡
+        NSString *merged = ZKMergeTrans(cur[@"dst"] ?: @"", t);
+        cur[@"dst"] = merged;
         if (a) _dstA = merged; else _dstB = merged;
-        [self emit:lid side:side src:src ?: @"" dst:merged kind:ZKLineKindUpdate];
+        [self emit:cur[@"id"] side:side src:(cur[@"src"] ?: @"") dst:merged kind:ZKLineKindUpdate];
     } else {
         // 译文比原文先到：先攒着，等原文落定一起发
         if (a) { _earlyDstA = t; _draftDstA = t; } else { _earlyDstB = t; _draftDstB = t; }
@@ -412,18 +442,34 @@ static NSString *ZKClean(NSString *s) {
     if (!t.length) return;
 
     BOOL a = [side isEqualToString:@"a"];
-    NSString *lid = a ? _idA : _idB;
-    NSString *src = a ? _srcA : _srcB;
-    if (!lid.length) { if (a) _earlyDstA = t; else _earlyDstB = t; return; }
+    NSMutableArray *q = a ? _waitA : _waitB;
 
+    // 认领顺序：先给最早那条还没等到译文的句子；都等到了就落到最新一条
+    NSMutableDictionary *target = nil;
+    for (NSMutableDictionary *it in q) {
+        id d = it[@"dst"];
+        if (![d isKindOfClass:[NSString class]] || ![d length]) { target = it; break; }
+    }
+    if (!target) target = q.lastObject;
+
+    if (!target) {
+        // 这句连原文都还没落定：先攒着，等原文落定再一起发
+        if (a) _earlyDstA = t; else _earlyDstB = t;
+        return;
+    }
+
+    target[@"dst"] = t;
     if (a) _dstA = t; else _dstB = t;
     // 收尾再推一次 Final，界面把它当成这句的最终状态
-    [self emit:lid side:side src:src ?: @"" dst:t kind:ZKLineKindFinal];
+    [self emit:target[@"id"] side:side src:(target[@"src"] ?: @"") dst:t kind:ZKLineKindFinal];
+    [q removeObject:target];
 
-    // 这句已经完整，把这一边的“当前句”清空：
-    // 下一句的译文再早到，也不会串到已经完成的这条上
-    if (a) { _idA = nil; _srcA = nil; _dstA = nil; }
-    else   { _idB = nil; _srcB = nil; _dstB = nil; }
+    // 这一边没有待接的句子了，才清「当前句」槽位；
+    // 还有排队没等到译文的，槽位要留着，不然下一条译文无处可去。
+    if (!q.count) {
+        if (a) { _idA = nil; _srcA = nil; _dstA = nil; }
+        else   { _idB = nil; _srcB = nil; _dstB = nil; }
+    }
 }
 
 - (void)emit:(NSString *)lid side:(NSString *)side src:(NSString *)src dst:(NSString *)dst kind:(NSInteger)kind {
@@ -469,6 +515,15 @@ static NSString *ZKClean(NSString *s) {
     [input installTapOnBus:0 bufferSize:1024 format:inFmt block:^(AVAudioPCMBuffer *buf, AVAudioTime *when) {
         __strong typeof(weakSelf) s = weakSelf;
         if (!s || !s->_running || !buf.frameLength) return;
+        // 朗读期间不收麦：这几十毫秒里全是扬声器里念出来的译文
+        double nowS = [[NSDate date] timeIntervalSince1970];
+        if (nowS - s->_gateCheckedAt > 0.3) {
+            s->_gateCheckedAt = nowS;
+            double g = [[ZKStore setting:@"tts_gate"] doubleValue];
+            if (!(g > nowS) || g > nowS + 5) g = 0;   // 写坏的值一律当没开
+            s->_gateUntil = g;
+        }
+        if (s->_gateUntil > nowS) return;
 
         NSUInteger cap = (NSUInteger)(buf.frameLength * 16000.0 / MAX(8000, s->_inRate)) + 64;
         AVAudioPCMBuffer *out = [[AVAudioPCMBuffer alloc] initWithPCMFormat:s->_outFmt frameCapacity:cap];
