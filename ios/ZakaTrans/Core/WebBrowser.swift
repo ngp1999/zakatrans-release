@@ -336,7 +336,7 @@ extension WebBrowserModel: WKNavigationDelegate, WKUIDelegate {
     /// target="_blank" 的链接（视频站「点开播放」经常这样）就在本窗口里开
     func webView(_ wv: WKWebView, createWebViewWith cfg: WKWebViewConfiguration,
                  for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        if action.targetFrame == nil, let u = action.request.url { wv.load(action.request) }
+        if action.targetFrame == nil, action.request.url != nil { wv.load(action.request) }
         return nil
     }
 
