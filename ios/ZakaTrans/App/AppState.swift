@@ -29,9 +29,12 @@ final class AppState: ObservableObject {
     @Published var pipOn: Bool = (UserDefaults.standard.object(forKey: "zt_pip_on") as? Bool) ?? true
     @Published var pipActive = false
 
-    /// 默认头像（本机保存，四种底色，男女都有）
-    @Published var avatarIndex: Int = UserDefaults.standard.integer(forKey: "zt_avatar") {
-        didSet { UserDefaults.standard.set(avatarIndex, forKey: "zt_avatar") }
+    /// 头像：没有就是系统灰头像；换过就存本机（照片不出设备，也不上传）
+    @Published var avatarImage: UIImage? = AvatarStore.load()
+
+    func setAvatar(_ image: UIImage?) {
+        avatarImage = image
+        AvatarStore.save(image)
     }
 
     struct SubtitleLine: Identifiable, Equatable {
@@ -60,6 +63,9 @@ final class AppState: ObservableObject {
     private let keeper = SilentKeeper()
 
     private init() {
+        if prefs.voiceId.isEmpty || !Speaker.isAvailable(prefs.voiceId) {
+            prefs.voiceId = Speaker.defaultVoiceId()
+        }
         bindEngine()
         applyPrefsToEngine()
         bindLifecycle()
@@ -306,7 +312,7 @@ final class AppState: ObservableObject {
         if bufs != lastBufs {
             lastBufs = bufs
             lastBufsAt = now
-            audioHint = "正在收音频 · 已 \(bufs) 段"
+            audioHint = "正在接收音频"
             return
         }
         // 帧数没动：超过 6 秒说明扩展活着但没拿到声音
@@ -429,5 +435,39 @@ final class SilentKeeper {
         engine?.stop()
         player = nil
         engine = nil
+    }
+}
+
+// MARK: - 头像
+
+/// 头像只存本机：用户从相册选的照片属于个人内容，没必要也不应该传到服务器。
+enum AvatarStore {
+    private static var url: URL {
+        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        return dir.appendingPathComponent("avatar.jpg")
+    }
+
+    static func load() -> UIImage? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return UIImage(data: data)
+    }
+
+    static func save(_ image: UIImage?) {
+        guard let image else {
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
+        // 头像控件最大也就 80pt，压到 600px 足够，原图几 MB 没必要进沙盒
+        let side: CGFloat = 600
+        let scale = min(1, side / max(image.size.width, image.size.height))
+        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let fmt = UIGraphicsImageRendererFormat.default()
+        fmt.scale = 1
+        let out = UIGraphicsImageRenderer(size: size, format: fmt).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: size))
+        }
+        if let data = out.jpegData(compressionQuality: 0.88) {
+            try? data.write(to: url, options: .atomic)
+        }
     }
 }
