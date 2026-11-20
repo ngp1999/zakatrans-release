@@ -16,25 +16,13 @@ struct HistoryView: View {
                 emptyState
             } else {
                 List {
-                    ForEach(grouped, id: \.0) { group in
-                        Section {
-                            ForEach(group.1) { s in
-                                NavigationLink(destination: SessionDetailView(session: s)) {
-                                    row(s)
-                                }
-                            }
-                        } header: {
-                            Text(group.0)
-                        } footer: {
-                            if group.0 == grouped.last?.0 {
-                                Text("云端只保留最近 30 天的记录，更早的已自动删除。")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(Theme.faint)
-                            }
+                    ForEach(items) { s in
+                        NavigationLink(destination: SessionDetailView(session: s)) {
+                            row(s)
                         }
                     }
                 }
-                .listStyle(.insetGrouped)
+                .listStyle(.plain)
             }
         }
         .background(Theme.bg)
@@ -44,99 +32,71 @@ struct HistoryView: View {
         .task { if items.isEmpty { await load() } }
     }
 
-    private var grouped: [(String, [Cloud.UsageSession])] {
-        var map: [String: [Cloud.UsageSession]] = [:]
-        for s in items {
-            map[Self.dayKey(s.startedAt), default: []].append(s)
-        }
-        return map.keys.sorted(by: >).map { key in
-            (Self.dayTitle(key), map[key] ?? [])
-        }
-    }
-
-    static func dayKey(_ d: Date) -> String {
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "zh_CN")
-        df.dateFormat = "yyyy-MM-dd"
-        return df.string(from: d)
-    }
-
-    static func dayTitle(_ key: String) -> String {
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "zh_CN")
-        df.dateFormat = "yyyy-MM-dd"
-        guard let d = df.date(from: key) else { return key }
-
-        let cal = Calendar.current
-        if cal.isDateInToday(d) { return "今天" }
-        if cal.isDateInYesterday(d) { return "昨天" }
-
-        let out = DateFormatter()
-        out.locale = Locale(identifier: "zh_CN")
-        out.dateFormat = cal.component(.year, from: d) == cal.component(.year, from: Date())
-            ? "M月d日 EEEE"
-            : "yyyy年M月d日 EEEE"
-        return out.string(from: d)
-    }
-
     // MARK: - 列表行
 
-    /// 标题取自这一场的 AI 总结首句；没总结过就退回「实时翻译会话」。
+    /// 标题就是这一场的内容本身：有 AI 总结取总结首句，没总结取第一句转写的前几个字。
+    /// 不写「实时翻译」这种功能名——一列功能名等于没有标题。
     private func title(_ s: Cloud.UsageSession) -> String {
-        guard let sum = s.summary?.trimmingCharacters(in: .whitespacesAndNewlines), !sum.isEmpty else {
-            return "实时翻译会话"
+        if let sum = s.summary?.trimmingCharacters(in: .whitespacesAndNewlines), !sum.isEmpty {
+            let first = sum
+                .replacingOccurrences(of: "**", with: "")
+                .split(whereSeparator: { $0 == "\n" || $0 == "。" })
+                .first
+                .map(String.init) ?? sum
+            let t = first.trimmingCharacters(in: .whitespaces)
+            if !t.isEmpty { return t }
         }
-        let first = sum
-            .replacingOccurrences(of: "**", with: "")
-            .split(whereSeparator: { $0 == "\n" || $0 == "。" })
-            .first
-            .map(String.init) ?? sum
-        return first.trimmingCharacters(in: .whitespaces)
+        if let p = s.preview?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty {
+            return p
+        }
+        return Self.shortStamp(s.startedAt) + " 的对话"
     }
 
+    /// 年月日：列表里必须能一眼看出是哪天，不靠分组标题猜
+    static func dateText(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "zh_CN")
+        f.dateFormat = "yyyy年M月d日"
+        return f.string(from: d)
+    }
+
+    static func shortStamp(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "zh_CN")
+        f.dateFormat = "M月d日 HH:mm"
+        return f.string(from: d)
+    }
+
+    /// 一行四件事：什么时候（年月日 + 时分）、聊了多久、花了多少积分、讲的什么。
+    /// 「怎么断开的」（主动停止 / 连接断开）不上列表——那是内部状态，不是用户关心的内容。
     private func row(_ s: Cloud.UsageSession) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(spacing: 3) {
-                Text(Self.timeText(s.startedAt))
-                    .font(.system(size: 16, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(Theme.ink)
+        VStack(alignment: .leading, spacing: 7) {
+            Text(title(s))
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Theme.ink)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 6) {
+                Text(Self.dateText(s.startedAt) + " " + Self.timeText(s.startedAt))
+                dot
                 Text(s.durationText)
-                    .font(.system(size: 11).monospacedDigit())
-                    .foregroundStyle(Theme.sub)
+                Spacer(minLength: 6)
+                Text("\(s.creditsText) 积分")
+                    .font(.system(size: 12, weight: .medium).monospacedDigit())
+                    .foregroundStyle(Theme.accent)
             }
-            .frame(width: 54, alignment: .leading)
-            .padding(.top, 1)
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text(title(s))
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Theme.ink)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-
-                HStack(spacing: 8) {
-                    Text("\(s.creditsText) 积分")
-                        .font(.system(size: 12, weight: .medium).monospacedDigit())
-                        .foregroundStyle(Theme.accent)
-                    Text("·")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.faint)
-                    Text(s.reasonText)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.sub)
-                    if s.hasSummary {
-                        Text("已总结")
-                            .font(.system(size: 10))
-                            .foregroundStyle(Theme.accent)
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Theme.accentSoft)
-                            .clipShape(Capsule())
-                    }
-                }
-            }
-            Spacer(minLength: 0)
+            .font(.system(size: 12).monospacedDigit())
+            .foregroundStyle(Theme.sub)
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 6)
+    }
+
+    private var dot: some View {
+        Text("·").font(.system(size: 12)).foregroundStyle(Theme.faint)
     }
 
     static func timeText(_ d: Date) -> String {
@@ -222,14 +182,21 @@ struct SessionDetailView: View {
                     .foregroundStyle(Theme.accent)
             }
             HStack(spacing: 16) {
+                Label(Self.detailStamp(session.startedAt), systemImage: "calendar")
                 Label(session.durationText, systemImage: "clock")
                 Label("\(detail?.lines.count ?? 0) 句", systemImage: "text.bubble")
-                Label(session.reasonText, systemImage: "info.circle")
             }
             .font(.system(size: 12))
             .foregroundStyle(Theme.sub)
         }
         .card()
+    }
+
+    static func detailStamp(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "zh_CN")
+        f.dateFormat = "M月d日 HH:mm"
+        return f.string(from: d)
     }
 
     private var summaryCard: some View {
