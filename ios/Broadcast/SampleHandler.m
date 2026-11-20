@@ -233,8 +233,14 @@
     if (bufferType != RPSampleBufferTypeAudioApp) return;
 
     // 朗读门：App 正在用系统语音念字幕时，录到的混音里就有我们自己的声音。
-    // 送进上游会被当成对方说话再翻一遍——文本重复、句子被切断、还白烧 token，所以这段直接丢。
-    // 值每 0.3 秒最多读一次：音频回调一秒几十次，每次都去读文件会把采集线程拖卡。
+    // 送进上游会被当成对方说话再翻一遍——文本重复、句子被切断、还白烧 token，
+    // 所以这段时间不能把混音送上去。
+    //
+    // 但不能整段丢包：上一版就是直接 return，包一断上游拿不到音频，
+    // 时间轴跟着就断了，表现为「漏一段、句子断、要等好几秒才继续出字」。
+    // 现在改成送等长的静音帧——时长和帧号都连续，上游只当是没人说话。
+    // 值每 0.3 秒最多读一次：音频回调一秒几十次，每次都去读共享设置会把采集线程拖卡。
+    BOOL silent = NO;
     double nowSec = [[NSDate date] timeIntervalSince1970];
     if (nowSec - _gateCheckedAt > 0.3) {
         _gateCheckedAt = nowSec;
@@ -242,7 +248,7 @@
     }
     if (_gateUntil > nowSec) {
         _ttsSkip++;
-        return;
+        silent = YES;
     }
 
     CMFormatDescriptionRef fd = CMSampleBufferGetFormatDescription(sampleBuffer);
@@ -285,6 +291,9 @@
     if (!outBuf.frameLength) return;
 
     NSUInteger bytes = outBuf.frameLength * sizeof(float);
+    if (silent && outBuf.floatChannelData[0]) {
+        memset(outBuf.floatChannelData[0], 0, bytes);
+    }
     NSData *pcm = [NSData dataWithBytes:outBuf.floatChannelData[0] length:bytes];
     if (!pcm.length) return;
 
