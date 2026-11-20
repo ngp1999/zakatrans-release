@@ -272,6 +272,10 @@ static NSString *ZKShort(NSString *bcp) {
 #pragma mark - 麦克风
 
 - (void)startMic {
+    // 上一次的引擎没收干净就再装一次 tap，AVAudioEngine 会抛
+    // 「required condition is false: nullptr == Tap()」直接把进程带走，
+    // 所以进这里先把旧的拆了（没装过的话这一步什么也不做）。
+    [self stopMic];
     _engine = [AVAudioEngine new];
     AVAudioInputNode *input = _engine.inputNode;
     AVAudioFormat *inFmt = [input inputFormatForBus:0];
@@ -312,7 +316,11 @@ static NSString *ZKShort(NSString *bcp) {
     NSError *e = nil;
     [_engine prepare];
     [_engine startAndReturnError:&e];
-    if (e) [self fail:@"麦克风启动失败"];
+    if (e) {
+        // 起不来就把 tap 和引擎一起拆掉，否则下次再点开始就撞上"tap 已存在"
+        [self stopMic];
+        [self fail:@"麦克风启动失败"];
+    }
 }
 
 - (void)stopMic {
