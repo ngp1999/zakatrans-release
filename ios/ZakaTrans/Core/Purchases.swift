@@ -58,11 +58,19 @@ final class Purchases: ObservableObject {
         Self.fallback.first { $0.id == id }?.credits ?? 0
     }
 
+    /// 价格只认苹果返回的那一个。
+    ///
+    /// 之前的问题是两套来源混着用：拿到商品的显示苹果的价，拿不到的手写「¥12」。
+    /// 苹果的价是按 **当前 Apple ID 所在区域** 结算的货币，
+    /// 测试账号区域是美国时它就是 $1.99，旁边没配置的那几个还是写死的人民币，
+    /// 于是同一个页面一半 $ 一半 ¥。
+    /// 现在没拿到商品就显示「未上架」，不编价格，也不会两种货币混排。
     func priceText(for id: String) -> String {
         if let p = product(id: id) { return p.displayPrice }
-        if let f = Self.fallback.first(where: { $0.id == id }) { return "¥\(f.cny)" }
-        return "—"
+        return "未上架"
     }
+
+    func available(_ id: String) -> Bool { product(id: id) != nil }
 
     func buy(id: String) async {
         guard let product = product(id: id) else {
