@@ -112,7 +112,7 @@ struct SubtitleSettingsView: View {
                     } label: {
                         RoundedRectangle(cornerRadius: 9, style: .continuous)
                             .fill(Color(uiColor: opt.2))
-                            .frame(height: 32)
+                            .frame(height: 40)
                             .overlay(
                                 RoundedRectangle(cornerRadius: 9, style: .continuous)
                                     .strokeBorder(
@@ -150,19 +150,15 @@ struct SubtitleSettingsView: View {
         Rectangle().fill(Theme.line).frame(height: 0.5)
     }
 
-    // MARK: 窗口比例（画中画尺寸，选了就按这个大小开）
+    // MARK: 窗口（比例 + 大中小，同一行）
 
     private var pipCard: some View {
-        VStack(spacing: 12) {
-            HStack {
-                Text("窗口比例").font(.system(size: 15)).foregroundStyle(Theme.ink)
-                Spacer()
-                Text(SubtitlePrefs.pipSizeText(app.prefs.pip))
-                    .font(.system(size: 13).monospacedDigit())
-                    .foregroundStyle(Theme.sub)
-            }
-
-            Picker("窗口比例", selection: Binding(
+        HStack(spacing: 14) {
+            Text("窗口")
+                .font(.system(size: 15))
+                .foregroundStyle(Theme.ink)
+            Spacer(minLength: 8)
+            Picker("窗口", selection: Binding(
                 get: { app.prefs.pip },
                 set: { v in
                     haptic.impactOccurred()
@@ -175,12 +171,8 @@ struct SubtitleSettingsView: View {
                 }
             }
             .pickerStyle(.segmented)
-
-            Text("选哪个，字幕浮窗开出来就是哪个大小；大 4:3 适合看整段，小 21:9 最窄最省屏。")
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.faint)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(width: 176)
         }
-        .card(padding: 16)
+        .card(padding: 14)
     }
 }
