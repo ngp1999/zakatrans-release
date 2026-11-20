@@ -244,7 +244,12 @@
     double nowSec = [[NSDate date] timeIntervalSince1970];
     if (nowSec - _gateCheckedAt > 0.3) {
         _gateCheckedAt = nowSec;
-        _gateUntil = [[ZKStore setting:@"tts_gate"] doubleValue];
+        double g = [[ZKStore setting:@"tts_gate"] doubleValue];
+        // 防御:朗读门的时间戳最多只可能是「现在 + 1 秒」。
+        // 读到离谱的未来值(上一次进程崩在门里、设置被写坏)整场录音会被静音,
+        // 用户看到的就是「扩展开起来了,但一个字都不出」——这种值一律当 0。
+        if (!(g > nowSec) || g > nowSec + 5) g = 0;
+        _gateUntil = g;
     }
     if (_gateUntil > nowSec) {
         _ttsSkip++;
@@ -322,6 +327,9 @@
     // 备份通道：落盘
     if (toWrite.length) [ZKStore appendPCM:toWrite.bytes length:toWrite.length];
 
+    if (_bufs == 1) {
+        [ZKStore log:@"ext: 第一帧音频到了 sr=%.0f ch=%u silent=%d", inFmt.sampleRate, (unsigned)inFmt.channelCount, (int)silent];
+    }
     if (_bufs % 400 == 1) {
         [ZKStore log:@"ext audio bufs=%ld frames=%ld fd=%d", (long)_bufs, (long)_audioFrames, _fd];
     }
