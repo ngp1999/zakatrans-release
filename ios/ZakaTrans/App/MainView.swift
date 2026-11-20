@@ -54,7 +54,7 @@ struct MainView: View {
     @ObservedObject private var app = AppState.shared
 
     enum Mode: String, CaseIterable, Identifiable {
-        case subtitle = "字幕翻译"
+        case subtitle = "实时翻译"
         case interpreter = "同声传译"
         var id: String { rawValue }
     }
@@ -110,7 +110,7 @@ struct MainView: View {
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 showProfile = true
             } label: {
-                AvatarView(index: app.avatarIndex, size: 32)
+                AvatarView(size: 32)
                     .overlay(
                         Circle().strokeBorder(Theme.hairline, lineWidth: 0.8)
                     )
@@ -124,8 +124,9 @@ struct MainView: View {
 
     // MARK: - 模式切换
 
+    /// 两个模式各占一半、居中：整行等分，切换时下划线跟着走。
     private var segment: some View {
-        HStack(spacing: 26) {
+        HStack(spacing: 0) {
             ForEach(Mode.allCases) { m in
                 Button {
                     guard mode != m else { return }
@@ -134,8 +135,9 @@ struct MainView: View {
                 } label: {
                     VStack(spacing: 7) {
                         Text(m.rawValue)
-                            .font(.system(size: 16, weight: mode == m ? .semibold : .regular))
+                            .font(.system(size: 17, weight: mode == m ? .semibold : .regular))
                             .foregroundStyle(mode == m ? Theme.ink : Theme.sub)
+                            .frame(maxWidth: .infinity)
                         ZStack {
                             Capsule().fill(Color.clear).frame(height: 2)
                             if mode == m {
@@ -145,13 +147,13 @@ struct MainView: View {
                                     .matchedGeometryEffect(id: "seg", in: segAnim)
                             }
                         }
-                        .frame(width: 44)
+                        .frame(width: 56)
                     }
+                    .frame(maxWidth: .infinity)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
-            Spacer(minLength: 0)
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 6)
