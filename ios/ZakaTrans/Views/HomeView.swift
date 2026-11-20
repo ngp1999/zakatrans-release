@@ -10,7 +10,6 @@ struct HomeView: View {
     @State private var showAudio = false
     @State private var showStyle = false
 
-    private let haptic = UIImpactFeedbackGenerator(style: .light)
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,26 +25,31 @@ struct HomeView: View {
         .sheet(isPresented: $showCredit) {
             NavigationStack { CreditView() }
         }
-        // 朗读设置走半屏：内容一屏能放下，弹满屏反而像换了个页面
-        .sheet(isPresented: $showAudio) {
-            NavigationStack { AudioOutputView() }
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-        }
-        // 字幕样式（含浮窗开关与窗口大小）挂在这个按钮里，半屏就够
-        .sheet(isPresented: $showStyle) {
-            NavigationStack {
-                SubtitleSettingsView()
-                    .toolbar {
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("完成") { showStyle = false }
-                                .fontWeight(.semibold)
-                                .foregroundStyle(Theme.accent)
-                        }
-                    }
+        // 朗读设置：页面内自绘的半屏面板。
+        // 以前用系统 sheet，点下去要等系统那套转场和分档高度初始化，实测有明显延迟；
+        // 这里按下即出，动效压到 0.18 秒，观感就是「点了就开」。
+        .overlay(alignment: .bottom) {
+            if showAudio {
+                ZStack(alignment: .bottom) {
+                    Color.black.opacity(0.30)
+                        .ignoresSafeArea()
+                        .transition(.opacity)
+                        .onTapGesture { closeAudio() }
+                    AudioOutputView(onClose: { closeAudio() })
+                        .frame(height: min(430, UIScreen.main.bounds.height * 0.62))
+                        .background(Theme.bg)
+                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .padding(.horizontal, 8)
+                        .padding(.bottom, 8)
+                        .transition(.move(edge: .bottom))
+                }
             }
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
+        }
+        .animation(.easeOut(duration: 0.18), value: showAudio)
+        .onAppear { Haptics.warm() }
+        // 字幕样式按用户要求走整屏：色块多、字号预览大，半屏挤
+        .fullScreenCover(isPresented: $showStyle) {
+            SubtitleSettingsView()
         }
         .alert("积分不足", isPresented: Binding(
             get: { app.alert != nil },
@@ -56,6 +60,10 @@ struct HomeView: View {
         } message: {
             Text(app.alert ?? "")
         }
+    }
+
+    private func closeAudio() {
+        withAnimation(.easeOut(duration: 0.16)) { showAudio = false }
     }
 
     // MARK: - 字幕
@@ -186,22 +194,24 @@ struct HomeView: View {
 
             HStack(spacing: 10) {
                 // 音频输出：点开是半屏设置，图标反映当前开关
-                iconButton(
-                    icon: speaker.enabled ? "speaker.wave.2.fill" : "speaker.slash.fill",
-                    on: speaker.enabled
-                ) {
-                    haptic.impactOccurred()
+                iconButton(on: speaker.enabled) {
+                    Haptics.tap()
                     showAudio = true
+                } content: {
+                    Image(systemName: speaker.enabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                        .font(.system(size: 17, weight: .medium))
                 }
 
-                // 字幕样式：颜色、字号、背景、浮窗开关、窗口大小都在里面
-                iconButton(icon: "textformat.size", on: app.pipOn) {
-                    haptic.impactOccurred()
+                // 字幕样式：颜色、字号、背景、窗口大小都在里面（整屏展示）
+                iconButton(on: app.pipOn) {
+                    Haptics.tap()
                     showStyle = true
+                } content: {
+                    SubtitleGlyph(on: app.pipOn)
                 }
 
                 Button {
-                    haptic.impactOccurred(intensity: 0.8)
+                    Haptics.tap(0.8)
                     if app.running || app.preparing {
                         withAnimation(.easeOut(duration: 0.2)) { app.stop() }
                     } else if !app.preparing {
@@ -234,16 +244,51 @@ struct HomeView: View {
         }
     }
 
-    private func iconButton(icon: String, on: Bool, action: @escaping () -> Void) -> some View {
+    private func iconButton<Content: View>(on: Bool,
+                                           action: @escaping () -> Void,
+                                           @ViewBuilder content: () -> Content) -> some View {
         Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 17, weight: .medium))
+            content()
                 .foregroundStyle(on ? Theme.accent : Theme.sub)
                 .frame(width: 54, height: 54)
                 .background(on ? Theme.accentSoft : Theme.surface)
                 .clipShape(Circle())
         }
         .buttonStyle(TileButtonStyle())
+    }
+}
+
+/// 字幕样式按钮的图标：一条渐变气泡 + 两条字幕线。
+/// 不用「字号大小」这种字形，避免用户以为点进去只能调字号。
+private struct SubtitleGlyph: View {
+    var on: Bool
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8.5, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: on
+                            ? [Color(red: 0.34, green: 0.60, blue: 1.00), Color(red: 0.56, green: 0.38, blue: 0.98)]
+                            : [Color(red: 0.62, green: 0.66, blue: 0.74), Color(red: 0.72, green: 0.68, blue: 0.82)],
+                        startPoint: .topLeading, endPoint: .bottomTrailing
+                    )
+                )
+            VStack(spacing: 3) {
+                Capsule().fill(.white).frame(width: 13, height: 2.4)
+                Capsule().fill(.white.opacity(0.62)).frame(width: 9, height: 2.2)
+            }
+            // 气泡尾巴
+            Path { p in
+                p.move(to: CGPoint(x: 4, y: 21))
+                p.addLine(to: CGPoint(x: 9.5, y: 21))
+                p.addLine(to: CGPoint(x: 4, y: 25))
+                p.closeSubpath()
+            }
+            .fill(on ? Color(red: 0.56, green: 0.38, blue: 0.98) : Color(red: 0.72, green: 0.68, blue: 0.82))
+        }
+        .frame(width: 24, height: 26)
+        .shadow(color: .black.opacity(0.10), radius: 2, y: 1)
     }
 }
 
