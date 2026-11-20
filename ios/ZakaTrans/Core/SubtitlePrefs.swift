@@ -17,7 +17,8 @@ struct SubtitlePrefs: Codable, Equatable {
     var background: String = "black"
     /// 语言模式：bilingual（双语）| zh（仅中文）| source（仅原文）
     var mode: String = "bilingual"
-    /// 画中画窗口大小：L 大（4:3 480×360）| M 中（16:9 576×324）| S 小（21:9 840×360）
+    /// 画中画窗口大小：
+    /// L 大（4:3 480×360）| M 中（16:9 576×324）| S 小（21:9 840×360）| W 全宽（5:1 1080×216）
     var pip: String = "L"
     /// 输出音频（把译文读出来）
     var tts: Bool = false
@@ -55,7 +56,7 @@ struct SubtitlePrefs: Codable, Equatable {
 
         // 旧值映射：以前是 4:3 / 21:9 / bar 两档，现在换成大中小三档
         switch pip {
-        case "L", "M", "S": break
+        case "L", "M", "S", "W": break
         case "21:9", "bar": pip = "S"
         case "16:9": pip = "M"
         default: pip = "L"
@@ -118,6 +119,7 @@ struct SubtitlePrefs: Codable, Equatable {
         if let v = dict["subtitle_mode"] as? String { p.mode = v }
         if let v = dict["pip_style"] as? String {
             switch v {
+            case "W", "full", "bar-full": p.pip = "W"
             case "M", "16:9": p.pip = "M"
             case "S", "21:9", "bar": p.pip = "S"
             default: p.pip = "L"
@@ -202,7 +204,7 @@ struct SubtitlePrefs: Codable, Equatable {
 
     /// 窗口三档：选哪个，画中画开出来就是多大
     static let pipOptions: [(String, String)] = [
-        ("L", "大"), ("M", "中"), ("S", "小"),
+        ("L", "大"), ("M", "中"), ("S", "小"), ("W", "全宽"),
     ]
 
     /// 每档的实际尺寸，设置页拿来做说明
@@ -210,6 +212,7 @@ struct SubtitlePrefs: Codable, Equatable {
         switch v {
         case "M": return "16:9"
         case "S": return "21:9 宽条"
+        case "W": return "全宽 5:1"
         default: return "4:3"
         }
     }
