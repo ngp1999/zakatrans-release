@@ -12,7 +12,7 @@
 // 对外接口跟以前完全一致（start / stop / pushFloat32 / 四个回调），
 // 所以音频管线和画中画那一层一行都不用改。
 
-#define ZT_CHUNK        2560        // 80ms @ 16kHz/16bit/单声道
+#define ZT_CHUNK        1280        // 40ms @ 16kHz/16bit/单声道（越小越早上行，字幕越早出）
 #define ZT_RATE         16000.0
 #define ZT_BUF_SECONDS  1.6
 #define ZT_MAX_SESSION  1080.0
@@ -391,7 +391,7 @@ static NSString *ZTSign(NSString *token, NSString *method, NSString *path,
         while (_pkt.length >= ZT_CHUNK) {
             [batch addObject:[_pkt subdataWithRange:NSMakeRange(0, ZT_CHUNK)]];
             [_pkt replaceBytesInRange:NSMakeRange(0, ZT_CHUNK) withBytes:NULL length:0];
-            if (batch.count >= 8) break;
+            if (batch.count >= 4) break;
         }
     }
 
