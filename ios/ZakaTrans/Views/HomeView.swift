@@ -7,8 +7,15 @@ struct HomeView: View {
     @ObservedObject private var cloud = Cloud.shared
     @ObservedObject private var speaker = Speaker.shared
     @State private var showCredit = false
-    @State private var showAudio = false
-    @State private var showStyle = false
+    /// 当前弹出的面板（朗读设置 / 字幕样式），同一个时刻只会有一个
+    @State private var panel: PanelKind?
+    /// 面板是否已经滑到位置。整块面板用 offset 驱动，从屏幕底部整体滑上来，
+    /// 不依赖 SwiftUI 的 transition（那个在 overlay 里有时候只有内容在动、面板底不跟着走）。
+    @State private var panelUp = false
+
+    private enum PanelKind: String {
+        case audio, style
+    }
 
 
     var body: some View {
@@ -28,21 +35,7 @@ struct HomeView: View {
         // 朗读设置：页面内自绘的半屏面板。
         // 以前用系统 sheet，点下去要等系统那套转场和分档高度初始化，实测有明显延迟；
         // 这里按下即出，动效压到 0.18 秒，观感就是「点了就开」。
-        .overlay(alignment: .bottom) {
-            if showAudio {
-                bottomSheet {
-                    AudioOutputView(onClose: { closeAudio() })
-                } onDismiss: { closeAudio() }
-            }
-        }
-        .overlay(alignment: .bottom) {
-            if showStyle {
-                bottomSheet {
-                    // 高度由内容自己定：内容矮就矮着弹，底部不留空白；内容高才滚
-                    SubtitleSettingsView()
-                } onDismiss: { closeStyle() }
-            }
-        }
+        .overlay(alignment: .bottom) { panelLayer }
         .onAppear { Haptics.warm() }
         .alert("积分不足", isPresented: Binding(
             get: { app.alert != nil },
@@ -55,60 +48,71 @@ struct HomeView: View {
         }
     }
 
-    private func closeAudio() {
-        withAnimation(.easeIn(duration: 0.18)) { showAudio = false }
-    }
+    // MARK: - 底部面板
 
-    private func closeStyle() {
-        withAnimation(.easeIn(duration: 0.18)) { showStyle = false }
-    }
+    /// 面板整块由下往上滑：背景和面板一起动，滑到位置才可点。
+    private var panelLayer: some View {
+        Group {
+            if let kind = panel {
+                ZStack(alignment: .bottom) {
+                    Color.black
+                        .opacity(panelUp ? 0.28 : 0)
+                        .ignoresSafeArea()
+                        .contentShape(Rectangle())
+                        .onTapGesture { closePanel() }
 
-    private func openAudio() {
-        Haptics.tap()
-        withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) {
-            showStyle = false
-            showAudio = true
-        }
-    }
-
-    private func openStyle() {
-        Haptics.tap()
-        withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) {
-            showAudio = false
-            showStyle = true
-        }
-    }
-
-    /// 自绘的半屏面板：从底部弹上来、点空白处关掉，右上角不放关闭按钮。
-    /// 整块铺到屏幕物理底边：外层忽略安全区、面板背景直接到底，
-    /// 只在内容最下面垫一条 Home 指示条的高度。以前是给面板加底部内边距、
-    /// 指望背景自己越过安全区，结果那段经常没铺到，底下就露出一条空。
-    @ViewBuilder
-    private func bottomSheet<Content: View>(@ViewBuilder content: () -> Content,
-                                            onDismiss: @escaping () -> Void) -> some View {
-        ZStack(alignment: .bottom) {
-            Color.black.opacity(0.28)
+                    VStack(spacing: 0) {
+                        switch kind {
+                        case .audio:
+                            AudioOutputView(onClose: { closePanel() })
+                        case .style:
+                            SubtitleSettingsView()
+                        }
+                        Color.clear.frame(height: SafeArea.bottom)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .background(Theme.bg)
+                    .clipShape(UnevenRoundedRectangle(topLeadingRadius: 22,
+                                                      topTrailingRadius: 22,
+                                                      style: .continuous))
+                    .overlay(alignment: .top) {
+                        UnevenRoundedRectangle(topLeadingRadius: 22,
+                                               topTrailingRadius: 22,
+                                               style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.6)
+                            .allowsHitTesting(false)
+                    }
+                    .shadow(color: .black.opacity(0.16), radius: 22, y: -8)
+                    .offset(y: panelUp ? 0 : UIScreen.main.bounds.height)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 .ignoresSafeArea()
-                .contentShape(Rectangle())
-                .onTapGesture { onDismiss() }
-                .transition(.opacity)
-
-            VStack(spacing: 0) {
-                content()
-                Color.clear.frame(height: SafeArea.bottom)
             }
-            .frame(maxWidth: .infinity)
-            .background(Theme.bg)
-            .clipShape(UnevenRoundedRectangle(topLeadingRadius: 22, topTrailingRadius: 22, style: .continuous))
-            .overlay(alignment: .top) {
-                UnevenRoundedRectangle(topLeadingRadius: 22, topTrailingRadius: 22, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.6)
-                    .allowsHitTesting(false)
-            }
-            .transition(.move(edge: .bottom))
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .ignoresSafeArea()
+        .animation(.spring(response: 0.40, dampingFraction: 0.86), value: panelUp)
+    }
+
+    private func openPanel(_ kind: PanelKind) {
+        Haptics.tap()
+        if panel == kind { return }
+        if panel == nil {
+            panel = kind
+            panelUp = false
+            // 先让它以「在屏幕外」的姿态完成一次布局，下一拍再滑上来——
+            // 直接在同一次事务里设 true，第一帧就已经在位置上了，等于没有动画。
+            DispatchQueue.main.async {
+                panelUp = true
+            }
+        } else {
+            withAnimation(.easeInOut(duration: 0.16)) { panel = kind }
+        }
+    }
+
+    private func closePanel() {
+        withAnimation(.easeIn(duration: 0.22)) { panelUp = false }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.26) {
+            if !panelUp { panel = nil }
+        }
     }
 
     // MARK: - 字幕
@@ -240,7 +244,7 @@ struct HomeView: View {
             HStack(spacing: 10) {
                 // 音频输出：点开是半屏设置，图标反映当前开关
                 iconButton(on: speaker.enabled) {
-                    openAudio()
+                    openPanel(.audio)
                 } content: {
                     Image(systemName: speaker.enabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
                         .font(.system(size: 17, weight: .medium))
@@ -248,7 +252,7 @@ struct HomeView: View {
 
                 // 字幕样式：颜色、字号、背景、窗口大小都在里面（80% 面板，点空白关闭）
                 iconButton(on: app.pipOn) {
-                    openStyle()
+                    openPanel(.style)
                 } content: {
                     SubtitleGlyph(on: app.pipOn)
                 }
