@@ -21,6 +21,11 @@ final class Speaker: NSObject, ObservableObject {
     /// 音色：空 = 中文默认女声
     @Published var voiceId: String = ""
 
+    /// 同声传译正在跑（它自己占着 PlayAndRecord + voiceChat 的会话）。
+    /// 这种时候朗读绝不能再把会话改成 .playback —— 一改录音链路就被切走，
+    /// 用户看到的就是「开了朗读，翻译开始延迟、卡顿、整段不翻译」。
+    var usesExternalSession = false
+
     private let synth = AVSpeechSynthesizer()
 
     /// 待念队列（不含正在念的那句）：文本 + 语言（同声传译要按语言换嗓子）
@@ -35,8 +40,11 @@ final class Speaker: NSObject, ObservableObject {
     private var paused = false
 
     private var gateTimer: Timer?
+    private var gateOpenedAt: Date?
+    /// 上一次配好的音频会话（避免每句都重配）
+    private var configuredKey = ""
 
-    private let maxQueue = 3
+    private let maxQueue = 2
     private let recentLimit = 24
 
     override init() {
@@ -49,9 +57,17 @@ final class Speaker: NSObject, ObservableObject {
     /// duckOthers：别的 App 音量自动压低（约 -20dB），念完恢复。
     /// 用 mixWithOthers 保证不会被系统判定成"要独占音频"，从而不会把对方视频停掉。
     private func configureSession() {
+        // 同传模式：会话归 ZKInterpreter 管（PlayAndRecord + voiceChat，自带回声消除），
+        // 这里一个字都不许动，动了麦克风就断。
+        guard !usesExternalSession else { return }
         let s = AVAudioSession.sharedInstance()
         // duckLevel = 0 就是「不压」：只混音，别人原样放
         let duck = duckLevel > 0
+        // 每念一句都 setCategory + setActive 是一次音频硬件重配，主线程会卡 100~300ms；
+        // 连着念十几句就是一路顿。配置没变就直接复用。
+        let key = duck ? "playback-duck-mix" : "playback-mix"
+        if configuredKey == key { return }
+        configuredKey = key
         let opts: AVAudioSession.CategoryOptions = duck ? [.duckOthers, .mixWithOthers] : [.mixWithOthers]
         do {
             try s.setCategory(.playback, mode: .spokenAudio, options: opts)
@@ -87,6 +103,7 @@ final class Speaker: NSObject, ObservableObject {
         queue.removeAll()
         recentKeys.removeAll()
         current = nil
+        configuredKey = ""      // 下一句重新配会话（上一场可能被系统改过路由）
     }
 
     /// 新一句译文进来：排队，不打断正在念的
@@ -137,18 +154,20 @@ final class Speaker: NSObject, ObservableObject {
         openEchoGate()
     }
 
-    /// 朗读门:念的时候给录屏那边留一个"我在出声"的时间戳,那边据此把这段音频丢掉。
-    /// 系统录屏拿到的是混音,我们的朗读也在里面——送进上游就会被当成对方说话再翻一遍,
-    /// 结果就是文本重复两遍、句子被切断、还白烧 token。
+    /// 朗读门：念的时候给录屏那边留一个"我在出声"的时间戳，那边据此把这段音频换成静音。
+    ///
+    /// 上一版的门是「整句 + 后面再挂 2 秒」，而朗读是一句接一句不停的，
+    /// 门几乎一直开着 —— 对方说话的声音也跟着被丢掉，所以一开朗读就漏料、句子断。
+    /// 现在改成：只在真出声的这段时间开，念完立刻关（didFinish → closeEchoGate）。
     private func openEchoGate() {
-        let deadline = String(Int(Date().timeIntervalSince1970) + 2)
-        ZKStore.setSetting("tts_gate", v: deadline)
+        if gateOpenedAt == nil { gateOpenedAt = Date() }
+        refreshEchoGate()
         gateTimer?.invalidate()
-        gateTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
+        gateTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
                 if self.synth.isSpeaking || self.current != nil {
-                    ZKStore.setSetting("tts_gate", v: String(Int(Date().timeIntervalSince1970) + 2))
+                    self.refreshEchoGate()
                 } else {
                     self.closeEchoGate()
                 }
@@ -156,9 +175,22 @@ final class Speaker: NSObject, ObservableObject {
         }
     }
 
+    private func refreshEchoGate() {
+        guard let t = gateOpenedAt else { return }
+        // 硬上限：SpeechSynthesizer 有时候不给 didFinish（语音包缺失、被系统掐），
+        // 门不能就这么一直挂着，否则等于把整场音频都静音了。
+        if Date().timeIntervalSince(t) > 30 {
+            closeEchoGate()
+            return
+        }
+        // 只比当前晚 1 秒：扩展每 0.3 秒读一次，够用；留太长就是白丢对方的声音
+        ZKStore.setSetting("tts_gate", v: String(Int(Date().timeIntervalSince1970) + 1))
+    }
+
     private func closeEchoGate() {
         gateTimer?.invalidate()
         gateTimer = nil
+        gateOpenedAt = nil
         ZKStore.setSetting("tts_gate", v: "0")
     }
 
@@ -174,6 +206,9 @@ final class Speaker: NSObject, ObservableObject {
     func stop() {
         paused = true
         stopSpeaking()
+        configuredKey = ""
+        // 同传还占着麦克风的时候，绝对不能把会话改成 .playback —— 那等于把录音掐了
+        guard !usesExternalSession else { return }
         // 关掉 ducking 之后如果不还原，别的 App 会一直被压着
         let s = AVAudioSession.sharedInstance()
         try? s.setCategory(.playback, mode: .default, options: [.mixWithOthers])
@@ -263,5 +298,4 @@ extension Speaker {
                 if a.quality.rawValue != b.quality.rawValue { return a.quality.rawValue > b.quality.rawValue }
                 return a.name < b.name
             }
-}
 }
