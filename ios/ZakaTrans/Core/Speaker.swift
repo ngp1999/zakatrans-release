@@ -163,7 +163,7 @@ final class Speaker: NSObject, ObservableObject {
         if gateOpenedAt == nil { gateOpenedAt = Date() }
         refreshEchoGate()
         gateTimer?.invalidate()
-        gateTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
+        gateTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
                 if self.synth.isSpeaking || self.current != nil {
@@ -183,15 +183,25 @@ final class Speaker: NSObject, ObservableObject {
             closeEchoGate()
             return
         }
-        // 只比当前晚 1 秒：扩展每 0.3 秒读一次，够用；留太长就是白丢对方的声音
-        ZKStore.setSetting("tts_gate", v: String(Int(Date().timeIntervalSince1970) + 1))
+        // 门要比当前晚 1.6 秒，而且要带小数。
+        // 原来存的是整秒（Int(now)+1），now = 100.9 时门只剩 0.1 秒，
+        // 朗读还在响门就过期了 —— 念出来的译文被麦克风收进去又翻译一遍，
+        // 就是用户看到的「系统朗读的音频被识别并翻译」。
+        let until = Date().timeIntervalSince1970 + 1.6
+        ZKStore.setSetting("tts_gate", v: String(format: "%.3f", until))
     }
 
     private func closeEchoGate() {
         gateTimer?.invalidate()
         gateTimer = nil
         gateOpenedAt = nil
-        ZKStore.setSetting("tts_gate", v: "0")
+        // 念完别立刻放行：扬声器到麦克风还有一点尾音在路上，
+        // 立刻关会把最后几个字漏进识别里。多留 0.8 秒再关。
+        let tail = Date().timeIntervalSince1970 + 0.8
+        ZKStore.setSetting("tts_gate", v: String(format: "%.3f", tail))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            if self.gateOpenedAt == nil { ZKStore.setSetting("tts_gate", v: "0") }
+        }
     }
 
     /// 试听：不排队，立刻念（不影响正式队列）
