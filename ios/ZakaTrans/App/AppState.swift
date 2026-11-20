@@ -35,6 +35,8 @@ final class AppState: ObservableObject {
     func setAvatar(_ image: UIImage?) {
         avatarImage = image
         AvatarStore.save(image)
+        let b64 = AvatarStore.base64() ?? ""
+        Task { await Cloud.shared.uploadAvatar(b64) }
     }
 
     struct SubtitleLine: Identifiable, Equatable {
@@ -175,6 +177,8 @@ final class AppState: ObservableObject {
             "pip": prefs.pip,
         ])
         prefs.saveLocal()
+        // 收音模式改了要立刻切换采集来源（内部收音 / 麦克风收音）
+        ZKSpeechStream.shared()?.applyAudioSource()
         Speaker.shared.enabled = prefs.tts
         Speaker.shared.rate = prefs.speechRate
         Speaker.shared.duckLevel = prefs.duckLevel
@@ -462,7 +466,8 @@ final class SilentKeeper {
 
 // MARK: - 头像
 
-/// 头像只存本机：用户从相册选的照片属于个人内容，没必要也不应该传到服务器。
+/// 头像：本机存一份用于秒开，同时同步到账号上（换手机 / 重装还在）。
+/// 只传压缩后的 JPEG（600px 以内，几十 KB），不传原图。
 enum AvatarStore {
     private static var url: URL {
         let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -472,6 +477,19 @@ enum AvatarStore {
     static func load() -> UIImage? {
         guard let data = try? Data(contentsOf: url) else { return nil }
         return UIImage(data: data)
+    }
+
+    /// 当前头像的 base64（给服务端同步用）
+    static func base64() -> String? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return data.base64EncodedString()
+    }
+
+    /// 用服务端下发的 base64 覆盖本机头像
+    @discardableResult
+    static func save(base64: String) -> Bool {
+        guard let data = Data(base64Encoded: base64) else { return false }
+        return (try? data.write(to: url, options: .atomic)) != nil
     }
 
     static func save(_ image: UIImage?) {
