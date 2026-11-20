@@ -138,6 +138,11 @@ final class Cloud: ObservableObject {
                 minStartTokens = (d["min_start_balance"] as? NSNumber)?.int64Value ?? 2000
                 minStartCredits = (d["min_start_credits"] as? NSNumber)?.doubleValue ?? 2.8
                 if let p = d["profile"] as? [String: Any] {
+                    // 头像：服务端有就以服务端为准（换设备 / 重装后能补回来）
+                    if let b64 = p["avatar"] as? String, !b64.isEmpty,
+                       AvatarStore.save(base64: b64) {
+                        DispatchQueue.main.async { AppState.shared.avatarImage = AvatarStore.load() }
+                    }
                     profile = Profile(
                         id: p["id"] as? String ?? accountID,
                         email: p["email"] as? String ?? "",
@@ -173,6 +178,20 @@ final class Cloud: ObservableObject {
         guard !token.isEmpty else { return false }
         do {
             _ = try await request(path: "/v1/prefs", body: prefs, method: "PUT")
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    // MARK: - 头像
+
+    /// 头像同步到账号。空字符串 = 清掉，回到默认头像。
+    @discardableResult
+    func uploadAvatar(_ base64: String) async -> Bool {
+        guard !token.isEmpty else { return false }
+        do {
+            _ = try await request(path: "/v1/avatar", body: ["image": base64], method: "PUT")
             return true
         } catch {
             return false
