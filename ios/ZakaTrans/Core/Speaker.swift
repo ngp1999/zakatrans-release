@@ -299,3 +299,4 @@ extension Speaker {
                 return a.name < b.name
             }
 }
+}
