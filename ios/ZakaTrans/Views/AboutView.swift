@@ -3,6 +3,9 @@ import SwiftUI
 /// 关于语幕：应用信息 + 协议与说明。
 /// 结构按国内主流 App 的"关于"页来：上面是图标和版本，下面是条款入口，最后是版权。
 struct AboutView: View {
+    /// 对外联系邮箱
+    static let contactEmail = "1938044162@qq.com"
+
     private var version: String {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
         let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? ""
@@ -22,7 +25,7 @@ struct AboutView: View {
             .padding(.bottom, 28)
         }
         .background(Theme.bg)
-        .navigationTitle("关于语幕")
+        .navigationTitle("关于")
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -40,13 +43,9 @@ struct AboutView: View {
                         .strokeBorder(Theme.hairline, lineWidth: 0.6)
                 )
 
-            Text("语幕翻译")
+            Text("语幕实时翻译")
                 .font(.system(size: 21, weight: .semibold))
                 .foregroundStyle(Theme.ink)
-
-            Text("版本 \(version)")
-                .font(.system(size: 14).monospacedDigit())
-                .foregroundStyle(Theme.sub)
 
             Text("实时字幕与同声传译")
                 .font(.system(size: 14))
@@ -77,7 +76,24 @@ struct AboutView: View {
 
     private var supportCard: some View {
         VStack(spacing: 0) {
-            row(title: "联系我们", kind: .contact)
+            NavigationLink {
+                TermsView(kind: .contact)
+            } label: {
+                HStack {
+                    Text("联系我们").font(.system(size: 16)).foregroundStyle(Theme.ink)
+                    Spacer()
+                    Text(AboutView.contactEmail)
+                        .font(.system(size: 14))
+                        .foregroundStyle(Theme.sub)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.faint)
+                }
+                .padding(.horizontal, 16)
+                .frame(height: 52)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(RowButtonStyle())
         }
         .background(Theme.card)
         .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
