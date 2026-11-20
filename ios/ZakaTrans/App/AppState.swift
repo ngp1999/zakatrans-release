@@ -184,10 +184,22 @@ final class AppState: ObservableObject {
     /// 改设置后统一走这里：本地存 + 云端同步 + 通知引擎
     func updatePrefs(_ mutate: (inout SubtitlePrefs) -> Void) {
         var p = prefs
+        let oldPip = prefs.pip
         mutate(&p)
         prefs = p
         applyPrefsToEngine()
         Task { await Cloud.shared.savePrefs(p.dict()) }
+
+        // 窗口大小只在开窗那一刻交给系统，改了必须重开一次才会变。
+        // 不重开的话，用户在运行中切到"全宽"会觉得没反应。
+        if p.pip != oldPip, pipOn, running, broadcastSeen {
+            ZKPip.shared()!.stop()
+            pipActive = false
+            pipRequested = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                self?.startPipIfPossible()
+            }
+        }
     }
 
     /// 登录 / 换设备后，把云端的设置拉回来（云端有就以云端为准）
