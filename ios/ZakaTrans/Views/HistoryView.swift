@@ -206,6 +206,13 @@ struct SessionDetailView: View {
         return f.string(from: d)
     }
 
+    static func timeText(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "zh_CN")
+        f.dateFormat = "HH:mm"
+        return f.string(from: d)
+    }
+
     private var summaryCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
