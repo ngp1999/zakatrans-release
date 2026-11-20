@@ -318,7 +318,7 @@ final class AppState: ObservableObject {
         let conn = beat["conn"] as? String ?? ""
         let now = Date().timeIntervalSince1970
         guard t > 0, t >= sessionStartAt - 1.5, now - t < 6 else {
-            audioHint = broadcastSeen ? "录屏已断开" : "等你在控制中心点开始"
+            audioHint = broadcastSeen ? "录屏已断开" : "等待授予直播录屏权限"
             return
         }
         if bufs != lastBufs {
