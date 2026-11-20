@@ -23,12 +23,6 @@ struct PurchaseView: View {
                     }
                     .card(padding: 16)
 
-                    Text("选择档位，付款后立即到账")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Theme.sub)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.top, 2)
-
                     LazyVGrid(columns: columns, spacing: 10) {
                         ForEach(Purchases.fallback, id: \.id) { item in
                             tile(id: item.id, credits: item.credits)
@@ -74,27 +68,32 @@ struct PurchaseView: View {
     }
 
     private func tile(id: String, credits: Int) -> some View {
-        Button {
+        let ok = purch.available(id)
+        return Button {
             Task { await purch.buy(id: id) }
         } label: {
-            VStack(spacing: 6) {
+            VStack(spacing: 7) {
                 Text("\(credits)")
-                    .font(.system(size: 22, weight: .bold).monospacedDigit())
-                    .foregroundStyle(Theme.ink)
+                    .font(.system(size: 23, weight: .bold).monospacedDigit())
+                    .foregroundStyle(ok ? Theme.ink : Theme.sub)
                 Text("积分")
-                    .font(.system(size: 11))
+                    .font(.system(size: 12))
                     .foregroundStyle(Theme.sub)
                 Text(purch.priceText(for: id))
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
-                    .padding(.top, 2)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(ok ? Theme.accent : Theme.faint)
+                    .padding(.top, 1)
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 98)
-            .background(Theme.fill)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .frame(height: 104)
+            .background(Theme.surface)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(ok ? Theme.accent.opacity(0.25) : Theme.hairline, lineWidth: 0.8)
+            )
         }
         .buttonStyle(TileButtonStyle())
-        .disabled(purch.busy)
+        .disabled(purch.busy || !ok)
     }
 }
