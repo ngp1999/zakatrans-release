@@ -82,6 +82,21 @@ static BOOL ZKHasContent(NSString *s) {
     return NO;
 }
 
+/// 译文增量可能是「累积式」（每帧给整句）也可能是「增量式」（每帧给一小段），
+/// 上游两种都出现过。这里合并成整句：
+///   新的一句以旧的结尾 → 已经包含了，用新的
+///   旧的一句以新的开头 → 是回退/重复，保留旧的
+///   新的比旧的短 → 当成一小段接上
+static NSString *ZKMergeTrans(NSString *old, NSString *add) {
+    if (!old.length) return add;
+    if (!add.length) return old;
+    if ([add hasPrefix:old]) return add;
+    if ([old hasPrefix:add]) return old;
+    if (add.length >= old.length) return add;
+    if ([old hasSuffix:add]) return old;
+    return [old stringByAppendingString:add];
+}
+
 /// 去掉首尾空白、把连续空白压成一个空格，空行不要
 static NSString *ZKClean(NSString *s) {
     if (!s.length) return @"";
@@ -349,8 +364,9 @@ static NSString *ZKClean(NSString *s) {
 
     if (lid.length) {
         // 这句已经落定，译文原地补进去
-        if (a) _dstA = t; else _dstB = t;
-        [self emit:lid side:side src:src ?: @"" dst:t kind:ZKLineKindUpdate];
+        NSString *merged = ZKMergeTrans(a ? _dstA : _dstB, t);
+        if (a) _dstA = merged; else _dstB = merged;
+        [self emit:lid side:side src:src ?: @"" dst:merged kind:ZKLineKindUpdate];
     } else {
         // 译文比原文先到：先攒着，等原文落定一起发
         if (a) { _earlyDstA = t; _draftDstA = t; } else { _earlyDstB = t; _draftDstB = t; }
