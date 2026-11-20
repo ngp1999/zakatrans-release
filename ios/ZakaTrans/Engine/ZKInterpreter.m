@@ -107,6 +107,17 @@ static NSString *ZKClean(NSString *s) {
     return t;
 }
 
+/// 私有方法先声明一遍：块里调用的方法在下面才定义，不声明会走 id 返回值的隐式推断。
+@interface ZKInterpreter (Private)
+- (void)sourcePartial:(NSString *)side seg:(NSInteger)seg text:(NSString *)text;
+- (void)sourceEnd:(NSString *)side seg:(NSInteger)seg text:(NSString *)text;
+- (void)transPartial:(NSString *)side seg:(NSInteger)seg text:(NSString *)text;
+- (void)transEnd:(NSString *)side seg:(NSInteger)seg text:(NSString *)text;
+- (void)state:(NSString *)st;
+- (void)fail:(NSString *)why;
+- (void)stopMic;
+@end
+
 @implementation ZKInterpreter {
     ZKDoubaoAST *_toOther;   // 我 → 对方
     ZKDoubaoAST *_toMine;    // 对方 → 我
@@ -125,16 +136,6 @@ static NSString *ZKClean(NSString *s) {
     NSString *_idA, *_idB;
     NSString *_srcA, *_srcB;
     NSString *_dstA, *_dstB;
-    // 原文还在滚的时候先攒着，等落定了再把 id 定下来
-    NSString *_draftSrcA, *_draftSrcB;
-    // 滚动中的那条气泡用的 id。
-    // 以前 draft 固定叫 draft-a / draft-b，落定时又换一个新 id 推 Final，
-    // 结果那条 draft 气泡永远留在最上面、只显示最后一个词——就是用户看到的「第一行老是最后一个词」。
-    // 现在 draft 和 Final 共用同一个 id，落定时原地变成正式气泡。
-    NSString *_draftIdA, *_draftIdB;
-    NSString *_draftDstA, *_draftDstB;
-    // 译文先于原文到达时暂存
-    NSString *_earlyDstA, *_earlyDstB;
 
     // 去重：同一条原文被推两遍、或两个方向听成同一句
     NSString *_lastSrcA, *_lastSrcB;
@@ -155,6 +156,16 @@ static NSString *ZKClean(NSString *s) {
     NSMutableArray<NSMutableDictionary *> *_waitA;
     NSMutableArray<NSMutableDictionary *> *_waitB;
 
+    // 按句子编号配对的表：编号由服务端给，原文和译文带同一个号。
+    // 这一版之前的做法是「译文按到达顺序认领最早一条还没译文的原文」——
+    // 只要有一句原文被过滤掉（回声、碎句、重复），后面每一句的译文就整体错一行，
+    // 用户看到的就是「译文全串到下一句上」和「有的句子只有原文没译文」。
+    // 有了号就不需要猜：谁的译文回到谁头上，少了哪句一眼看得出来。
+    NSMutableDictionary<NSNumber *, NSMutableDictionary *> *_segA;
+    NSMutableDictionary<NSNumber *, NSMutableDictionary *> *_segB;
+    NSInteger _localSegA, _localSegB;   // 老服务端不带号时自己编
+    NSInteger _openSegA, _openSegB;     // 正在滚的那一句（0 = 没有）
+
     // 当前在说话的是哪一边：用来压掉另一条通道的碎渣
     NSString *_activeSide;
     NSTimeInterval _activeUntil;
@@ -173,6 +184,8 @@ static NSString *ZKClean(NSString *s) {
         _other = @"en-US";
         _waitA = [NSMutableArray array];
         _waitB = [NSMutableArray array];
+        _segA = [NSMutableDictionary dictionary];
+        _segB = [NSMutableDictionary dictionary];
     }
     return self;
 }
@@ -228,19 +241,23 @@ static NSString *ZKClean(NSString *s) {
 }
 
 - (void)resetLines {
-    _draftIdA = _draftIdB = nil;
+
     _idA = _idB = nil;
     _srcA = _srcB = nil;
     _dstA = _dstB = nil;
-    _draftSrcA = _draftSrcB = nil;
-    _draftDstA = _draftDstB = nil;
-    _earlyDstA = _earlyDstB = nil;
+
+
+
     _lastSrcA = _lastSrcB = nil;
     _lastAtA = _lastAtB = 0;
     _activeSide = nil;
     _activeUntil = 0;
     [_waitA removeAllObjects];
     [_waitB removeAllObjects];
+    [_segA removeAllObjects];
+    [_segB removeAllObjects];
+    _openSegA = _openSegB = 0;
+    _localSegA = _localSegB = 0;
 }
 
 - (void)stop {
@@ -261,25 +278,25 @@ static NSString *ZKClean(NSString *s) {
 - (void)wire:(ZKDoubaoAST *)ast side:(NSString *)side {
     __weak typeof(self) weakSelf = self;
 
-    ast.onSourcePartial = ^(NSString *delta) {
+    ast.onSourcePartial = ^(NSString *delta, NSInteger seg) {
         __strong typeof(weakSelf) s = weakSelf;
         if (!s) return;
-        [s sourcePartial:side text:delta];
+        [s sourcePartial:side seg:seg text:delta];
     };
-    ast.onSourceEnd = ^(NSString *full) {
+    ast.onSourceEnd = ^(NSString *full, NSInteger seg) {
         __strong typeof(weakSelf) s = weakSelf;
         if (!s) return;
-        [s sourceEnd:side text:full];
+        [s sourceEnd:side seg:seg text:full];
     };
-    ast.onTransPartial = ^(NSString *delta) {
+    ast.onTransPartial = ^(NSString *delta, NSInteger seg) {
         __strong typeof(weakSelf) s = weakSelf;
         if (!s) return;
-        [s transPartial:side text:delta];
+        [s transPartial:side seg:seg text:delta];
     };
-    ast.onTransEnd = ^(NSString *full) {
+    ast.onTransEnd = ^(NSString *full, NSInteger seg) {
         __strong typeof(weakSelf) s = weakSelf;
         if (!s) return;
-        [s transEnd:side text:full];
+        [s transEnd:side seg:seg text:full];
     };
     ast.onState = ^(NSString *st) {
         __strong typeof(weakSelf) s = weakSelf;
@@ -323,153 +340,141 @@ static NSString *ZKClean(NSString *s) {
 /// 真人对话很少同时开口，所以：另一边刚说完 1 秒内的短句一律不收，长句照收。
 - (BOOL)acceptSide:(NSString *)side length:(NSUInteger)n {
     NSTimeInterval now = [NSDate date].timeIntervalSince1970;
-    if (_activeSide && ![_activeSide isEqualToString:side] && now < _activeUntil && n <= 6) {
+    // 另一条通道对「不是它那种语言」的声音也会硬认，认出来就是两三个字的碎渣。
+    // 以前把 6 个字以内的都挡掉，连正常的短句（「好」「OK」「谢谢」）一起挡了，
+    // 结果那句话只剩译文、没有原文。现在只挡 3 个字以内的碎渣，窗口也收紧。
+    if (_activeSide && ![_activeSide isEqualToString:side] && now < _activeUntil && n <= 3) {
         return NO;
     }
-    if (n >= 3) { _activeSide = side; _activeUntil = now + 1.0; }
+    if (n >= 3) { _activeSide = side; _activeUntil = now + 0.7; }
     return YES;
 }
 
-/// 这一边当前正在滚的那条气泡 id；没有就建一条
-- (NSString *)draftIdFor:(NSString *)side create:(BOOL)create {
+/// 这一边这一句的气泡 id。按编号来，稳定且不会重：草稿和落定是同一条。
+- (NSString *)lineIdFor:(NSString *)side seg:(NSInteger)seg {
+    return [NSString stringWithFormat:@"%@-%ld", side, (long)seg];
+}
+
+/// 把服务端给的号落到本地。老服务端不带号（seg = 0）时自己编：
+/// 原文增量沿用当前句的号，原文整句收尾后换新号。
+- (NSInteger)segFor:(NSString *)side raw:(NSInteger)seg ending:(BOOL)ending {
     BOOL a = [side isEqualToString:@"a"];
-    NSString *cur = a ? _draftIdA : _draftIdB;
-    if (!cur.length && create) {
-        cur = [NSString stringWithFormat:@"%@-%ld", side, (long)++_seq];
-        if (a) _draftIdA = cur; else _draftIdB = cur;
+    NSInteger cur = a ? _openSegA : _openSegB;
+    NSInteger n = seg;
+    if (n <= 0) {
+        if (cur <= 0) {
+            if (a) { _localSegA++; n = _localSegA; _openSegA = n; }
+            else   { _localSegB++; n = _localSegB; _openSegB = n; }
+        } else {
+            n = cur;
+        }
     }
-    return cur;
+    if (ending) { if (a) _openSegA = 0; else _openSegB = 0; }
+    else        { if (a) _openSegA = n; else _openSegB = n; }
+    return n;
 }
 
-/// 这句最终没能落定（重复、回声、纯噪声）：把那条滚动中的气泡撤掉，
-/// 否则界面最上面会一直挂着半句没头没尾的字。
-- (void)dropDraft:(NSString *)side {
-    BOOL a = [side isEqualToString:@"a"];
-    NSString *cur = a ? _draftIdA : _draftIdB;
-    if (!cur.length) return;
-    if (a) _draftIdA = nil; else _draftIdB = nil;
-    if (a) { _draftSrcA = nil; _draftDstA = nil; } else { _draftSrcB = nil; _draftDstB = nil; }
-    [self emit:cur side:side src:@"" dst:@"" kind:ZKLineKindDraft];
+/// 取这一句的记录；没有就建
+- (NSMutableDictionary *)entryFor:(NSString *)side seg:(NSInteger)seg {
+    NSMutableDictionary *m = [side isEqualToString:@"a"] ? _segA : _segB;
+    NSNumber *k = @(seg);
+    NSMutableDictionary *e = m[k];
+    if (!e) {
+        e = [@{@"seg": k, @"src": @"", @"dst": @"", @"at": @([NSDate date].timeIntervalSince1970)} mutableCopy];
+        m[k] = e;
+    }
+    return e;
 }
 
-- (void)sourcePartial:(NSString *)side text:(NSString *)text {
+/// 太久没动静的句子记录清掉，别一直挂着占内存
+- (void)sweepSegs {
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    for (NSMutableDictionary *m in @[_segA, _segB]) {
+        NSMutableArray *dead = [NSMutableArray array];
+        for (NSNumber *k in m) {
+            NSDictionary *e = m[k];
+            if (now - [e[@"at"] doubleValue] > 25.0) [dead addObject:k];
+        }
+        [m removeObjectsForKeys:dead];
+    }
+}
+
+/// 这句最终没能落定（重复、回声、纯噪声）：把它的草稿气泡撤掉。
+- (void)dropSeg:(NSString *)side seg:(NSInteger)seg {
+    if (seg <= 0) return;
+    [self emit:[self lineIdFor:side seg:seg] side:side src:@"" dst:@"" kind:ZKLineKindDraft];
+    NSMutableDictionary *m = [side isEqualToString:@"a"] ? _segA : _segB;
+    [m removeObjectForKey:@(seg)];
+}
+
+- (void)sourcePartial:(NSString *)side seg:(NSInteger)segRaw text:(NSString *)text {
     if (!_running) return;
     NSString *t = ZKClean(text);
     if (!ZKHasContent(t)) return;
     if (![self belongs:side src:t]) return;
     if (![self acceptSide:side length:t.length]) return;
 
-    BOOL a = [side isEqualToString:@"a"];
-    NSString *dst = a ? _draftDstA : _draftDstB;
-    if (a) _draftSrcA = t; else _draftSrcB = t;
-    [self emit:[self draftIdFor:side create:YES] side:side src:t dst:dst kind:ZKLineKindDraft];
+    NSInteger seg = [self segFor:side raw:segRaw ending:NO];
+    NSMutableDictionary *e = [self entryFor:side seg:seg];
+    e[@"src"] = t;
+    e[@"at"] = @([NSDate date].timeIntervalSince1970);
+    NSString *dst = e[@"dst"] ?: @"";
+    [self emit:[self lineIdFor:side seg:seg] side:side src:t dst:dst kind:ZKLineKindDraft];
 }
 
-- (void)sourceEnd:(NSString *)side text:(NSString *)text {
+- (void)sourceEnd:(NSString *)side seg:(NSInteger)segRaw text:(NSString *)text {
     if (!_running) return;
     NSString *t = ZKClean(text);
-    // 纯标点、空串——直接丢，顺手把自己那条草稿气泡撤掉
-    if (!ZKHasContent(t)) { [self dropDraft:side]; return; }
-    if (![self belongs:side src:t]) { [self dropDraft:side]; return; }
-    if (![self acceptSide:side length:t.length]) { [self dropDraft:side]; return; }
-    if ([self isEcho:side src:t]) { [self dropDraft:side]; return; }
+    if (!ZKHasContent(t)) return;
+    if (![self belongs:side src:t]) return;
+    if (![self acceptSide:side length:t.length]) return;
+    if ([self isEcho:side src:t]) return;
 
-    BOOL a = [side isEqualToString:@"a"];
     NSTimeInterval now = [NSDate date].timeIntervalSince1970;
-    NSString *last = a ? _lastSrcA : _lastSrcB;
-    NSTimeInterval lastAt = a ? _lastAtA : _lastAtB;
+    NSString *last = [side isEqualToString:@"a"] ? _lastSrcA : _lastSrcB;
+    NSTimeInterval lastAt = [side isEqualToString:@"a"] ? _lastAtA : _lastAtB;
+    // 同一句被上游重复推一遍：丢掉，但不撤销已经上屏的内容
+    if (last.length && [last isEqualToString:t] && now - lastAt < 3.0) return;
+    if ([side isEqualToString:@"a"]) { _lastSrcA = t; _lastAtA = now; } else { _lastSrcB = t; _lastAtB = now; }
 
-    // 同一句被上游重复推一遍
-    if (last.length && [last isEqualToString:t] && now - lastAt < 3.0) {
-        [self dropDraft:side];
-        return;
-    }
-    if (a) { _lastSrcA = t; _lastAtA = now; } else { _lastSrcB = t; _lastAtB = now; }
-
-    // 这一句的 id：滚动中的草稿已经在用，就沿用它——气泡原地落定，不再多出一条
-    NSString *lid = [self draftIdFor:side create:YES];
-    NSString *early = a ? _earlyDstA : _earlyDstB;
-    if (a) {
-        _idA = lid; _srcA = t; _dstA = early ?: @"";
-        _draftIdA = nil; _draftSrcA = nil; _draftDstA = nil; _earlyDstA = nil;
-    } else {
-        _idB = lid; _srcB = t; _dstB = early ?: @"";
-        _draftIdB = nil; _draftSrcB = nil; _draftDstB = nil; _earlyDstB = nil;
-    }
-    // 挂进等待队列：译文晚到也能认回这一句
-    NSMutableArray *q = a ? _waitA : _waitB;
-    if (!early.length) {
-        [q addObject:[@{@"id": lid, @"src": t, @"at": @(now)} mutableCopy]];
-    }
-    // 太久没等到译文的先摘掉，别让它一直占着队首、把后面每句的译文都接错
-    while (q.count) {
-        NSMutableDictionary *head = q.firstObject;
-        double at = [head[@"at"] doubleValue];
-        if (now - at < 12.0) break;
-        [q removeObjectAtIndex:0];
-    }
-    [self emit:lid side:side src:t dst:(early ?: @"") kind:ZKLineKindFinal];
+    NSInteger seg = [self segFor:side raw:segRaw ending:YES];
+    NSMutableDictionary *e = [self entryFor:side seg:seg];
+    e[@"src"] = t;
+    e[@"at"] = @(now);
+    NSString *dst = e[@"dst"] ?: @"";
+    [self emit:[self lineIdFor:side seg:seg] side:side src:t dst:dst kind:ZKLineKindFinal];
+    [self sweepSegs];
 }
 
-- (void)transPartial:(NSString *)side text:(NSString *)text {
+- (void)transPartial:(NSString *)side seg:(NSInteger)segRaw text:(NSString *)text {
     if (!_running) return;
     NSString *t = ZKClean(text);
     if (!t.length) return;
 
-    BOOL a = [side isEqualToString:@"a"];
-    NSMutableArray *q = a ? _waitA : _waitB;
-    NSMutableDictionary *cur = q.lastObject;
+    NSInteger seg = [self segFor:side raw:segRaw ending:NO];
+    NSMutableDictionary *e = [self entryFor:side seg:seg];
+    NSString *merged = ZKMergeTrans(e[@"dst"] ?: @"", t);
+    e[@"dst"] = merged;
+    e[@"at"] = @([NSDate date].timeIntervalSince1970);
 
-    if (cur) {
-        // 这句已经落定，译文原地补进去：滚动中的那条气泡直接变成正式气泡
-        NSString *merged = ZKMergeTrans(cur[@"dst"] ?: @"", t);
-        cur[@"dst"] = merged;
-        if (a) _dstA = merged; else _dstB = merged;
-        [self emit:cur[@"id"] side:side src:(cur[@"src"] ?: @"") dst:merged kind:ZKLineKindUpdate];
-    } else {
-        // 译文比原文先到：先攒着，等原文落定一起发
-        if (a) { _earlyDstA = t; _draftDstA = t; } else { _earlyDstB = t; _draftDstB = t; }
-        NSString *draftSrc = a ? _draftSrcA : _draftSrcB;
-        if (draftSrc.length) {
-            [self emit:[self draftIdFor:side create:YES] side:side src:draftSrc dst:t kind:ZKLineKindDraft];
-        }
-    }
+    NSString *src = e[@"src"] ?: @"";
+    // 原文还没到也别攒着不发：这句挂在自己的号上，原文到了原地补齐
+    [self emit:[self lineIdFor:side seg:seg] side:side src:src dst:merged
+          kind:src.length ? ZKLineKindUpdate : ZKLineKindDraft];
 }
 
-- (void)transEnd:(NSString *)side text:(NSString *)text {
+- (void)transEnd:(NSString *)side seg:(NSInteger)segRaw text:(NSString *)text {
     if (!_running) return;
     NSString *t = ZKClean(text);
     if (!t.length) return;
 
-    BOOL a = [side isEqualToString:@"a"];
-    NSMutableArray *q = a ? _waitA : _waitB;
-
-    // 认领顺序：先给最早那条还没等到译文的句子；都等到了就落到最新一条
-    NSMutableDictionary *target = nil;
-    for (NSMutableDictionary *it in q) {
-        id d = it[@"dst"];
-        if (![d isKindOfClass:[NSString class]] || ![d length]) { target = it; break; }
-    }
-    if (!target) target = q.lastObject;
-
-    if (!target) {
-        // 这句连原文都还没落定：先攒着，等原文落定再一起发
-        if (a) _earlyDstA = t; else _earlyDstB = t;
-        return;
-    }
-
-    target[@"dst"] = t;
-    if (a) _dstA = t; else _dstB = t;
-    // 收尾再推一次 Final，界面把它当成这句的最终状态
-    [self emit:target[@"id"] side:side src:(target[@"src"] ?: @"") dst:t kind:ZKLineKindFinal];
-    [q removeObject:target];
-
-    // 这一边没有待接的句子了，才清「当前句」槽位；
-    // 还有排队没等到译文的，槽位要留着，不然下一条译文无处可去。
-    if (!q.count) {
-        if (a) { _idA = nil; _srcA = nil; _dstA = nil; }
-        else   { _idB = nil; _srcB = nil; _dstB = nil; }
-    }
+    NSInteger seg = [self segFor:side raw:segRaw ending:NO];
+    NSMutableDictionary *e = [self entryFor:side seg:seg];
+    e[@"dst"] = t;
+    e[@"at"] = @([NSDate date].timeIntervalSince1970);
+    NSString *src = e[@"src"] ?: @"";
+    [self emit:[self lineIdFor:side seg:seg] side:side src:src dst:t kind:ZKLineKindFinal];
+    [self sweepSegs];
 }
 
 - (void)emit:(NSString *)lid side:(NSString *)side src:(NSString *)src dst:(NSString *)dst kind:(NSInteger)kind {
@@ -517,10 +522,10 @@ static NSString *ZKClean(NSString *s) {
         if (!s || !s->_running || !buf.frameLength) return;
         // 朗读期间不收麦：这几十毫秒里全是扬声器里念出来的译文
         double nowS = [[NSDate date] timeIntervalSince1970];
-        if (nowS - s->_gateCheckedAt > 0.3) {
+        if (nowS - s->_gateCheckedAt > 0.03) {
             s->_gateCheckedAt = nowS;
             double g = [[ZKStore setting:@"tts_gate"] doubleValue];
-            if (!(g > nowS) || g > nowS + 5) g = 0;   // 写坏的值一律当没开
+            if (!(g > nowS) || g > nowS + 6) g = 0;   // 写坏的值一律当没开
             s->_gateUntil = g;
         }
         if (s->_gateUntil > nowS) return;
