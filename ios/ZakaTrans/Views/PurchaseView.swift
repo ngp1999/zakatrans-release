@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// 充值弹窗：6 个档位，每行 3 个。
 /// 价格和积分的对应关系固定，客户端改不了——服务端按商品 id 发货。
@@ -9,7 +10,10 @@ struct PurchaseView: View {
 
     @State private var agreed = false
     @State private var hint: String?
+    /// 没勾选协议就点了档位：先弹确认，确认后自动勾上再下单
+    @State private var pendingId: String?
 
+    private let haptic = UIImpactFeedbackGenerator(style: .light)
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 3)
 
     var body: some View {
@@ -58,6 +62,21 @@ struct PurchaseView: View {
                 .padding(.bottom, 24)
             }
             .background(Theme.bg)
+            .alert("购买前请确认", isPresented: Binding(
+                get: { pendingId != nil },
+                set: { if !$0 { pendingId = nil } }
+            )) {
+                Button("取消", role: .cancel) { pendingId = nil }
+                Button("同意并购买") {
+                    let id = pendingId
+                    pendingId = nil
+                    agreed = true
+                    hint = nil
+                    if let id { Task { await purch.buy(id: id) } }
+                }
+            } message: {
+                Text("购买积分需要先阅读并同意《付费协议》。积分按实际用量扣除，充值通过 App Store 内购完成，退款按 Apple 规则处理。")
+            }
             .navigationTitle("充值")
             .navigationBarTitleDisplayMode(.inline)
             .task {
@@ -108,7 +127,8 @@ struct PurchaseView: View {
         return Button {
             guard ok else { return }
             guard agreed else {
-                hint = "请先阅读并同意《付费协议》"
+                haptic.impactOccurred()
+                pendingId = id
                 return
             }
             hint = nil
