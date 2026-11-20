@@ -98,12 +98,12 @@ struct ProfileView: View {
             CreditView()
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: "diamond.fill")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white)
+                // 积分图标：星形套圆环，上白下主题色——跟积分页那个是同一颗
+                Image(systemName: "star.circle.fill")
+                    .font(.system(size: 26))
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, Theme.accent)
                     .frame(width: 28, height: 28)
-                    .background(Theme.accent)
-                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 Text("我的积分")
                     .font(.system(size: 16))
                     .foregroundStyle(Theme.ink)
