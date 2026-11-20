@@ -32,16 +32,14 @@ struct HomeView: View {
             if showAudio {
                 bottomSheet {
                     AudioOutputView(onClose: { closeAudio() })
-                        .frame(height: min(430, UIScreen.main.bounds.height * 0.58))
                 } onDismiss: { closeAudio() }
             }
         }
         .overlay(alignment: .bottom) {
             if showStyle {
                 bottomSheet {
+                    // 高度由内容自己定：内容矮就矮着弹，底部不留空白；内容高才滚
                     SubtitleSettingsView()
-                        // 内容有多少弹多少：预览 + 样式 + 窗口三块，底部不留大片空白
-                        .frame(height: min(690, UIScreen.main.bounds.height * 0.82))
                 } onDismiss: { closeStyle() }
             }
         }
@@ -81,7 +79,10 @@ struct HomeView: View {
         }
     }
 
-    /// 自绘的半屏面板：从底部弹上来、点空白处关掉，右上角不放关闭按钮
+    /// 自绘的半屏面板：从底部弹上来、点空白处关掉，右上角不放关闭按钮。
+    /// 整块铺到屏幕物理底边：外层忽略安全区、面板背景直接到底，
+    /// 只在内容最下面垫一条 Home 指示条的高度。以前是给面板加底部内边距、
+    /// 指望背景自己越过安全区，结果那段经常没铺到，底下就露出一条空。
     @ViewBuilder
     private func bottomSheet<Content: View>(@ViewBuilder content: () -> Content,
                                             onDismiss: @escaping () -> Void) -> some View {
@@ -91,18 +92,23 @@ struct HomeView: View {
                 .contentShape(Rectangle())
                 .onTapGesture { onDismiss() }
                 .transition(.opacity)
-            content()
-                .frame(maxWidth: .infinity)
-                .background(Theme.bg)
-                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.6)
-                )
-                .padding(.horizontal, 6)
-                .padding(.bottom, 6)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+
+            VStack(spacing: 0) {
+                content()
+                Color.clear.frame(height: SafeArea.bottom)
+            }
+            .frame(maxWidth: .infinity)
+            .background(Theme.bg)
+            .clipShape(UnevenRoundedRectangle(topLeadingRadius: 22, topTrailingRadius: 22, style: .continuous))
+            .overlay(alignment: .top) {
+                UnevenRoundedRectangle(topLeadingRadius: 22, topTrailingRadius: 22, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.6)
+                    .allowsHitTesting(false)
+            }
+            .transition(.move(edge: .bottom))
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .ignoresSafeArea()
     }
 
     // MARK: - 字幕
@@ -295,29 +301,58 @@ struct HomeView: View {
     }
 }
 
-/// 字幕样式按钮的图标：一个大 A、一个小 a，底下一根字幕条。
-/// 不用「字号大小」那种刻度字形——用户一眼看不出那是调样式的；
-/// 「Aa + 字幕条」是排版工具里通用的语言，跟本 App 的青绿单色体系也合得来。
+/// 字幕样式按钮的图标：调色板 + 画笔，颜色一律走主题青绿。
+/// 这一档管的是颜色、背景和窗口大小，用画笔和调色板比「Aa」更直接。
 private struct SubtitleGlyph: View {
     var on: Bool
 
-    private var tint: Color { on ? Theme.accent : Theme.sub }
+    private var tint: Color { Theme.accent }
 
     var body: some View {
-        VStack(spacing: 2) {
-            HStack(alignment: .firstTextBaseline, spacing: 0.5) {
-                Text("A")
-                    .font(.system(size: 18, weight: .heavy, design: .rounded))
-                    .foregroundStyle(tint)
-                Text("a")
-                    .font(.system(size: 12, weight: .bold, design: .rounded))
-                    .foregroundStyle(tint.opacity(0.72))
+        ZStack {
+            // 调色板：圆盘 + 右侧一个拇指缺口，盘里四颗颜料点
+            ZStack {
+                Circle()
+                    .fill(tint.opacity(on ? 0.18 : 0.12))
+                Circle()
+                    .stroke(tint, lineWidth: 1.6)
+                HStack(spacing: 1.8) {
+                    dot; dot; dot
+                }
+                .offset(y: -0.5)
+                VStack(spacing: 1.8) {
+                    Circle().fill(tint).frame(width: 2.0, height: 2.0)
+                }
+                .offset(y: 4.6)
+                // 拇指缺口：盖一个跟按钮底色同色的圆，右侧咬掉一块
+                Circle()
+                    .fill(Theme.surface)
+                    .frame(width: 6.4, height: 6.4)
+                    .offset(x: 8.0, y: 1.5)
             }
-            Capsule()
-                .fill(tint.opacity(0.85))
-                .frame(width: 20, height: 3)
+            .compositingGroup()
+            .frame(width: 17.5, height: 17.5)
+            .offset(x: -3.0, y: -1.5)
+
+            // 画笔：斜着从右上搭到左下，笔杆 + 笔头
+            ZStack {
+                Capsule()
+                    .fill(tint)
+                    .frame(width: 12.5, height: 2.8)
+                    .offset(x: 0.6)
+                Circle()
+                    .fill(tint)
+                    .frame(width: 3.2, height: 3.2)
+                    .offset(x: -6.6)
+            }
+            .rotationEffect(.degrees(-42))
+            .offset(x: 6.6, y: 6.8)
         }
         .frame(width: 26, height: 26)
+    }
+
+    private var dot: some View {
+        Circle().fill(tint).frame(width: 2.2, height: 2.2)
     }
 }
 
