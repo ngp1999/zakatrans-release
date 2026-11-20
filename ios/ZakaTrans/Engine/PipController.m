@@ -995,9 +995,12 @@ static __weak id gActiveSub = nil;
         // 窗口三档，选哪个开出来就是多大：
         //   L 大 = 4:3 480×360（默认，能看清两行）
         //   M 中 = 16:9 576×324
-        //   S 小 = 21:9 840×360（最宽最矮，一行铺满屏宽）
+        //   S 小 = 21:9 840×360（宽条）
+        //   W 全宽 = 5:1 1080×216（铺满屏宽、最矮，两行刚好，最不挡画面）
         // 老版本的 4:3 / 21:9 / bar 也认，映射到对应的档
-        if ([pip isEqualToString:@"M"] || [pip isEqualToString:@"16:9"]) {
+        if ([pip isEqualToString:@"W"] || [pip isEqualToString:@"full"]) {
+            gPipSize = CGSizeMake(1080, 216);
+        } else if ([pip isEqualToString:@"M"] || [pip isEqualToString:@"16:9"]) {
             gPipSize = CGSizeMake(576, 324);
         } else if ([pip isEqualToString:@"S"] || [pip isEqualToString:@"21:9"] || [pip isEqualToString:@"bar"]) {
             gPipSize = CGSizeMake(840, 360);
