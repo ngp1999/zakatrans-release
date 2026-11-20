@@ -19,6 +19,11 @@ final class AppState: ObservableObject {
     @Published var lines: [SubtitleLine] = []
     @Published var alert: String?
     @Published var prefs: SubtitlePrefs = SubtitlePrefs.load()
+    /// 音频到底有没有进来：录屏扩展每秒写心跳，这里对帧数做差。
+    /// 用户说「开了扩展没声音、不出字」时，一眼就能看到是没收到音频还是收到了没翻出来。
+    @Published var audioHint = ""
+    private var lastBufs = -1
+    private var lastBufsAt: TimeInterval = 0
 
     /// 画中画：用户想不想开（持久化），以及此刻是否真的在屏幕上
     @Published var pipOn: Bool = (UserDefaults.standard.object(forKey: "zt_pip_on") as? Bool) ?? true
@@ -43,6 +48,7 @@ final class AppState: ObservableObject {
 
     private var broadcastTimer: Timer?
     private var pipPollTimer: Timer?
+    private var audioTimer: Timer?
     private var sessionStartAt: TimeInterval = 0
     private var broadcastSeen = false
     private var pipRequested = false
@@ -204,6 +210,12 @@ final class AppState: ObservableObject {
         ZKStore.clearLines()
         // 清掉上一次的停止标记，否则录屏扩展刚起来就被判定"该结束了"
         ZKStore.setSetting("broadcast_stop", v: nil)
+        // 上一场如果停在「正在朗读」上，朗读门(tts_gate)可能还挂着未来时间戳，
+        // 那会让这一整场录到的音频被当成回声静音掉——开新的一场先清干净。
+        ZKStore.setSetting("tts_gate", v: "0")
+        lastBufs = -1
+        lastBufsAt = 0
+        audioHint = ""
 
         lines.removeAll()
         liveSource = ""
@@ -241,6 +253,8 @@ final class AppState: ObservableObject {
         preparing = false
         running = false
         status = "未开始"
+        audioHint = ""
+        lastBufs = -1
         liveSource = ""
         liveTrans = ""
         Task { await Cloud.shared.refresh() }
@@ -251,6 +265,10 @@ final class AppState: ObservableObject {
         stopWatching()
         broadcastTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.checkBroadcast() }
+        }
+        // 音频看门狗：扩展的心跳里带累计帧数，数字不涨就是一段都没收到
+        audioTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.checkAudio() }
         }
         // 画中画是否真的起来了，系统不给同步返回值，只能每秒对一次
         pipPollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
@@ -267,8 +285,37 @@ final class AppState: ObservableObject {
     private func stopWatching() {
         broadcastTimer?.invalidate()
         broadcastTimer = nil
+        audioTimer?.invalidate()
+        audioTimer = nil
         pipPollTimer?.invalidate()
         pipPollTimer = nil
+    }
+
+    /// 每秒对一次扩展心跳里的帧数：涨了就是真的在收音频，一直不动就是没收到。
+    private func checkAudio() {
+        guard running else { return }
+        let beat: [AnyHashable: Any] = ZKStore.beat() ?? [:]
+        let t = (beat["t"] as? NSNumber)?.doubleValue ?? 0
+        let bufs = (beat["bufs"] as? NSNumber)?.intValue ?? 0
+        let conn = beat["conn"] as? String ?? ""
+        let now = Date().timeIntervalSince1970
+        guard t > 0, t >= sessionStartAt - 1.5, now - t < 6 else {
+            audioHint = broadcastSeen ? "录屏已断开" : "等你在控制中心点开始"
+            return
+        }
+        if bufs != lastBufs {
+            lastBufs = bufs
+            lastBufsAt = now
+            audioHint = "正在收音频 · 已 \(bufs) 段"
+            return
+        }
+        // 帧数没动：超过 6 秒说明扩展活着但没拿到声音
+        if lastBufsAt > 0, now - lastBufsAt > 6 {
+            audioHint = "没收到音频（在控制中心重新选「语幕实时翻译」）"
+        } else if lastBufsAt == 0 {
+            audioHint = "扩展已连上，等音频"
+        }
+        _ = conn
     }
 
     private func checkBroadcast() {
