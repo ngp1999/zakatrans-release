@@ -129,3 +129,16 @@ struct FluidSlider: View {
         .accessibilityValue(String(format: "%.1f", current))
     }
 }
+
+
+// MARK: - 触感
+// 每次点按都 new 一个 UIImpactFeedbackGenerator，第一次响要等 Taptic 引擎起来，
+// 观感就是「按钮点了没反应，过一会儿才响应」。这里复用一台，页面出现时预热。
+enum Haptics {
+    private static let gen = UIImpactFeedbackGenerator(style: .light)
+    static func warm() { gen.prepare() }
+    static func tap(_ intensity: CGFloat = 1.0) {
+        gen.impactOccurred(intensity: intensity)
+        gen.prepare()
+    }
+}
