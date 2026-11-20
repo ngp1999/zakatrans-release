@@ -1,10 +1,13 @@
 import SwiftUI
 
-/// 字幕样式：显示什么、多大、什么颜色、什么背景、画中画比例。
+/// 字幕样式：字号、颜色、背景、显示什么，以及字幕浮窗开关与窗口大小。
 /// 改一处立刻生效（App 内字幕和画中画同步），并自动同步到云端。
 struct SubtitleSettingsView: View {
     @ObservedObject private var app = AppState.shared
     private let haptic = UIImpactFeedbackGenerator(style: .light)
+
+    /// 拖动中的字号：只影响预览，松手才落库
+    @State private var draftSize: Double = 20
 
     var body: some View {
         ScrollView {
@@ -20,6 +23,8 @@ struct SubtitleSettingsView: View {
         .background(Theme.bg)
         .navigationTitle("字幕样式")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear { draftSize = app.prefs.size }
+        .onChange(of: app.prefs.size) { v in draftSize = v }
     }
 
     // MARK: 预览
@@ -32,12 +37,12 @@ struct SubtitleSettingsView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     if app.prefs.mode != "source" {
                         Text("这段话是翻译后的中文效果预览")
-                            .font(.system(size: app.prefs.size, weight: .semibold))
+                            .font(.system(size: draftSize, weight: .semibold))
                             .foregroundStyle(Color(uiColor: app.prefs.effectiveColor))
                     }
                     if app.prefs.mode != "zh" {
                         Text("This is what the original line looks like")
-                            .font(.system(size: max(12, app.prefs.size - 4)))
+                            .font(.system(size: max(12, draftSize - 4)))
                             .foregroundStyle(Color(uiColor: app.prefs.secondaryColor))
                     }
                 }
@@ -55,27 +60,32 @@ struct SubtitleSettingsView: View {
         )
     }
 
-    // MARK: 样式（一行一个控制）
+    // MARK: 样式
 
     private var styleCard: some View {
-        VStack(spacing: 18) {
+        VStack(spacing: 16) {
             // 字号
             HStack {
                 Text("字号").font(.system(size: 15)).foregroundStyle(Theme.ink)
                 Spacer()
-                Text("\(Int(app.prefs.size))")
+                Text("\(Int(draftSize))")
                     .font(.system(size: 15, weight: .medium).monospacedDigit())
                     .foregroundStyle(Theme.sub)
             }
-            Slider(value: Binding(
-                get: { app.prefs.size },
-                set: { v in app.updatePrefs { $0.size = v } }
-            ), in: 14...30, step: 1)
-            .tint(Theme.accent)
+            FluidSlider(
+                value: app.prefs.size,
+                range: 14...30,
+                step: 1,
+                onChanged: { v in draftSize = v },
+                onEnded: { v in
+                    draftSize = v
+                    app.updatePrefs { $0.size = v }
+                }
+            )
 
             divider
 
-            // 文字颜色：一行 7 个色块，不带文字
+            // 文字颜色：一行色块
             HStack(spacing: 0) {
                 ForEach(SubtitlePrefs.colors, id: \.0) { opt in
                     Button {
@@ -101,7 +111,7 @@ struct SubtitleSettingsView: View {
 
             divider
 
-            // 背景颜色：一行 7 个色块，不带文字
+            // 背景颜色：一行色块
             HStack(spacing: 0) {
                 ForEach(SubtitlePrefs.backgrounds, id: \.0) { opt in
                     Button {
@@ -150,28 +160,43 @@ struct SubtitleSettingsView: View {
         Rectangle().fill(Theme.line).frame(height: 0.5)
     }
 
-    // MARK: 窗口（比例 + 大中小，同一行）
+    // MARK: 字幕浮窗（开关 + 大小）
 
     private var pipCard: some View {
-        HStack(spacing: 14) {
-            Text("窗口")
-                .font(.system(size: 15))
-                .foregroundStyle(Theme.ink)
-            Spacer(minLength: 8)
-            Picker("窗口", selection: Binding(
-                get: { app.prefs.pip },
-                set: { v in
-                    haptic.impactOccurred()
-                    app.updatePrefs { $0.pip = v }
-                    app.setPip(true)
-                }
-            )) {
-                ForEach(SubtitlePrefs.pipOptions, id: \.0) { opt in
-                    Text(opt.1).tag(opt.0)
-                }
+        VStack(spacing: 14) {
+            HStack {
+                Text("字幕浮窗").font(.system(size: 15)).foregroundStyle(Theme.ink)
+                Spacer()
+                Toggle("", isOn: Binding(
+                    get: { app.pipOn },
+                    set: { v in
+                        haptic.impactOccurred()
+                        app.setPip(v)
+                    }
+                ))
+                .labelsHidden()
+                .tint(Theme.accent)
             }
-            .pickerStyle(.segmented)
-            .frame(width: 176)
+
+            VStack(spacing: 8) {
+                HStack {
+                    Text("窗口大小").font(.system(size: 15)).foregroundStyle(Theme.ink)
+                    Spacer()
+                }
+                Picker("窗口大小", selection: Binding(
+                    get: { app.prefs.pip },
+                    set: { v in
+                        haptic.impactOccurred()
+                        app.updatePrefs { $0.pip = v }
+                        app.setPip(true)
+                    }
+                )) {
+                    ForEach(SubtitlePrefs.pipOptions, id: \.0) { opt in
+                        Text(opt.1).tag(opt.0)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
         }
         .card(padding: 14)
     }
