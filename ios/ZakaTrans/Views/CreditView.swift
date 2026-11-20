@@ -33,41 +33,97 @@ struct CreditView: View {
 
     // MARK: - 余额
 
+    /// 余额卡：大号余额 + 右上角起鼓的积分币 + 卡内一整条充值按钮。
+    /// 版式照参考图，颜色全部换成主题青绿那一套，不照抄原来的橙金。
     private var balanceCard: some View {
         VStack(spacing: 0) {
-            VStack(spacing: 10) {
-                Text("可用积分")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Theme.sub)
-
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(Format.credits(cloud.balanceCredits))
-                        .font(.system(size: 52, weight: .bold).monospacedDigit())
-                        .foregroundStyle(Theme.ink)
-                        .contentTransition(.numericText())
-                    Text("积分")
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("可用积分")
                         .font(.system(size: 15))
                         .foregroundStyle(Theme.sub)
-                }
 
+                    HStack(alignment: .firstTextBaseline, spacing: 7) {
+                        Text(Format.credits(cloud.balanceCredits))
+                            .font(.system(size: 52, weight: .bold).monospacedDigit())
+                            .foregroundStyle(Theme.ink)
+                            .contentTransition(.numericText())
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
+                        Text("积分")
+                            .font(.system(size: 15))
+                            .foregroundStyle(Theme.sub)
+                    }
+                }
+                Spacer(minLength: 0)
+                coinBadge
+                    .padding(.top, 4)
             }
-            .frame(maxWidth: .infinity)
-            .padding(.top, 26)
+            .padding(.leading, 20)
+            .padding(.trailing, 18)
+            .padding(.top, 22)
             .padding(.bottom, 22)
 
-            Rectangle().fill(Theme.line).frame(height: 0.5)
-
             Button {
+                Haptics.tap()
                 showPurchase = true
             } label: {
                 Text("充值")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 52)
+                    .background(
+                        LinearGradient(
+                            colors: [Theme.accent, Theme.accent.opacity(0.86)],
+                            startPoint: .top, endPoint: .bottom
+                        )
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+                    .shadow(color: Theme.accent.opacity(0.28), radius: 10, y: 5)
             }
-            .buttonStyle(PrimaryButtonStyle())
-            .padding(16)
+            .buttonStyle(TileButtonStyle())
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
         }
+        .background(
+            LinearGradient(
+                colors: [Theme.accent.opacity(0.20), Theme.accent.opacity(0.06)],
+                startPoint: .topLeading, endPoint: .bottomTrailing
+            )
+        )
         .background(Theme.card)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
-        .shadow(color: Color.black.opacity(0.04), radius: 12, y: 4)
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(Theme.accent.opacity(0.18), lineWidth: 0.8)
+        )
+    }
+
+    /// 积分币：外圈光晕 + 起鼓的圆盘 + 白色星，颜色跟着主题走
+    private var coinBadge: some View {
+        ZStack {
+            Circle()
+                .fill(Theme.accent.opacity(0.13))
+                .frame(width: 72, height: 72)
+
+            Circle()
+                .fill(
+                    LinearGradient(
+                        colors: [Theme.accent.opacity(0.95), Theme.accent.opacity(0.72)],
+                        startPoint: .topLeading, endPoint: .bottomTrailing
+                    )
+                )
+                .frame(width: 58, height: 58)
+                .overlay(
+                    Circle().strokeBorder(Color.white.opacity(0.55), lineWidth: 2)
+                )
+                .shadow(color: Theme.accent.opacity(0.30), radius: 8, y: 3)
+
+            Image(systemName: "star.fill")
+                .font(.system(size: 24))
+                .foregroundStyle(.white)
+        }
     }
 
     // MARK: - 规则
