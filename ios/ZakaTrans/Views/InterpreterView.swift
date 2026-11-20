@@ -233,6 +233,13 @@ struct InterpreterView: View {
                 haptic.impactOccurred()
                 let on = !speaker.enabled
                 speaker.enabled = on
+                Speaker.shared.enabled = on
+                if on {
+                    Speaker.shared.resume()
+                    Speaker.shared.usesExternalSession = running
+                } else {
+                    Speaker.shared.stop()
+                }
                 app.updatePrefs { $0.tts = on }
             } label: {
                 Image(systemName: speaker.enabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
@@ -318,6 +325,11 @@ struct InterpreterView: View {
         running = true
         // 同传自己管着 PlayAndRecord 会话，朗读这边不许再去改会话类别
         Speaker.shared.usesExternalSession = true
+        // 必须解一次暂停：上一场停止时 Speaker 会进入 paused，不解开的话
+        // 后面每一句 speak() 都被直接挡掉——用户看到的就是"同传点了音频输出没声音"。
+        Speaker.shared.resume()
+        Speaker.shared.enabled = app.prefs.tts
+        Speaker.shared.voiceId = app.prefs.voiceId
 
         guard let itp = ZKInterpreter.shared() else {
             error = "同传引擎没启动起来，重开一次试试"
@@ -360,6 +372,12 @@ struct InterpreterView: View {
     /// 同一条消息原地更新：Draft 边听边出字，Final 落定，Update 补译文
     private func upsert(id: String, side: String, source: String, trans: String, done: Bool) {
         if let i = lines.firstIndex(where: { $0.id == id }) {
+            // 引擎说这句不要了（重复 / 回声 / 纯噪声）：把这条气泡撤掉，
+            // 不然聊天顶部会一直挂着半句没头没尾的字
+            if source.isEmpty && trans.isEmpty {
+                lines.remove(at: i)
+                return
+            }
             if !source.isEmpty { lines[i].source = source }
             if !trans.isEmpty || done { lines[i].trans = trans.isEmpty ? lines[i].trans : trans }
             if done { lines[i].done = true }
