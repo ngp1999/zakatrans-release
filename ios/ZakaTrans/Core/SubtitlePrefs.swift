@@ -34,6 +34,9 @@ struct SubtitlePrefs: Codable, Equatable {
     var sourceLang: String = "auto"
     /// 译文语言：固定中文
     var destLang: String = "zh"
+    /// 收音模式：system = 内部收音（系统声音，跟别的 App 播放的声音走）
+    ///           mic    = 麦克风收音（跟现场说话走）
+    var audioSource: String = "system"
 
     static let key = "zt_subtitle_prefs_v6"
 
@@ -55,6 +58,7 @@ struct SubtitlePrefs: Codable, Equatable {
         destLang = try c.decodeIfPresent(String.self, forKey: .destLang) ?? d.destLang
         duckLevel = try c.decodeIfPresent(Double.self, forKey: .duckLevel) ?? d.duckLevel
         voiceId = try c.decodeIfPresent(String.self, forKey: .voiceId) ?? d.voiceId
+        audioSource = try c.decodeIfPresent(String.self, forKey: .audioSource) ?? d.audioSource
 
         // 三档的新代码是 X / M / B（以前没用过），老存档的老代码在这里映射一次，
         // 之后写回去的就是新代码，不会二次映射。
@@ -112,6 +116,7 @@ struct SubtitlePrefs: Codable, Equatable {
         // 引擎层（ObjC）读的是字符串设置
         ZKStore.setSetting("asrlang", v: sourceLang)
         ZKStore.setSetting("dstlang", v: destLang)
+        ZKStore.setSetting("audio_src", v: audioSource)
     }
 
     func dict() -> [String: Any] {
@@ -127,6 +132,7 @@ struct SubtitlePrefs: Codable, Equatable {
             "voice_id": voiceId,
             "source_lang": sourceLang,
             "dest_lang": destLang,
+            "audio_source": audioSource,
         ]
     }
 
@@ -148,6 +154,7 @@ struct SubtitlePrefs: Codable, Equatable {
         if let v = dict["speech_rate"] as? NSNumber { p.speechRate = v.doubleValue }
         if let v = dict["source_lang"] as? String { p.sourceLang = v }
         if let v = dict["dest_lang"] as? String { p.destLang = v }
+        if let v = dict["audio_source"] as? String, ["system", "mic"].contains(v) { p.audioSource = v }
         return p
     }
 
@@ -214,6 +221,11 @@ struct SubtitlePrefs: Codable, Equatable {
 
     static let colorOptions: [(String, String)] = colors.map { ($0.0, $0.1) }
     static let backgroundOptions: [(String, String)] = backgrounds.map { ($0.0, $0.1) }
+
+    /// 收音模式：内部收音（系统声音）/ 麦克风收音（现场说话）
+    static let audioSourceOptions: [(String, String)] = [
+        ("system", "内部收音"), ("mic", "麦克风收音"),
+    ]
 
     static let modeOptions: [(String, String)] = [
         ("bilingual", "双语"), ("zh", "仅中文"), ("source", "仅原文"),
