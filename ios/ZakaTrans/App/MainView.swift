@@ -41,7 +41,7 @@ struct RootView: View {
     }
 }
 
-/// 三个 Tab：字幕翻译 / 同声传译 / 我的
+/// 四个 Tab：字幕翻译 / 同声传译 / 网页 / 我的
 struct MainView: View {
     @State private var tab = 0
 
@@ -55,9 +55,13 @@ struct MainView: View {
                 .tabItem { Label("同声传译", systemImage: "arrow.left.arrow.right.circle.fill") }
                 .tag(1)
 
+            BrowserView()
+                .tabItem { Label("网页", systemImage: "safari.fill") }
+                .tag(2)
+
             ProfileView()
                 .tabItem { Label("我的", systemImage: "person.crop.circle.fill") }
-                .tag(2)
+                .tag(3)
         }
         .tint(Theme.accent)
         // 画中画的锚点必须挂在整个 App 的最外层，而不是某个页面里：
