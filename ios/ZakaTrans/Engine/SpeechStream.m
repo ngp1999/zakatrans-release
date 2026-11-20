@@ -178,7 +178,7 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
     __weak typeof(self) weakSelf = self;
     ZKDoubaoAST *ast = [ZKDoubaoAST shared];
 
-    ast.onSourcePartial = ^(NSString *delta) {
+    ast.onSourcePartial = ^(NSString *delta, NSInteger seg) {
         ZKSpeechStream *s = weakSelf;
         if (!s || !s->_running) return;
         if (!s->_curSrc.length) s->_curSrc = @"";
@@ -188,7 +188,7 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
         if (s.onPartial) s.onPartial(@"", delta);
     };
 
-    ast.onSourceEnd = ^(NSString *full) {
+    ast.onSourceEnd = ^(NSString *full, NSInteger seg) {
         ZKSpeechStream *s = weakSelf;
         if (!s || !s->_running) return;
         NSString *t = full.length ? full : s->_curSrc;
@@ -198,7 +198,7 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
         if (s.onSegment) s.onSegment(t, YES);
     };
 
-    ast.onTransPartial = ^(NSString *delta) {
+    ast.onTransPartial = ^(NSString *delta, NSInteger seg) {
         ZKSpeechStream *s = weakSelf;
         if (!s || !s->_running) return;
         if (!s->_curTr.length) s->_curTr = @"";
@@ -206,7 +206,7 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
         if (s.onTransPartial) s.onTransPartial(delta);
     };
 
-    ast.onTransEnd = ^(NSString *full) {
+    ast.onTransEnd = ^(NSString *full, NSInteger seg) {
         ZKSpeechStream *s = weakSelf;
         if (!s || !s->_running) return;
         NSString *t = full.length ? full : s->_curTr;
