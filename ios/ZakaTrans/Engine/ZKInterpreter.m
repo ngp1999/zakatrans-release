@@ -107,6 +107,39 @@ static NSString *ZKClean(NSString *s) {
     return t;
 }
 
+/// 归一化：只留字母数字和汉字，转小写。用来做「两边说的是不是同一句」的比较。
+static NSString *ZKNorm(NSString *s) {
+    NSMutableString *m = [NSMutableString stringWithCapacity:s.length];
+    for (NSUInteger i = 0; i < s.length; i++) {
+        unichar c = [s characterAtIndex:i];
+        if (c >= 0x4E00 && c <= 0x9FFF) { [m appendFormat:@"%C", c]; continue; }
+        if ([[NSCharacterSet alphanumericCharacterSet] characterIsMember:c]) {
+            [m appendString:[[NSString stringWithFormat:@"%C", c] lowercaseString]];
+        }
+    }
+    return m;
+}
+
+/// 两句话像不像（字符二元组重合度）。0 = 完全不像，1 = 一模一样。
+static double ZKSim(NSString *a, NSString *b) {
+    NSString *x = ZKNorm(a), *y = ZKNorm(b);
+    if (x.length < 2 || y.length < 2) return 0;
+    NSMutableDictionary<NSString *, NSNumber *> *cnt = [NSMutableDictionary dictionary];
+    for (NSUInteger i = 0; i + 1 < x.length; i++) {
+        NSString *g = [x substringWithRange:NSMakeRange(i, 2)];
+        cnt[g] = @([cnt[g] intValue] + 1);
+    }
+    NSInteger hit = 0, total = 0;
+    for (NSUInteger i = 0; i + 1 < y.length; i++) {
+        NSString *g = [y substringWithRange:NSMakeRange(i, 2)];
+        NSInteger c = [cnt[g] integerValue];
+        if (c > 0) { cnt[g] = @(c - 1); hit++; }
+        total++;
+    }
+    NSInteger t1 = (NSInteger)x.length - 1;
+    return (double)hit / (double)MAX(1, MAX(t1, total));
+}
+
 /// 私有方法先声明一遍：块里调用的方法在下面才定义，不声明会走 id 返回值的隐式推断。
 @interface ZKInterpreter (Private)
 - (void)sourcePartial:(NSString *)side seg:(NSInteger)seg text:(NSString *)text;
@@ -116,6 +149,8 @@ static NSString *ZKClean(NSString *s) {
 - (void)state:(NSString *)st;
 - (void)fail:(NSString *)why;
 - (void)stopMic;
+- (BOOL)destFits:(NSString *)side dst:(NSString *)dst;
+- (BOOL)isMirror:(NSString *)side src:(NSString *)src;
 @end
 
 @implementation ZKInterpreter {
@@ -165,6 +200,12 @@ static NSString *ZKClean(NSString *s) {
     NSMutableDictionary<NSNumber *, NSMutableDictionary *> *_segB;
     NSInteger _localSegA, _localSegB;   // 老服务端不带号时自己编
     NSInteger _openSegA, _openSegB;     // 正在滚的那一句（0 = 没有）
+
+    // 每边最后落定的一条（原文 + 译文 + 时间）。两条通道听的是同一路声音，
+    // 有一路会把对方的话再"译"一遍吐回来（同一句出现两次、一次中文一次英文）。
+    // 拿这个互相比较，把重复的那一路丢掉。
+    NSString *_finSrcA, *_finDstA, *_finSrcB, *_finDstB;
+    NSTimeInterval _finAtA, _finAtB;
 
     // 当前在说话的是哪一边：用来压掉另一条通道的碎渣
     NSString *_activeSide;
@@ -250,6 +291,8 @@ static NSString *ZKClean(NSString *s) {
 
     _lastSrcA = _lastSrcB = nil;
     _lastAtA = _lastAtB = 0;
+    _finSrcA = _finDstA = _finSrcB = _finDstB = nil;
+    _finAtA = _finAtB = 0;
     _activeSide = nil;
     _activeUntil = 0;
     [_waitA removeAllObjects];
@@ -437,12 +480,21 @@ static NSString *ZKClean(NSString *s) {
     if (last.length && [last isEqualToString:t] && now - lastAt < 3.0) return;
     if ([side isEqualToString:@"a"]) { _lastSrcA = t; _lastAtA = now; } else { _lastSrcB = t; _lastAtB = now; }
 
+    // 另一条通道刚刚吐过几乎同一句 → 这是同一路声音被"反向译"了一遍，丢掉
+    if ([self isMirror:side src:t]) return;
+
     NSInteger seg = [self segFor:side raw:segRaw ending:YES];
     NSMutableDictionary *e = [self entryFor:side seg:seg];
     e[@"src"] = t;
     e[@"at"] = @(now);
     NSString *dst = e[@"dst"] ?: @"";
     [self emit:[self lineIdFor:side seg:seg] side:side src:t dst:dst kind:ZKLineKindFinal];
+
+    if ([side isEqualToString:@"a"]) {
+        _finSrcA = t; _finDstA = dst; _finAtA = now;
+    } else {
+        _finSrcB = t; _finDstB = dst; _finAtB = now;
+    }
     [self sweepSegs];
 }
 
@@ -451,6 +503,8 @@ static NSString *ZKClean(NSString *s) {
     NSString *t = ZKClean(text);
     if (!t.length) return;
 
+    if (![self destFits:side dst:t]) return;
+
     NSInteger seg = [self segFor:side raw:segRaw ending:NO];
     NSMutableDictionary *e = [self entryFor:side seg:seg];
     NSString *merged = ZKMergeTrans(e[@"dst"] ?: @"", t);
@@ -458,9 +512,10 @@ static NSString *ZKClean(NSString *s) {
     e[@"at"] = @([NSDate date].timeIntervalSince1970);
 
     NSString *src = e[@"src"] ?: @"";
-    // 原文还没到也别攒着不发：这句挂在自己的号上，原文到了原地补齐
-    [self emit:[self lineIdFor:side seg:seg] side:side src:src dst:merged
-          kind:src.length ? ZKLineKindUpdate : ZKLineKindDraft];
+    // 原文还没到就只存着，不先建一条只有译文的气泡——
+    // 那种空气泡以前会留在列表里，看着就是"凭空多出来一条翻译"。
+    if (!src.length) return;
+    [self emit:[self lineIdFor:side seg:seg] side:side src:src dst:merged kind:ZKLineKindUpdate];
 }
 
 - (void)transEnd:(NSString *)side seg:(NSInteger)segRaw text:(NSString *)text {
@@ -468,13 +523,45 @@ static NSString *ZKClean(NSString *s) {
     NSString *t = ZKClean(text);
     if (!t.length) return;
 
+    if (![self destFits:side dst:t]) return;
+
     NSInteger seg = [self segFor:side raw:segRaw ending:NO];
     NSMutableDictionary *e = [self entryFor:side seg:seg];
     e[@"dst"] = t;
     e[@"at"] = @([NSDate date].timeIntervalSince1970);
     NSString *src = e[@"src"] ?: @"";
+    if ([side isEqualToString:@"a"]) { _finDstA = t; _finAtA = e[@"at"] ? [e[@"at"] doubleValue] : _finAtA; }
+    else { _finDstB = t; _finAtB = e[@"at"] ? [e[@"at"] doubleValue] : _finAtB; }
+    if (!src.length) return;
     [self emit:[self lineIdFor:side seg:seg] side:side src:src dst:t kind:ZKLineKindFinal];
     [self sweepSegs];
+}
+
+/// 这条通道吐出来的译文是不是它该有的目标语言。
+/// en→zh 的通道如果把中文听成了英文、再"译"成英文，两行就都是英文，
+/// 这种条目上屏只会让人看着莫名其妙——直接不要。
+- (BOOL)destFits:(NSString *)side dst:(NSString *)dst {
+    if (!dst.length) return YES;
+    ZKScript sc = ZKSriptOf(dst);
+    if (sc == ZKScriptUnknown) return YES;
+    BOOL a = [side isEqualToString:@"a"];
+    ZKScript want = ZKScriptOfLang(a ? _other : _mine);
+    if (want == ZKScriptUnknown) return YES;
+    return sc == want;
+}
+
+/// 两条通道听的是同一路声音。有一路会把对方的话再译一遍吐回来，
+/// 结果同一句在界面上出现两次（一次中文一次英文）。另一路刚吐过几乎一样的，就丢掉。
+- (BOOL)isMirror:(NSString *)side src:(NSString *)src {
+    if (!src.length) return NO;
+    BOOL a = [side isEqualToString:@"a"];
+    NSString *os = a ? _finSrcB : _finSrcA;
+    NSString *od = a ? _finDstB : _finDstA;
+    NSTimeInterval oat = a ? _finAtB : _finAtA;
+    if (!os.length && !od.length) return NO;
+    if ([NSDate date].timeIntervalSince1970 - oat > 3.0) return NO;
+    double s1 = ZKSim(src, os), s2 = ZKSim(src, od);
+    return MAX(s1, s2) >= 0.72;
 }
 
 - (void)emit:(NSString *)lid side:(NSString *)side src:(NSString *)src dst:(NSString *)dst kind:(NSInteger)kind {
