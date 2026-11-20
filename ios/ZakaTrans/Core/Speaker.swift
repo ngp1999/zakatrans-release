@@ -280,7 +280,8 @@ private extension Speaker {
             if let v = all.first(where: { $0.language.hasPrefix(lang) }) { return v }
             return AVSpeechSynthesisVoice(language: lang)
         }
-        if !id.isEmpty, let v = AVSpeechSynthesisVoice(identifier: id) { return v }
+        let wanted = id.isEmpty ? defaultVoiceId() : id
+        if !wanted.isEmpty, let v = AVSpeechSynthesisVoice(identifier: wanted) { return v }
         let voices = AVSpeechSynthesisVoice.speechVoices()
         if let v = voices.first(where: { $0.language.hasPrefix("zh") && $0.quality == .enhanced }) {
             return v
@@ -290,13 +291,37 @@ private extension Speaker {
 }
 
 extension Speaker {
-    /// 可选的中文音色（给设置页列出来）
-    static func zhVoices() -> [AVSpeechSynthesisVoice] {
-        AVSpeechSynthesisVoice.speechVoices()
-            .filter { $0.language.hasPrefix("zh") }
-            .sorted { a, b in
-                if a.quality.rawValue != b.quality.rawValue { return a.quality.rawValue > b.quality.rawValue }
-                return a.name < b.name
-            }
-}
+    /// 可选的中文音色：只留两个——婷婷、美嘉。
+    /// 系统里还能列出十几个（含大量重复的方言包），全铺出来选择成本太高，
+    /// 这两个是中文场景下最稳、覆盖最广的。
+    static func voiceChoices() -> [(String, String)] {
+        let all = AVSpeechSynthesisVoice.speechVoices()
+        var out: [(String, String)] = []
+        if let v = all.first(where: {
+            $0.identifier.localizedCaseInsensitiveContains("Tingting")
+                || $0.name.localizedCaseInsensitiveContains("Tingting")
+                || $0.name.contains("婷婷")
+        }) {
+            out.append((v.identifier, "婷婷"))
+        }
+        if let v = all.first(where: {
+            $0.identifier.localizedCaseInsensitiveContains("Meijia")
+                || $0.name.localizedCaseInsensitiveContains("Meijia")
+                || $0.name.contains("美嘉")
+        }) {
+            out.append((v.identifier, "美嘉"))
+        }
+        return out
+    }
+
+    /// 默认音色：有婷婷就用婷婷，没有就回到系统中文
+    static func defaultVoiceId() -> String {
+        voiceChoices().first?.0 ?? ""
+    }
+
+    /// 这个音色 id 在不在当前设备的可用列表里（换机型 / 语音包没下时会不在）
+    static func isAvailable(_ id: String) -> Bool {
+        guard !id.isEmpty else { return true }
+        return AVSpeechSynthesisVoice(identifier: id) != nil
+    }
 }
