@@ -29,7 +29,7 @@ static UIColor *gTextColor = nil;
 static NSString *gMode = @"bilingual";         // bilingual | zh | source
 static NSString *gBackground = @"black";       // 7 种实色背景，见 ZKBackgroundColor()
 static CGSize gPipSize = {1080, 216};          // 5:1 全宽横条（默认，最不挡画面）
-static NSString *gPipStyle = @"W";             // 当前窗口档：W 全宽 / L 大 / M 中 / S 宽条
+static NSString *gPipStyle = @"X";             // 当前窗口档：X 小(5:1) / M 中(21:9) / B 大(16:10)
 // 小窗兜底：窗口被拖得很小、字号已压到下限还是放不下时，原文限行（0 = 不限）。
 // 优先保住中文主字幕的完整，原文宁可截一行，也不把两个字都缩到看不清。
 static NSInteger gEnMaxLines = 0;
@@ -487,6 +487,20 @@ static CGFloat ZKTextHeight(NSString *text, CGFloat width, UIFont *font, CGFloat
     return isfinite(h) && h > 0 ? h : 0;
 }
 
+// 单行宽度：用来判断「这一句还塞不塞得进当前这一行」
+// 量一句的整行宽。用和 UILabel 同一套排版引擎（boundingRect + 字体行距），
+// 结果向上取整再留 1pt 余量：sizeWithAttributes 会少算零点几到一两个点，
+// 差这一两点就足以让一句本来放得下的句子在屏上被劈成两行。
+static CGFloat ZKTextWidth(NSString *text, UIFont *font) {
+    if (!text.length || !font) return 0;
+    CGRect r = [text boundingRectWithSize:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)
+                                 options:(NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading)
+                              attributes:@{NSFontAttributeName: font}
+                                 context:nil];
+    CGFloat w = ceil(r.width) + 1.0;
+    return isfinite(w) ? w : CGFLOAT_MAX;
+}
+
 // 限行版：maxLines > 0 表示 UILabel 最多显示这么多行，高度也不能超过它。
 // 小窗兜底要用这个量，否则算出来的高度是"全文高度"，永远判成放不下、字号一路缩到底。
 static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CGFloat lineSpacing, NSInteger maxLines) {
@@ -496,12 +510,14 @@ static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CG
     return MIN(h, cap);
 }
 
-#pragma mark - 全宽档（W）：两行，原文一行、译文一行
+#pragma mark - 小档（5:1 横条）：两行，中文在上、源语言在下
 
-// 全宽档只做一件事：把已经翻完的整句，原文排一行、译文排一行，各自居中铺满。
-// 不做逐字、不做半句——用户要的是「看着不累」，不是「看着实时」。
-// 每一行能塞两句就塞两句（充分利用宽条），塞不下就整行更替，不硬截断。
-// 节奏：新句到了立刻上屏，只留 0.18 秒的最小间隔防抖，不攒不压。
+// 做三件事：
+// 1) 中文一行一组、源语言一行一组，各自居中，中文在上、原文在下；
+// 2) 字号只跟窗口走，跟这一句多长完全无关——长句靠换行，绝不缩字、绝不缩窗；
+// 3) 一批句子要么整批塞得进（两行都按换行算高度），要么就整批换下一批，
+//    不存在「这一行的后半句跑到下一行开头」那种串行。
+// 节奏：新句到了立刻上屏，只留 0.18 秒防抖，不攒不压。
 @interface ZKWideView : UIView
 - (void)setBoxWidth:(CGFloat)width height:(CGFloat)height force:(BOOL)force;
 - (void)resetWithLines:(NSArray *)lines;
@@ -510,11 +526,11 @@ static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CG
 @end
 
 @implementation ZKWideView {
-    UILabel *_srcLabel;                        // 原文行（上）
-    UILabel *_zhLabel;                         // 译文行（下）
+    UILabel *_zhLabel;                         // 译文行（上）
+    UILabel *_srcLabel;                        // 原文行（下）
     CGFloat _w;
     CGFloat _h;
-    CGFloat _font;                             // 主字号（译文行），原文行按比例取小
+    CGFloat _font;                             // 译文行字号，原文行按比例取小
     NSArray<NSDictionary *> *_current;         // 现在屏上这一批，由哪几句拼成
     NSMutableArray<NSDictionary *> *_queue;    // 还没上屏的整句
     NSDate *_shownAt;
@@ -529,20 +545,21 @@ static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CG
         self.backgroundColor = [UIColor clearColor];
         _queue = [NSMutableArray array];
         _font = 20;
-        _srcLabel = [self makeRow];
         _zhLabel = [self makeRow];
-        [self addSubview:_srcLabel];
+        _srcLabel = [self makeRow];
         [self addSubview:_zhLabel];
+        [self addSubview:_srcLabel];
     }
     return self;
 }
 
 - (UILabel *)makeRow {
     UILabel *l = [UILabel new];
-    l.numberOfLines = 1;
-    l.lineBreakMode = NSLineBreakByClipping;
+    l.numberOfLines = 0;
+    l.lineBreakMode = NSLineBreakByWordWrapping;
     l.textAlignment = NSTextAlignmentCenter;
     l.adjustsFontSizeToFitWidth = NO;
+    l.baselineAdjustment = UIBaselineAdjustmentAlignCenters;
     l.backgroundColor = [UIColor clearColor];
     l.textColor = [UIColor whiteColor];
     return l;
@@ -555,71 +572,116 @@ static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CG
 - (BOOL)twoRows { return [self showTrans] && [self showSource]; }
 
 - (UIFont *)zhFont:(CGFloat)f { return [UIFont boldSystemFontOfSize:f]; }
-- (UIFont *)srcFont:(CGFloat)f { return [UIFont systemFontOfSize:f * 0.66]; }
+- (UIFont *)srcFont:(CGFloat)f { return [UIFont systemFontOfSize:f * 0.68]; }
 
-#pragma mark 字号与布局
+- (CGFloat)zhLineH { return ceil(_font * 1.24); }
+- (CGFloat)srcLineH { return ceil(_font * 0.68 * 1.26); }
 
-// 字号只跟窗口走：两行时各占一半高度，宽度定「一行至少放得下多少字」。
-// 用户设置里的字号在全宽档不生效——这是有意的，窗口长宽比和竖排完全不是一回事。
-- (void)recalcFont {
-    if (_w < 1 || _h < 1) return;
-    NSInteger rows = [self twoRows] ? 2 : 1;
-    CGFloat byHeight = (_h / (CGFloat)rows) * 0.74;
-    CGFloat byWidth = _w / 20.0;       // 一行二十来个汉字，横条上读起来最舒服
-    _font = MAX(11.0, MIN(48.0, MIN(byHeight, byWidth)));
+/// 译文行最多几行、原文行最多几行：按窗口高度分，跟内容无关（内容不会改变字号）
+- (NSInteger)zhCap {
+    if (_h < 1 || _font < 1) return 2;
+    if (![self twoRows]) return MAX(1, (NSInteger)floor(_h / MAX(1.0, [self zhLineH])));
+    return MAX(1, (NSInteger)floor((_h * 0.60) / MAX(1.0, [self zhLineH])));
 }
 
-- (void)layoutRows {
+- (NSInteger)srcCap {
+    if (_h < 1 || _font < 1) return 2;
+    if (![self twoRows]) return MAX(1, (NSInteger)floor(_h / MAX(1.0, [self srcLineH])));
+    return MAX(1, (NSInteger)floor((_h * 0.34) / MAX(1.0, [self srcLineH])));
+}
+
+#pragma mark 字号
+
+// 字号只跟窗口走：宽度定「一行大概放几个汉字」，高度定「两行最多能占多高」，取小的那个。
+// 用户设置里的字号在这一档不生效——窗口长宽比和竖排完全不是一回事，强塞会挤爆两行。
+- (void)recalcFont {
     if (_w < 1 || _h < 1) return;
-    if ([self twoRows]) {
-        CGFloat gap = MAX(2.0, _h * 0.06);
-        CGFloat each = MAX(1.0, (_h - gap) / 2.0);
-        _srcLabel.frame = CGRectMake(0, 0, _w, each);
-        _zhLabel.frame = CGRectMake(0, each + gap, _w, each);
-        _srcLabel.hidden = NO;
-        _zhLabel.hidden = NO;
-    } else if ([self showTrans]) {
-        _srcLabel.frame = CGRectZero;
-        _zhLabel.frame = CGRectMake(0, 0, _w, _h);
-        _srcLabel.hidden = YES;
-        _zhLabel.hidden = NO;
-    } else {
-        _zhLabel.frame = CGRectZero;
-        _srcLabel.frame = CGRectMake(0, 0, _w, _h);
-        _zhLabel.hidden = YES;
-        _srcLabel.hidden = NO;
-    }
+    CGFloat byWidth = _w / 24.0;       // 一行二十来个汉字，横条上读起来最舒服
+    CGFloat byHeight = _h / 4.5;       // 两行译文 + 两行原文，各自留一行余量
+    CGFloat f = MIN(byWidth, byHeight);
+    _font = MAX(11.0, MIN(46.0, f));
 }
 
 #pragma mark 文本与测量
 
-// 一批句子拼成一行：中文用全角空格隔开，英文用两个半角空格，读起来都有停顿感
+// 一批句子拼成一行：中文用全角空格隔开，英文用两个半角空格，读起来都有停顿感。
+//
+// 一条规矩：句子是**整句单位**，不许被拆到两行去。
+// 以前是整批拼成一串直接交给 UILabel 自己换行，UILabel 只看字符，不看句子，
+// 于是就会出现「上一行的后半句跑到下一行开头」，一句话被劈成两截，读起来串行。
+// 现在自己排版：先量每句在当前字号下的整行宽，一句塞得进当前行就接着排，
+// 塞不进就整句换到下一行；只有单句本身就比一整行还长的长句，才在它内部换行。
+// 这样「一句两句并排铺满」还在，长句也不用缩字。
 - (NSString *)lineFor:(NSArray<NSDictionary *> *)items key:(NSString *)key {
     BOOL chinese = [key isEqualToString:@"zh"];
+    UIFont *font = [self zhFont:_font];
+    if (!chinese) font = [self srcFont:_font];
+    NSString *sep = chinese ? @"　" : @"  ";   // 中文用全角空格、英文用两个半角，都有停顿感
+    CGFloat limit = [self textLimit];           // 量的宽度 = 排字时真正的宽度，一点不差
+
+    // 一句一条，句子是**整句单位**：宁可这一行没铺满，也不许一句话被劈到两行去。
     NSMutableArray<NSString *> *parts = [NSMutableArray array];
     for (NSDictionary *it in items) {
         id v = it[key];
         if ([v isKindOfClass:[NSString class]] && [v length]) [parts addObject:v];
     }
-    return [parts componentsJoinedByString:chinese ? @"　" : @"  "];
+    if (!parts.count) return @"";
+    if (!(_w > 1) || !font || limit < 8) return [parts componentsJoinedByString:sep];
+
+    // 逐句往里塞，塞之前先按真实排版量一遍：这一行加上这句还是不是「一行」。
+    // 不靠宽度相加来估（估的和 UILabel 实际排的差一两点就会串行），而是直接量行数。
+    CGFloat oneLineH = ceil(font.lineHeight) + 0.5;
+    NSMutableString *out = [NSMutableString string];
+    NSMutableString *cur = [NSMutableString string];
+    for (NSString *part in parts) {
+        if (!cur.length) {
+            [cur appendString:part];
+            continue;
+        }
+        NSString *cand = [NSString stringWithFormat:@"%@%@%@", cur, sep, part];
+        // 超过一行高度（说明这句塞不进去会换行）就把它整句挪到下一行
+        if (ZKTextHeight(cand, limit, font, 0) > oneLineH) {
+            if (out.length) [out appendString:@"\n"];
+            [out appendString:cur];
+            cur = [NSMutableString stringWithString:part];
+        } else {
+            [cur appendString:sep];
+            [cur appendString:part];
+        }
+    }
+    if (cur.length) {
+        if (out.length) [out appendString:@"\n"];
+        [out appendString:cur];
+    }
+    return out;
 }
 
-- (CGFloat)widthOfText:(NSString *)t font:(UIFont *)f {
-    if (!t.length) return 0;
-    CGSize s = [t sizeWithAttributes:@{NSFontAttributeName: f}];
-    CGFloat w = ceil(s.width);
-    return isfinite(w) ? w : 0;
+/// 文字真正能用的宽度：左右各留 5pt。
+/// 量的时候和 UILabel 排字的时候必须用同一个宽度——差一两个点，
+/// 一句本来排得下的句子就会被 UILabel 自己再折一次，后半句掉到下一行开头。
+- (CGFloat)textLimit {
+    return MAX(8.0, _w - 10.0);
 }
 
-- (CGFloat)batchWidth:(NSArray<NSDictionary *> *)items font:(CGFloat)f {
-    CGFloat w = 0;
-    if ([self showSource]) {
-        w = MAX(w, [self widthOfText:[self lineFor:items key:@"en"] font:[self srcFont:f]]);
-    }
-    if ([self showTrans]) {
-        w = MAX(w, [self widthOfText:[self lineFor:items key:@"zh"] font:[self zhFont:f]]);
-    }
-    return w;
+/// 这一批在屏上占多高（按换行算，不封顶）
+- (CGFloat)zhHeightFor:(NSArray<NSDictionary *> *)items {
+    if (![self showTrans]) return 0;
+    return ZKTextHeight([self lineFor:items key:@"zh"], [self textLimit], [self zhFont:_font], 0);
+}
+
+- (CGFloat)srcHeightFor:(NSArray<NSDictionary *> *)items {
+    if (![self showSource]) return 0;
+    return ZKTextHeight([self lineFor:items key:@"en"], [self textLimit], [self srcFont:_font], 0);
+}
+
+/// 这一批是不是整批都塞得进（两行都算上换行，绝不靠缩字硬塞）
+- (BOOL)fits:(NSArray<NSDictionary *> *)items {
+    if (!items.count) return YES;
+    CGFloat zhCapH = [self zhCap] * [self zhLineH] + 1.0;
+    CGFloat srcCapH = [self srcCap] * [self srcLineH] + 1.0;
+    if ([self showTrans] && [self zhHeightFor:items] > zhCapH) return NO;
+    if ([self showSource] && [self srcHeightFor:items] > srcCapH) return NO;
+    return YES;
 }
 
 #pragma mark 出字
@@ -642,7 +704,7 @@ static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CG
     if (_queue.count == 0) return;
 
     // 最小间隔只防抖：一帧里连来两句时不至于闪两下。
-    // 不做「每行必须停够多久」——那正是上一版跟不上说话节奏的原因。
+    // 不做「每行必须停够多久」——那正是跟不上说话节奏的原因。
     if (_shownAt) {
         NSTimeInterval elapsed = -[_shownAt timeIntervalSinceNow];
         NSTimeInterval gap = (_queue.count >= 3) ? 0.06 : 0.18;
@@ -652,14 +714,15 @@ static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CG
         }
     }
 
-    // 以屏上这一批为基础接新句：宽条塞得进两句就两句，塞不进就整批更替。
+    // 以屏上这一批为基础接新句：塞得进就接，塞不进就整批换下一句。
+    // 关键是「整批判定」——一批里面的句子永远同进同出，不会有一半留在上一行、一半跑到下一行。
     NSMutableArray<NSDictionary *> *take = _current ? [_current mutableCopy] : [NSMutableArray array];
     NSInteger used = 0;
     for (NSDictionary *it in _queue) {
         if (take.count >= 3) break;
         NSMutableArray<NSDictionary *> *probe = [take mutableCopy];
         [probe addObject:it];
-        if (take.count > 0 && [self batchWidth:probe font:_font] > _w) break;
+        if (take.count > 0 && ![self fits:probe]) break;
         take = probe;
         used++;
     }
@@ -681,37 +744,75 @@ static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CG
 
 - (NSAttributedString *)attr:(NSString *)t font:(UIFont *)f color:(UIColor *)c {
     if (![t isKindOfClass:[NSString class]] || !t.length) return [[NSAttributedString alloc] initWithString:@""];
+    NSMutableParagraphStyle *p = [NSMutableParagraphStyle new];
+    p.alignment = NSTextAlignmentCenter;
+    p.lineBreakMode = NSLineBreakByWordWrapping;
     return [[NSAttributedString alloc] initWithString:t
-                                           attributes:@{NSFontAttributeName: f,
-                                                        NSForegroundColorAttributeName: c}];
+                                          attributes:@{NSFontAttributeName: f,
+                                                       NSForegroundColorAttributeName: c,
+                                                       NSParagraphStyleAttributeName: p}];
+}
+
+/// 按这一批实际占的高度，两行垂直居中排；高度封顶在各自的行数上限，超出的整句不会跑到另一行去。
+- (void)layoutRowsFor:(NSArray<NSDictionary *> *)items {
+    if (_w < 1 || _h < 1) return;
+    BOOL two = [self twoRows];
+
+    CGFloat zhH = 0, srcH = 0;
+    if ([self showTrans]) {
+        zhH = MIN([self zhHeightFor:items], [self zhCap] * [self zhLineH] + 1.0);
+    }
+    if ([self showSource]) {
+        srcH = MIN([self srcHeightFor:items], [self srcCap] * [self srcLineH] + 1.0);
+    }
+    CGFloat gap = (zhH > 0 && srcH > 0) ? MAX(2.0, _h * 0.05) : 0;
+    CGFloat total = zhH + gap + srcH;
+    CGFloat y = MAX(0, (_h - total) / 2.0);
+
+    if (two) {
+        _zhLabel.hidden = (zhH <= 0);
+        _srcLabel.hidden = (srcH <= 0);
+        _zhLabel.numberOfLines = [self zhCap];
+        _srcLabel.numberOfLines = [self srcCap];
+        CGFloat x = (_w - [self textLimit]) / 2.0;
+        _zhLabel.frame = CGRectMake(x, y, [self textLimit], zhH);
+        _srcLabel.frame = CGRectMake(x, y + zhH + gap, [self textLimit], srcH);
+    } else if ([self showTrans]) {
+        _zhLabel.hidden = NO;
+        _srcLabel.hidden = YES;
+        _srcLabel.frame = CGRectZero;
+        _zhLabel.numberOfLines = [self zhCap];
+        _zhLabel.frame = CGRectMake((_w - [self textLimit]) / 2.0, y, [self textLimit], zhH);
+    } else {
+        _srcLabel.hidden = NO;
+        _zhLabel.hidden = YES;
+        _zhLabel.frame = CGRectZero;
+        _srcLabel.numberOfLines = [self srcCap];
+        _srcLabel.frame = CGRectMake((_w - [self textLimit]) / 2.0, y, [self textLimit], srcH);
+    }
 }
 
 - (void)renderAnimated:(BOOL)animated {
-    [self layoutRows];
     if (!_current.count) {
-        _srcLabel.attributedText = nil;
         _zhLabel.attributedText = nil;
+        _srcLabel.attributedText = nil;
+        _zhLabel.frame = CGRectZero;
+        _srcLabel.frame = CGRectZero;
         return;
     }
-
-    NSString *src = [self showSource] ? [self lineFor:_current key:@"en"] : @"";
     NSString *zh = [self showTrans] ? [self lineFor:_current key:@"zh"] : @"";
-
-    // 放不下就整体缩一档：两行用同一个比例缩，画面才不打架
-    CGFloat f = _font;
-    CGFloat need = [self batchWidth:_current font:f];
-    if (need > _w && need > 1) f = MAX(10.0, f * (_w / need));
+    NSString *src = [self showSource] ? [self lineFor:_current key:@"en"] : @"";
 
     UIColor *main = ZKMainColor();
-    if (src.length) _srcLabel.attributedText = [self attr:src font:[self srcFont:f]
-                                                    color:[main colorWithAlphaComponent:0.62]];
-    else _srcLabel.attributedText = nil;
-    if (zh.length) _zhLabel.attributedText = [self attr:zh font:[self zhFont:f] color:main];
-    else _zhLabel.attributedText = nil;
+    _zhLabel.attributedText = [self attr:zh font:[self zhFont:_font] color:main];
+    _srcLabel.attributedText = [self attr:src font:[self srcFont:_font]
+                                     color:[main colorWithAlphaComponent:0.62]];
+
+    [self layoutRowsFor:_current];
 
     if (!animated) return;
     // 两行一起淡入 + 从下方轻推上来，用系统刷新率（ProMotion 自动跑满 120）
-    for (UILabel *l in @[_srcLabel, _zhLabel]) {
+    for (UILabel *l in @[_zhLabel, _srcLabel]) {
         if (l.hidden || l.attributedText.length == 0) continue;
         CABasicAnimation *fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
         fade.fromValue = @(0.0);
@@ -738,7 +839,6 @@ static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CG
     _h = height;
     if (!changed && !force) return;
     [self recalcFont];
-    [self layoutRows];
     if (_current.count) [self renderAnimated:NO];
     if (_queue.count) {
         _shownAt = nil;         // 尺寸变了：新句立刻上屏，不用等防抖
@@ -751,8 +851,8 @@ static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CG
     _drain = nil;
     [_queue removeAllObjects];
     _current = nil;
-    _srcLabel.attributedText = nil;
     _zhLabel.attributedText = nil;
+    _srcLabel.attributedText = nil;
     _shownAt = nil;
     if (![lines isKindOfClass:[NSArray class]]) return;
     // 画中画重建（切窗口、改设置）时把最近两句接上，不至于一片空
@@ -781,7 +881,6 @@ static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CG
 
 - (void)refreshStyle {
     [self recalcFont];
-    [self layoutRows];
     [self renderAnimated:NO];
 }
 
@@ -1047,22 +1146,20 @@ static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CG
 
 #pragma mark 字号自适应
 
-// W 档（全宽 5:1 横条）：原文一行、译文一行，不走竖排那一套
+// 小档（5:1 横条）：中文一行、原文一行，不走竖排那一套
 - (BOOL)isWideMode {
-    return [gPipStyle isEqualToString:@"W"];
+    return [gPipStyle isEqualToString:@"X"];
 }
 
 // 窗口尺寸变了就重算字号。
-// 1) 以 480×360 为基准窗，按面积比（开方）缩放用户选的字号；
-//    不用 min(宽比, 高比)——用户拖窗口时宽高同时变，min 会让"窗口大了两圈字只涨一点"，
-//    看着就是没有自适应。
-// 2) 再按"最后这一句（译文 + 原文）能不能整段塞进当前窗口"往下收；
-//    字号收到下限还放不下，才把原文限成一行——中文主字幕优先保完整。
+// 唯一规则：字号只跟窗口走，跟「这一句有多长」完全无关。
+// 旧版遇到长句会把字缩一档、下一句短了又弹回来——窗口一动没动、字却一句一跳，
+// 那正是用户说的「一长句字号就变了」。现在长句靠换行解决，绝不缩字。
 - (void)applyAdaptiveFontForWidth:(CGFloat)w height:(CGFloat)h {
     if (w < 1 || h < 1) return;
 
     if ([self isWideMode]) {
-        // 全宽档不用这套：它按两行高度和窗宽自己算字号（见 ZKWideView）
+        // 小档不用这套：它按两行高度和窗宽自己算字号（见 ZKWideView）
         self.scroll.hidden = YES;
         _wide.hidden = NO;
         [_wide setBoxWidth:w height:h force:NO];
@@ -1071,43 +1168,14 @@ static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CG
     self.scroll.hidden = NO;
     _wide.hidden = YES;
 
+    // 以 480×360 为基准窗，按面积比（开方）缩放。只跟窗口大小有关。
     CGFloat areaRatio = (w * h) / (480.0 * 360.0);
     CGFloat scale = sqrt(MAX(0.04, areaRatio));
-    scale = MAX(0.40, MIN(2.20, scale));
+    scale = MAX(0.45, MIN(2.10, scale));
 
-    CGFloat zhMain = MAX(9.0, MIN(60.0, gZhBase * scale));
-    CGFloat zhFloor = MAX(8.5, zhMain * 0.72);   // 因"这一句太长"临时收缩的底线
-    CGFloat zh = zhMain;
+    CGFloat zh = MAX(9.5, MIN(58.0, gZhBase * scale));
     CGFloat en = MAX(8.0, zh * 0.66);
-    NSInteger enLines = 0;
-
-    NSString *zt = [self.stream liveZhText];
-    NSString *et = [self.stream liveEnText];
-
-    // 顺序很重要：先牺牲原文的行数（原文是辅助），再温和地缩字号。
-    // 反过来做的话，只要碰上一句长句字就缩、下一句短的又弹回，
-    // 窗口明明没动，字号却一句一跳——那比不自适应还晃眼。
-    for (int i = 0; i < 8; i++) {
-        CGFloat zhH = ZKTextHeightLines(zt, w, [UIFont boldSystemFontOfSize:zh], 2.0, 0);
-        CGFloat enH = ZKTextHeightLines(et, w, [UIFont systemFontOfSize:en], 1.0, enLines);
-        CGFloat gap = (zhH > 0 && enH > 0) ? 2.0 : 0.0;
-        CGFloat need = zhH + enH + gap;
-        if (need <= 0 || need <= h * 0.94) break;
-
-        if (enLines == 0) { enLines = 1; continue; }   // 第一步：原文收成一行
-
-        if (zh > zhFloor) {                            // 第二步：温和收缩，最多缩到 72%
-            zh = MAX(zhFloor, zh * 0.90);
-            en = MAX(8.0, zh * 0.66);
-            continue;
-        }
-        if (zh > 9.0) {                                // 第三步：真放不下才继续往下压
-            zh = MAX(9.0, zh * 0.88);
-            en = MAX(7.5, zh * 0.72);
-            continue;
-        }
-        break;
-    }
+    NSInteger enLines = 0;         // 原文不限行：跟着换行，不截断
 
     NSInteger mask = (NSInteger)lround(zh * 10.0);
     BOOL changed = (mask != _adaptMask) || (enLines != gEnMaxLines)
@@ -1117,10 +1185,10 @@ static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CG
     gEnMaxLines = enLines;
     if (!changed) return;
     _adaptMask = mask;
-    [ZKStore log:@"pip adapt %.0fx%.0f zh=%.1f en=%.1f lines=%ld", w, h, zh, en, (long)enLines];
+    [ZKStore log:@"pip adapt %.0fx%.0f zh=%.1f en=%.1f", w, h, zh, en];
 
     // 必须 force：窗口缩放时文字内容往往一字没变，走缓存就把这次重排吞掉了，
-    // 表现就是"字号算了新的、屏幕上还是老字号"。
+    // 表现就是「字号算了新的、屏幕上还是老字号」。
     [self.stream relayoutAllForce:YES];
 }
 
@@ -1348,23 +1416,20 @@ static __weak id gActiveSub = nil;
     NSString *pip = p[@"pip"];
     if ([pip isKindOfClass:[NSString class]]) {
         // 窗口三档，选哪个开出来就是多大：
-        //   L 大 = 4:3 480×360（默认，能看清两行）
-        //   M 中 = 16:9 576×324
-        //   S 小 = 21:9 840×360（宽条）
-        //   W 全宽 = 5:1 1080×216（铺满屏宽、最矮，两行刚好，最不挡画面）
-        // 老版本的 4:3 / 21:9 / bar 也认，映射到对应的档
-        if ([pip isEqualToString:@"W"] || [pip isEqualToString:@"full"]) {
+        //   X 小 = 5:1 1080×216（默认，铺满屏宽、最矮，中文一行 + 原文一行）
+        //   M 中 = 21:9 840×360（宽条，竖向能站三四行）
+        //   B 大 = 27:16 1080×640（又宽又大：比中档更宽更高，一屏能站六七行）
+        // 老版本的 W / S(21:9) / M(16:9) / L(4:3) 也认，映射到对应的新档
+        if ([pip isEqualToString:@"X"] || [pip isEqualToString:@"W"] || [pip isEqualToString:@"full"]) {
             gPipSize = CGSizeMake(1080, 216);
-            gPipStyle = @"W";
-        } else if ([pip isEqualToString:@"M"] || [pip isEqualToString:@"16:9"]) {
-            gPipSize = CGSizeMake(576, 324);
-            gPipStyle = @"M";
-        } else if ([pip isEqualToString:@"S"] || [pip isEqualToString:@"21:9"] || [pip isEqualToString:@"bar"]) {
+            gPipStyle = @"X";
+        } else if ([pip isEqualToString:@"M"] || [pip isEqualToString:@"S"]
+                   || [pip isEqualToString:@"21:9"] || [pip isEqualToString:@"bar"]) {
             gPipSize = CGSizeMake(840, 360);
-            gPipStyle = @"S";
+            gPipStyle = @"M";
         } else {
-            gPipSize = CGSizeMake(480, 360);
-            gPipStyle = @"L";
+            gPipSize = CGSizeMake(1080, 640);
+            gPipStyle = @"B";
         }
         // 窗口档换了：正在播的那块由 App 侧重开窗口生效，
         // 这里只管把档位记下来，内容层（W / 竖排）当场切换
