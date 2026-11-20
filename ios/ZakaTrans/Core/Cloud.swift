@@ -190,6 +190,7 @@ final class Cloud: ObservableObject {
         let billedTokens: Int64
         let endReason: String
         let summary: String?
+        let preview: String?
 
         var credits: Double { Double(billedTokens) * 1400.0 / 1_000_000.0 }
         var creditsText: String { Format.credits(credits) }
@@ -228,7 +229,8 @@ final class Cloud: ObservableObject {
                     upstreamTokens: (row["upstream_tokens"] as? NSNumber)?.int64Value ?? 0,
                     billedTokens: (row["billed_tokens"] as? NSNumber)?.int64Value ?? 0,
                     endReason: row["end_reason"] as? String ?? "",
-                    summary: row["summary"] as? String
+                    summary: row["summary"] as? String,
+                    preview: row["preview"] as? String
                 )
             }
         } catch {
