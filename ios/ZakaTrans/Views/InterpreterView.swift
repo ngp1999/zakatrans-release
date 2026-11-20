@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 
 /// 同声传译：面对面说话，两边的话各自翻译、各自朗读。
 /// 先选两个语言，点开始，然后直接说——说话人不用切换，系统按识别出的语言自动归边。
@@ -275,13 +276,57 @@ struct InterpreterView: View {
             error = "积分不足，先去充值。"
             return
         }
+        // 麦克风权限得真拿到再开：没有权限时直接去碰 AVAudioEngine 的输入节点，系统会当场把进程带走
+        ensureMic { ok in
+            guard ok else {
+                error = "需要麦克风权限才能同声传译，请在系统设置里允许后再试"
+                return
+            }
+            begin()
+        }
+    }
+
+    private func ensureMic(_ done: @escaping (Bool) -> Void) {
+        if #available(iOS 17.0, *) {
+            switch AVAudioApplication.shared.recordPermission {
+            case .granted: done(true); return
+            case .denied: done(false); return
+            default: break
+            }
+            AVAudioApplication.requestRecordPermission { ok in
+                DispatchQueue.main.async { done(ok) }
+            }
+        } else {
+            let sess = AVAudioSession.sharedInstance()
+            switch sess.recordPermission {
+            case .granted: done(true); return
+            case .denied: done(false); return
+            default: break
+            }
+            sess.requestRecordPermission { ok in
+                DispatchQueue.main.async { done(ok) }
+            }
+        }
+    }
+
+    private func begin() {
+        guard !running else { return }
+        // 首页字幕翻译和同传都要占音频链路，两个一起跑必然互相打断——开同传就先停掉首页那场
+        if app.running { app.stop() }
         chats.removeAll()
         liveA = ""; liveB = ""
         startedAt = Date()
         running = true
         state = "连接中"
+        // 同传自己管着 PlayAndRecord 会话，朗读这边不许再去改会话类别
+        Speaker.shared.usesExternalSession = true
 
-        guard let itp = ZKInterpreter.shared() else { error = "同传引擎没启动起来，重开一次试试"; return }
+        guard let itp = ZKInterpreter.shared() else {
+            error = "同传引擎没启动起来，重开一次试试"
+            running = false
+            Speaker.shared.usesExternalSession = false
+            return
+        }
         itp.onLine = { side, source, trans, final in
             let s = side ?? "a"
             let source = source ?? ""
@@ -297,6 +342,9 @@ struct InterpreterView: View {
                 let text = source.trimmingCharacters(in: .whitespacesAndNewlines)
                 let tr = trans.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !text.isEmpty || !tr.isEmpty else { return }
+                // 自己念出去的那句被麦克风拾回来，会被当成"对方又说了一遍"：
+                // 命中了就当它没来过，不显示也不重念
+                if Speaker.shared.enabled, Speaker.shared.isEcho([tr, text]) { return }
                 chats.append(Chat(side: s, source: text, trans: tr, final: true))
                 if chats.count > 200 { chats.removeFirst(chats.count - 200) }
 
@@ -322,6 +370,8 @@ struct InterpreterView: View {
         running = false
         ZKInterpreter.shared()?.stop()
         Speaker.shared.stop()
+        // 会话归位：离开同传页之后朗读恢复成自己配会话
+        Speaker.shared.usesExternalSession = false
         state = "未开始"
         liveA = ""; liveB = ""
         startedAt = nil
