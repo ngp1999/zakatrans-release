@@ -30,27 +30,22 @@ struct HomeView: View {
         // 这里按下即出，动效压到 0.18 秒，观感就是「点了就开」。
         .overlay(alignment: .bottom) {
             if showAudio {
-                ZStack(alignment: .bottom) {
-                    Color.black.opacity(0.30)
-                        .ignoresSafeArea()
-                        .transition(.opacity)
-                        .onTapGesture { closeAudio() }
+                bottomSheet {
                     AudioOutputView(onClose: { closeAudio() })
-                        .frame(height: min(430, UIScreen.main.bounds.height * 0.62))
-                        .background(Theme.bg)
-                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                        .padding(.horizontal, 8)
-                        .padding(.bottom, 8)
-                        .transition(.move(edge: .bottom))
-                }
+                        .frame(height: min(430, UIScreen.main.bounds.height * 0.58))
+                } onDismiss: { closeAudio() }
             }
         }
-        .animation(.easeOut(duration: 0.18), value: showAudio)
-        .onAppear { Haptics.warm() }
-        // 字幕样式按用户要求走整屏：色块多、字号预览大，半屏挤
-        .fullScreenCover(isPresented: $showStyle) {
-            SubtitleSettingsView()
+        .overlay(alignment: .bottom) {
+            if showStyle {
+                bottomSheet {
+                    SubtitleSettingsView()
+                        // 内容有多少弹多少：预览 + 样式 + 窗口三块，底部不留大片空白
+                        .frame(height: min(690, UIScreen.main.bounds.height * 0.82))
+                } onDismiss: { closeStyle() }
+            }
         }
+        .onAppear { Haptics.warm() }
         .alert("积分不足", isPresented: Binding(
             get: { app.alert != nil },
             set: { if !$0 { app.alert = nil } }
@@ -63,7 +58,51 @@ struct HomeView: View {
     }
 
     private func closeAudio() {
-        withAnimation(.easeOut(duration: 0.16)) { showAudio = false }
+        withAnimation(.easeIn(duration: 0.18)) { showAudio = false }
+    }
+
+    private func closeStyle() {
+        withAnimation(.easeIn(duration: 0.18)) { showStyle = false }
+    }
+
+    private func openAudio() {
+        Haptics.tap()
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) {
+            showStyle = false
+            showAudio = true
+        }
+    }
+
+    private func openStyle() {
+        Haptics.tap()
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) {
+            showAudio = false
+            showStyle = true
+        }
+    }
+
+    /// 自绘的半屏面板：从底部弹上来、点空白处关掉，右上角不放关闭按钮
+    @ViewBuilder
+    private func bottomSheet<Content: View>(@ViewBuilder content: () -> Content,
+                                            onDismiss: @escaping () -> Void) -> some View {
+        ZStack(alignment: .bottom) {
+            Color.black.opacity(0.28)
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture { onDismiss() }
+                .transition(.opacity)
+            content()
+                .frame(maxWidth: .infinity)
+                .background(Theme.bg)
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.6)
+                )
+                .padding(.horizontal, 6)
+                .padding(.bottom, 6)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
     }
 
     // MARK: - 字幕
@@ -195,17 +234,15 @@ struct HomeView: View {
             HStack(spacing: 10) {
                 // 音频输出：点开是半屏设置，图标反映当前开关
                 iconButton(on: speaker.enabled) {
-                    Haptics.tap()
-                    showAudio = true
+                    openAudio()
                 } content: {
                     Image(systemName: speaker.enabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
                         .font(.system(size: 17, weight: .medium))
                 }
 
-                // 字幕样式：颜色、字号、背景、窗口大小都在里面（整屏展示）
+                // 字幕样式：颜色、字号、背景、窗口大小都在里面（80% 面板，点空白关闭）
                 iconButton(on: app.pipOn) {
-                    Haptics.tap()
-                    showStyle = true
+                    openStyle()
                 } content: {
                     SubtitleGlyph(on: app.pipOn)
                 }
@@ -258,37 +295,29 @@ struct HomeView: View {
     }
 }
 
-/// 字幕样式按钮的图标：一条渐变气泡 + 两条字幕线。
-/// 不用「字号大小」这种字形，避免用户以为点进去只能调字号。
+/// 字幕样式按钮的图标：一个大 A、一个小 a，底下一根字幕条。
+/// 不用「字号大小」那种刻度字形——用户一眼看不出那是调样式的；
+/// 「Aa + 字幕条」是排版工具里通用的语言，跟本 App 的青绿单色体系也合得来。
 private struct SubtitleGlyph: View {
     var on: Bool
 
+    private var tint: Color { on ? Theme.accent : Theme.sub }
+
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 8.5, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: on
-                            ? [Color(red: 0.34, green: 0.60, blue: 1.00), Color(red: 0.56, green: 0.38, blue: 0.98)]
-                            : [Color(red: 0.62, green: 0.66, blue: 0.74), Color(red: 0.72, green: 0.68, blue: 0.82)],
-                        startPoint: .topLeading, endPoint: .bottomTrailing
-                    )
-                )
-            VStack(spacing: 3) {
-                Capsule().fill(.white).frame(width: 13, height: 2.4)
-                Capsule().fill(.white.opacity(0.62)).frame(width: 9, height: 2.2)
+        VStack(spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 0.5) {
+                Text("A")
+                    .font(.system(size: 18, weight: .heavy, design: .rounded))
+                    .foregroundStyle(tint)
+                Text("a")
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(tint.opacity(0.72))
             }
-            // 气泡尾巴
-            Path { p in
-                p.move(to: CGPoint(x: 4, y: 21))
-                p.addLine(to: CGPoint(x: 9.5, y: 21))
-                p.addLine(to: CGPoint(x: 4, y: 25))
-                p.closeSubpath()
-            }
-            .fill(on ? Color(red: 0.56, green: 0.38, blue: 0.98) : Color(red: 0.72, green: 0.68, blue: 0.82))
+            Capsule()
+                .fill(tint.opacity(0.85))
+                .frame(width: 20, height: 3)
         }
-        .frame(width: 24, height: 26)
-        .shadow(color: .black.opacity(0.10), radius: 2, y: 1)
+        .frame(width: 26, height: 26)
     }
 }
 
