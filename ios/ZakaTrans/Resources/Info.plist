@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>zh_CN</string>
 	<key>CFBundleDisplayName</key>
-	<string>语幕</string>
+	<string>语幕实时翻译</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
