@@ -731,10 +731,9 @@ static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CG
     [self startSizeProbe];
 }
 
-- (void)viewWillDisappear:(BOOL)animated {
-    [super viewWillDisappear:animated];
-    [self stopSizeProbe];
-}
+// 不在这里停：画中画从 App 窗口切到 PiP 窗口时 viewWillDisappear 可能被调用，
+// 一停就再也没有兜底探测了。轮询成本只是每 0.25 秒读几个 bounds，
+// 真正的生命周期结束由 ZKPip 的 shutdown（停止画中画）负责收尾。
 
 #pragma mark 字号自适应
 
@@ -751,30 +750,37 @@ static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CG
     CGFloat scale = sqrt(MAX(0.04, areaRatio));
     scale = MAX(0.40, MIN(2.20, scale));
 
-    CGFloat zh = MAX(9.0, MIN(60.0, gZhBase * scale));
+    CGFloat zhMain = MAX(9.0, MIN(60.0, gZhBase * scale));
+    CGFloat zhFloor = MAX(8.5, zhMain * 0.72);   // 因"这一句太长"临时收缩的底线
+    CGFloat zh = zhMain;
     CGFloat en = MAX(8.0, zh * 0.66);
     NSInteger enLines = 0;
 
     NSString *zt = [self.stream liveZhText];
     NSString *et = [self.stream liveEnText];
 
-    for (int i = 0; i < 10; i++) {
+    // 顺序很重要：先牺牲原文的行数（原文是辅助），再温和地缩字号。
+    // 反过来做的话，只要碰上一句长句字就缩、下一句短的又弹回，
+    // 窗口明明没动，字号却一句一跳——那比不自适应还晃眼。
+    for (int i = 0; i < 8; i++) {
         CGFloat zhH = ZKTextHeightLines(zt, w, [UIFont boldSystemFontOfSize:zh], 2.0, 0);
         CGFloat enH = ZKTextHeightLines(et, w, [UIFont systemFontOfSize:en], 1.0, enLines);
         CGFloat gap = (zhH > 0 && enH > 0) ? 2.0 : 0.0;
         CGFloat need = zhH + enH + gap;
         if (need <= 0 || need <= h * 0.94) break;
 
-        if (zh > 10.0) {                       // 先缩字号
-            CGFloat k = MAX(0.62, (h * 0.94) / need);
-            zh = MAX(10.0, zh * k);
+        if (enLines == 0) { enLines = 1; continue; }   // 第一步：原文收成一行
+
+        if (zh > zhFloor) {                            // 第二步：温和收缩，最多缩到 72%
+            zh = MAX(zhFloor, zh * 0.90);
             en = MAX(8.0, zh * 0.66);
             continue;
         }
-        if (enLines == 0) { enLines = 1; continue; }   // 字号到底了：原文限一行
-        CGFloat k2 = MAX(0.55, (h * 0.94) / need);
-        zh = MAX(8.5, zh * k2);
-        en = MAX(7.5, en * k2);
+        if (zh > 9.0) {                                // 第三步：真放不下才继续往下压
+            zh = MAX(9.0, zh * 0.88);
+            en = MAX(7.5, zh * 0.72);
+            continue;
+        }
         break;
     }
 
