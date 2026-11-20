@@ -12,7 +12,6 @@ struct CreditView: View {
             VStack(spacing: 18) {
                 balanceCard
                 rulesCard
-                agreementRow
             }
             .padding(.horizontal, 16)
             .padding(.top, 12)
@@ -23,7 +22,7 @@ struct CreditView: View {
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showPurchase) {
             PurchaseView()
-                .presentationDetents([.large])
+                .presentationDetents([.fraction(0.66), .large])
                 .presentationDragIndicator(.visible)
         }
         .task {
@@ -126,31 +125,5 @@ struct CreditView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-    }
-
-    // MARK: - 付费协议
-
-    private var agreementRow: some View {
-        NavigationLink {
-            TermsView(kind: .payment)
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "doc.text")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(Theme.sub)
-                Text("付费协议")
-                    .font(.system(size: 15))
-                    .foregroundStyle(Theme.ink)
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.faint)
-            }
-            .padding(.horizontal, 16)
-            .frame(height: 52)
-            .background(Theme.card)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
-        }
-        .buttonStyle(RowButtonStyle())
     }
 }
