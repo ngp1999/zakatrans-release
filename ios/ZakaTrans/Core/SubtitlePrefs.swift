@@ -160,12 +160,12 @@ struct SubtitlePrefs: Codable, Equatable {
     /// 之前那两档「半透明黑 / 无背景」在系统窗口里和纯黑一模一样，等于没做。
     static let backgrounds: [(String, String, UIColor)] = [
         ("black",    "纯黑", UIColor(red: 0.00, green: 0.00, blue: 0.00, alpha: 1)),
-        ("graphite", "石墨", UIColor(red: 0.11, green: 0.11, blue: 0.12, alpha: 1)),
-        ("navy",     "深蓝", UIColor(red: 0.04, green: 0.10, blue: 0.20, alpha: 1)),
-        ("forest",   "墨绿", UIColor(red: 0.05, green: 0.14, blue: 0.10, alpha: 1)),
-        ("wine",     "酒红", UIColor(red: 0.16, green: 0.05, blue: 0.08, alpha: 1)),
-        ("indigo",   "深紫", UIColor(red: 0.10, green: 0.07, blue: 0.18, alpha: 1)),
-        ("paper",    "米白", UIColor(red: 0.95, green: 0.95, blue: 0.96, alpha: 1)),
+        ("graphite", "石墨", UIColor(red: 0.17, green: 0.17, blue: 0.19, alpha: 1)),
+        ("navy",     "深蓝", UIColor(red: 0.03, green: 0.17, blue: 0.42, alpha: 1)),
+        ("forest",   "墨绿", UIColor(red: 0.03, green: 0.28, blue: 0.21, alpha: 1)),
+        ("wine",     "酒红", UIColor(red: 0.40, green: 0.04, blue: 0.14, alpha: 1)),
+        ("indigo",   "深紫", UIColor(red: 0.20, green: 0.09, blue: 0.44, alpha: 1)),
+        ("paper",    "米白", UIColor(red: 0.94, green: 0.94, blue: 0.95, alpha: 1)),
     ]
 
     static func uiBackground(_ name: String) -> UIColor {
@@ -216,10 +216,10 @@ struct SubtitlePrefs: Codable, Equatable {
 
     static let sourceLanguages: [(String, String)] = [
         ("auto", "自动识别"),
-        ("zh", "中文"), ("en", "English"), ("ja", "日本語"), ("ko", "한국어"),
-        ("es", "Español"), ("fr", "Français"), ("de", "Deutsch"), ("ru", "Русский"),
-        ("pt", "Português"), ("it", "Italiano"), ("ar", "العربية"), ("th", "ไทย"),
-        ("vi", "Tiếng Việt"), ("id", "Indonesia"),
+        ("zh", "中文"), ("en", "英语"), ("ja", "日语"), ("ko", "韩语"),
+        ("es", "西班牙语"), ("fr", "法语"), ("de", "德语"), ("ru", "俄语"),
+        ("pt", "葡萄牙语"), ("it", "意大利语"), ("ar", "阿拉伯语"), ("th", "泰语"),
+        ("vi", "越南语"), ("id", "印尼语"),
     ]
 }
 
