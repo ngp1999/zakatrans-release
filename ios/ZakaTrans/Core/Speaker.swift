@@ -15,7 +15,7 @@ final class Speaker: NSObject, ObservableObject {
 
     @Published private(set) var speaking = false
     @Published var enabled = false
-    @Published var rate: Double = 0.58
+    @Published var rate: Double = 0.46
     /// 别的 App 压到多少：0 = 不压（只混音），>0 = 系统压低（约 -20dB）
     @Published var duckLevel: Double = 60
     /// 音色：空 = 中文默认女声
@@ -255,11 +255,11 @@ final class Speaker: NSObject, ObservableObject {
         speechStartedAt = Date()
         let u = AVSpeechUtterance(string: t)
         u.voice = Self.voice(voiceId, lang: lang)
-        u.rate = Float(max(0.40, min(0.80, rate)))
+        u.rate = Float(max(0.30, min(0.60, rate)))
         u.pitchMultiplier = 1.0
         // 压低别的 App 的时候自己可以响一点（相对更清楚）；不压的时候让一点，别盖住原声
         u.volume = duckLevel > 0 ? Float(0.9 + 0.1 * min(1, duckLevel / 100)) : 0.85
-        u.postUtteranceDelay = 0
+        u.postUtteranceDelay = 0.08
         u.preUtteranceDelay = 0
         synth.speak(u)
         // 现在念的是哪种语言：同传那边据此只暂停「会被这句回声污染」的那一路收音，
