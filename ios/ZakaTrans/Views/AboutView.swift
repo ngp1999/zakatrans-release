@@ -6,6 +6,11 @@ struct AboutView: View {
     /// 对外联系邮箱
     static let contactEmail = "1938044162@qq.com"
 
+    @ObservedObject private var cloud = Cloud.shared
+    @State private var showDelete = false
+    @State private var deleting = false
+    @State private var deleteError = ""
+
     /// 只读短版本号（V3.7.5）。构建号是内部排查用的，不给用户看。
     private var version: String {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
@@ -27,6 +32,30 @@ struct AboutView: View {
         .background(Theme.bg)
         .navigationTitle("关于语幕")
         .navigationBarTitleDisplayMode(.inline)
+        .alert("确认注销账号？", isPresented: $showDelete) {
+            Button("取消", role: .cancel) {}
+            Button("注销", role: .destructive) { deleteAccount() }
+        } message: {
+            Text("账号、积分、对话记录等数据会一并删除，无法恢复。")
+        }
+        .alert("注销失败", isPresented: Binding(
+            get: { !deleteError.isEmpty },
+            set: { if !$0 { deleteError = "" } }
+        )) {
+            Button("好", role: .cancel) { deleteError = "" }
+        } message: {
+            Text(deleteError)
+        }
+    }
+
+    private func deleteAccount() {
+        guard !deleting else { return }
+        deleting = true
+        Task {
+            let ok = await cloud.deleteAccount()
+            deleting = false
+            if !ok { deleteError = cloud.lastError ?? "注销失败，请稍后重试" }
+        }
     }
 
     // MARK: - 头部
@@ -112,6 +141,24 @@ struct AboutView: View {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Theme.faint)
+                }
+                .padding(.horizontal, 16)
+                .frame(height: 52)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(RowButtonStyle())
+
+            divider
+
+            // App Store 5.1.1(v)：账号必须能在 App 内自己注销，
+            // 放在「联系我们」下面——用户找客服找不到就会翻到这儿。
+            Button { showDelete = true } label: {
+                HStack {
+                    Text("注销账号").font(.system(size: 16)).foregroundStyle(Theme.warn)
+                    Spacer()
+                    if deleting {
+                        ProgressView().scaleEffect(0.8)
+                    }
                 }
                 .padding(.horizontal, 16)
                 .frame(height: 52)
