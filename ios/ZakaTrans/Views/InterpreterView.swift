@@ -237,14 +237,14 @@ struct InterpreterView: View {
             VStack(alignment: .leading, spacing: 5) {
                 if !l.trans.isEmpty {
                     Text(l.trans)
-                        .font(.system(size: 17, weight: l.done ? .semibold : .regular))
+                        .font(.system(size: 19, weight: l.done ? .semibold : .regular))
                         .foregroundStyle(Theme.ink)
                         .multilineTextAlignment(.leading)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if !l.source.isEmpty, l.source != l.trans {
                     Text(l.source)
-                        .font(.system(size: 14))
+                        .font(.system(size: 15))
                         .foregroundStyle(Theme.sub)
                         .multilineTextAlignment(.leading)
                         .frame(maxWidth: .infinity, alignment: .leading)
