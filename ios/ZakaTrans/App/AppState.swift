@@ -305,6 +305,7 @@ final class AppState: ObservableObject {
             "background": prefs.background,
             "mode": prefs.mode,
             "pip": prefs.pip,
+            "scroll": prefs.scroll,
         ])
         prefs.saveLocal()
         // 收音模式改了要立刻切换采集来源（内部收音 / 麦克风收音）
