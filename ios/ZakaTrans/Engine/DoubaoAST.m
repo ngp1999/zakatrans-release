@@ -14,7 +14,7 @@
 
 #define ZT_CHUNK        1280        // 40ms @ 16kHz/16bit/单声道（越小越早上行，字幕越早出）
 #define ZT_RATE         16000.0
-#define ZT_BUF_SECONDS  1.6
+#define ZT_BUF_SECONDS  8.0
 #define ZT_MAX_SESSION  1080.0
 #define ZT_RECONNECT    2.0
 
@@ -208,7 +208,8 @@ static NSString *ZTSign(NSString *token, NSString *method, NSString *path,
             NSString *ws = json[@"ws_url"];
             NSString *src = s.srcLang.length ? s.srcLang : ([ZKStore setting:@"asrlang"] ?: @"auto");
             NSString *dst = s.dstLang.length ? s.dstLang : ([ZKStore setting:@"dstlang"] ?: @"zh");
-            ws = [NSString stringWithFormat:@"%@&src=%@&dst=%@", ws, src, dst];
+            NSString *md = s.mode.length ? s.mode : @"subtitle";
+            ws = [NSString stringWithFormat:@"%@&src=%@&dst=%@&mode=%@", ws, src, dst, md];
 
             s->_ticket = json[@"ticket"];
             s->_failCount = 0;
@@ -280,8 +281,11 @@ static NSString *ZTSign(NSString *token, NSString *method, NSString *path,
             }
         });
     } else if ([type isEqualToString:@"state"]) {
+        BOOL wasReady = _ready;
         _ready = YES;
         _connecting = NO;
+        // 刚连上：把握手期间攒下的声音立刻补发，不用等下一条音频推进来
+        if (!wasReady) dispatch_async(_q, ^{ [self flushPackets]; });
         NSString *st = m[@"state"];
         if ([st isEqualToString:@"listening"]) [self setState:@"同传已连接"];
         else if ([st isEqualToString:@"connecting"]) [self setState:@"连接中"];
@@ -372,12 +376,11 @@ static NSString *ZTSign(NSString *token, NSString *method, NSString *path,
 - (void)flushPackets {
     if (!_running) return;
 
-    if (!_ready) {
-        @synchronized (_pkt) {
-            if (_pkt.length > (NSUInteger)(ZT_RATE * 2 * 0.5)) [_pkt setLength:0];
-        }
-        return;
-    }
+    // 还没握手完：这段声音先留着，别丢。
+    // 以前这里超过半秒就整段清掉，结果开口头一两个词永远进不去——
+    // 用户看到的就是"要等一下才认得上"。现在按 ZT_BUF_SECONDS 留满，
+    // 连上之后 flushPackets 会把这段补发出去，第一句就是完整的。
+    if (!_ready) return;
 
     // 会话到点主动换一个新的，免得长连接被服务端掐在半句话上
     if ([NSDate date].timeIntervalSince1970 - _sessionAt > ZT_MAX_SESSION) {
@@ -393,7 +396,7 @@ static NSString *ZTSign(NSString *token, NSString *method, NSString *path,
         while (_pkt.length >= ZT_CHUNK) {
             [batch addObject:[_pkt subdataWithRange:NSMakeRange(0, ZT_CHUNK)]];
             [_pkt replaceBytesInRange:NSMakeRange(0, ZT_CHUNK) withBytes:NULL length:0];
-            if (batch.count >= 4) break;
+            if (batch.count >= 12) break;   // 补发时一次多带几包，追得上实时
         }
     }
 
