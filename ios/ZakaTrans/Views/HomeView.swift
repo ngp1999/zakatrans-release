@@ -5,21 +5,11 @@ import UIKit
 struct HomeView: View {
     @ObservedObject private var app = AppState.shared
     @ObservedObject private var cloud = Cloud.shared
-    @ObservedObject private var speaker = Speaker.shared
     @State private var showCredit = false
-    /// 当前弹出的面板（朗读设置 / 字幕样式），同一个时刻只会有一个
-    @State private var panel: PanelKind?
-    /// 面板是否已经滑到位置。整块面板用 offset 驱动，从屏幕底部整体滑上来，
-    /// 不依赖 SwiftUI 的 transition（那个在 overlay 里有时候只有内容在动、面板底不跟着走）。
-    @State private var panelUp = false
-    /// 下拉关闭时跟手的位移
-    @State private var dragY: CGFloat = 0
+    /// 字幕样式：走系统 sheet，带上分档高度和下拉关闭，手势是系统那套
+    @State private var showStyle = false
     /// 麦克风权限被拒时给的提示
     @State private var micDenied = false
-
-    private enum PanelKind: String {
-        case audio, style
-    }
 
 
     var body: some View {
@@ -47,10 +37,10 @@ struct HomeView: View {
         .sheet(isPresented: $showCredit) {
             NavigationStack { CreditView() }
         }
-        // 朗读设置：页面内自绘的半屏面板。
-        // 以前用系统 sheet，点下去要等系统那套转场和分档高度初始化，实测有明显延迟；
-        // 这里按下即出，动效压到 0.18 秒，观感就是「点了就开」。
-        .overlay(alignment: .bottom) { panelLayer }
+        .sheet(isPresented: $showStyle) {
+            SubtitleSettingsView()
+                .presentationBackground(Theme.bg)
+        }
         .onAppear { Haptics.warm() }
         .alert("积分不足", isPresented: Binding(
             get: { app.alert != nil },
@@ -60,114 +50,6 @@ struct HomeView: View {
             Button("取消", role: .cancel) { app.alert = nil }
         } message: {
             Text(app.alert ?? "")
-        }
-    }
-
-    // MARK: - 底部面板
-
-    /// 面板整块由下往上滑：背景和面板一起动，滑到位置才可点。
-    private var panelLayer: some View {
-        Group {
-            if let kind = panel {
-                ZStack(alignment: .bottom) {
-                    Color.black
-                        .opacity(panelUp ? 0.28 : 0)
-                        .ignoresSafeArea()
-                        .contentShape(Rectangle())
-                        .onTapGesture { closePanel() }
-
-                    VStack(spacing: 0) {
-                        // 顶部小横条：两个面板共用一条，位置和样子完全一致。
-                        // 它不只是个装饰——按住面板任意位置往下拖，拖过 90 点或甩一下就能关掉，
-                        // 不必再去找空白处点。跟「我的」页面那套手势是同一个习惯。
-                        Capsule()
-                            .fill(Theme.faint.opacity(0.45))
-                            .frame(width: 36, height: 4.5)
-                            .padding(.top, 8)
-                            .padding(.bottom, 2)
-                            .frame(maxWidth: .infinity)
-                            .contentShape(Rectangle())
-
-                        switch kind {
-                        case .audio:
-                            AudioOutputView(onClose: { closePanel() })
-                        case .style:
-                            SubtitleSettingsView()
-                        }
-                        Color.clear.frame(height: SafeArea.bottom)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .background(Theme.bg)
-                    .clipShape(UnevenRoundedRectangle(topLeadingRadius: 22,
-                                                      topTrailingRadius: 22,
-                                                      style: .continuous))
-                    .overlay(alignment: .top) {
-                        UnevenRoundedRectangle(topLeadingRadius: 22,
-                                               topTrailingRadius: 22,
-                                               style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.6)
-                            .allowsHitTesting(false)
-                    }
-                    .shadow(color: .black.opacity(0.16), radius: 22, y: -8)
-                    .offset(y: panelUp ? dragY : UIScreen.main.bounds.height)
-                    // 顶部一条 56 点的拖拽区（正好是小横条加标题那一块）：
-                    // 按住往下拖，过了阈值就关；没过就弹回去。下面内容区照常滚动，不抢手势。
-                    .overlay(alignment: .top) {
-                        Color.clear
-                            .frame(height: 56)
-                            .contentShape(Rectangle())
-                            .gesture(
-                                DragGesture(minimumDistance: 6)
-                                    .onChanged { v in
-                                        let dy = v.translation.height
-                                        dragY = dy > 0 ? dy : dy / 5
-                                    }
-                                    .onEnded { v in
-                                        let far = v.translation.height > 90
-                                        let flick = v.predictedEndTranslation.height > 200
-                                        if far || flick {
-                                            dragY = 0
-                                            closePanel()
-                                        } else {
-                                            withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
-                                                dragY = 0
-                                            }
-                                        }
-                                    }
-                            )
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                .ignoresSafeArea()
-            }
-        }
-        // 回弹只留一点点：弹簧收得很紧，滑到位置几乎就是停住，不来回晃。
-        .animation(.spring(response: 0.32, dampingFraction: 0.93), value: panelUp)
-    }
-
-    private func openPanel(_ kind: PanelKind) {
-        Haptics.tap()
-        if panel == kind { return }
-        if panel == nil {
-            panel = kind
-            panelUp = false
-            // 先让它以「在屏幕外」的姿态完成一次布局，下一拍再滑上来——
-            // 直接在同一次事务里设 true，第一帧就已经在位置上了，等于没有动画。
-            DispatchQueue.main.async {
-                panelUp = true
-            }
-        } else {
-            withAnimation(.easeInOut(duration: 0.16)) { panel = kind }
-        }
-    }
-
-    private func closePanel() {
-        withAnimation(.easeIn(duration: 0.22)) {
-            dragY = 0
-            panelUp = false
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.26) {
-            if !panelUp { panel = nil }
         }
     }
 
@@ -304,19 +186,11 @@ struct HomeView: View {
             }
 
             HStack(spacing: 10) {
-                // 音频输出：点开是半屏设置，图标反映当前开关
-                iconButton(on: speaker.enabled) {
-                    openPanel(.audio)
-                } content: {
-                    Image(systemName: speaker.enabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
-                        .font(.system(size: 17, weight: .medium))
-                }
-
-                // 字幕样式：颜色、字号、背景、窗口大小都在里面（80% 面板，点空白关闭）
-                // 字幕样式：用系统自带的画中画图标（矢量，跟系统其他图标是一套），
+                // 字幕样式：颜色、字号、背景、窗口大小都在里面，系统 sheet 呈现
+                // 图标用系统自带的画中画（矢量，跟系统其他图标是一套），
                 // 不再自己画调色板——自制图标缩到 17pt 细节全糊，也不像系统图标。
                 iconButton(on: app.pipOn) {
-                    openPanel(.style)
+                    showStyle = true
                 } content: {
                     Image(systemName: app.pipOn ? "pip.fill" : "pip")
                         .font(.system(size: 17, weight: .medium))
