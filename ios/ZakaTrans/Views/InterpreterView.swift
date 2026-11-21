@@ -228,43 +228,44 @@ struct InterpreterView: View {
         .padding(.top, 80)
     }
 
+    /// 对话列表：不分左右，全部合成一列。
+    /// 以前自己说的靠右、对方靠左，两块底色也不一样；面对面的时候手机摆在中间，
+    /// 眼睛得两边来回扫才能把一句话对上行，反而更费劲。
+    /// 现在一律左对齐往下排：译文一行、原文一行，按时间顺序读就行。
     private func bubble(_ l: Line) -> some View {
-        let mineSide = l.side == "a"
-        return HStack(alignment: .bottom, spacing: 8) {
-            if mineSide { Spacer(minLength: 44) }
-            // 自己说的话在右边，按钮就摆在气泡左边；对方的话反过来
-            if mineSide { playButton(l) }
-
-
-            VStack(alignment: mineSide ? .trailing : .leading, spacing: 5) {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 5) {
                 if !l.trans.isEmpty {
                     Text(l.trans)
                         .font(.system(size: 17, weight: l.done ? .semibold : .regular))
-                        .foregroundStyle(mineSide ? Color.white : Theme.ink)
-                        .multilineTextAlignment(mineSide ? .trailing : .leading)
+                        .foregroundStyle(Theme.ink)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if !l.source.isEmpty, l.source != l.trans {
                     Text(l.source)
                         .font(.system(size: 14))
-                        .foregroundStyle(mineSide ? Color.white.opacity(0.72) : Theme.sub)
-                        .multilineTextAlignment(mineSide ? .trailing : .leading)
+                        .foregroundStyle(Theme.sub)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             .padding(.horizontal, 15)
             .padding(.vertical, 11)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(mineSide ? Theme.accent : Theme.surface)
+                    .fill(Theme.surface)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .strokeBorder(mineSide ? Color.clear : Theme.hairline, lineWidth: 0.8)
+                    .strokeBorder(Theme.hairline, lineWidth: 0.8)
             )
             .opacity(l.done ? 1 : 0.82)
 
-            if !mineSide { playButton(l) }
-            if !mineSide { Spacer(minLength: 44) }
+            playButton(l)
         }
+        .frame(maxWidth: .infinity)
     }
 
     /// 气泡旁边那颗播放键：这一句念出来。
@@ -292,14 +293,14 @@ struct InterpreterView: View {
 
     private func play(_ l: Line, _ text: String) {
         haptic.impactOccurred()
-        Speaker.shared.enabled = true
         Speaker.shared.usesExternalSession = running
         Speaker.shared.micCapture = running
         Speaker.shared.voiceId = app.prefs.voiceId
-        Speaker.shared.resume()
         // 念出去的这句会被麦克风拾回来：先记一笔，引擎据此当回声丢掉，不再冒出一条一模一样的
         ZKInterpreter.shared()?.noteSpoken(text)
-        Speaker.shared.speak(text, lang: l.side == "a" ? other : mine)
+        // 点播走强制通道：不排队、不去重、不让路。自动朗读那一套门控是给「边说边念」用的，
+        // 用户手动点一下还按那套走，就会出现点了没反应、或者刚开口就被下一句掐掉。
+        Speaker.shared.playNow(text, lang: l.side == "a" ? other : mine)
     }
 
     // MARK: - 底部
