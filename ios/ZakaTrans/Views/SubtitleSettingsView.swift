@@ -23,9 +23,11 @@ struct SubtitleSettingsView: View {
             header
             FitScroll(cap: UIScreen.main.bounds.height * 0.70 - SafeArea.bottom) {
                 VStack(spacing: 12) {
-                    previewCard
                     lookCard
                     windowCard
+                    // 预览放最下面：它是这一页里唯一会变高的东西，
+                    // 放在最后就不会把它下面的设置项顶来顶去，面板底部也不会空出一大块。
+                    previewCard
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 2)
@@ -73,10 +75,11 @@ struct SubtitleSettingsView: View {
     /// 以前是按高度上限反推缩放比，大窗反而被压窄了——越大越窄，看着就不对。
     private var metrics: (w: CGFloat, h: CGFloat, k: CGFloat) {
         let dim = realDim
-        let w = UIScreen.main.bounds.width - 32 - 32
+        // 卡片左右各 16 的边距，剩下的全给预览，不再额外留白
+        let w = UIScreen.main.bounds.width - 32
         let k = w / dim.width
         let h = dim.height * k
-        let cap: CGFloat = 224
+        let cap: CGFloat = 240
         if h > cap {                       // 只有特别矮的屏才会走到这里
             let k2 = cap / dim.height
             return (dim.width * k2, cap, k2)
@@ -84,25 +87,12 @@ struct SubtitleSettingsView: View {
         return (w, h, k)
     }
 
-    /// 预览的固定占位高度：按三档里最高的那一档算。
-    /// 切窗口时预览框只是在同一个槽里变大变小，下面的设置项不会跟着上下跳。
-    private var slotHeight: CGFloat {
-        let w = UIScreen.main.bounds.width - 32 - 32
-        let cap: CGFloat = 224
-        var h: CGFloat = 0
-        for code in ["X", "M", "B"] {
-            let dim = Self.dim(for: code)
-            h = max(h, min(dim.height * (w / dim.width), cap))
-        }
-        return h
-    }
-
     /// 字号：跟画中画同一套算法（含刚放大的那一档），再乘以预览的缩放比
     private func previewFonts(k: CGFloat) -> (zh: CGFloat, src: CGFloat) {
         let dim = realDim
         if app.prefs.pip == "X" {
-            let f = min(dim.width / 22.4, dim.height / 4.35)
-            let font = max(11.0, min(52.0, f)) * k
+            let f = min(dim.width / 20.4, dim.height / 4.0)
+            let font = max(11.0, min(56.0, f)) * k
             return (font, font * 0.68)
         }
         let scale = max(0.45, min(2.10, sqrt((dim.width * dim.height) / (480.0 * 360.0))))
@@ -128,9 +118,9 @@ struct SubtitleSettingsView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Color.white.opacity(0.10), lineWidth: 0.6)
         )
-        // 固定槽位：切窗口时只是这块框在槽里换尺寸，下面的设置项原地不动
+        // 不再用固定占位槽：预览就在这一页最下面，只有它自己在变大变小，
+        // 上面的设置项和面板底边都不会跟着跳。
         .frame(maxWidth: .infinity)
-        .frame(height: slotHeight)
         .animation(.easeInOut(duration: 0.22), value: app.prefs.pip)
     }
 
