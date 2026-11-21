@@ -281,6 +281,8 @@ static UIColor *ZKBackgroundColor(void) {
 - (void)relayoutAll;
 - (void)relayoutAllForce:(BOOL)force;
 - (void)rebuildWithLines:(NSArray *)lines;
+- (void)patchLastZh:(NSString *)zh;
+- (void)patchZh:(NSString *)zh forEn:(NSString *)en;
 - (NSString *)liveZhText;
 - (NSString *)liveEnText;
 @end
@@ -399,6 +401,43 @@ static UIColor *ZKBackgroundColor(void) {
     _tail.frame = CGRectMake(0, [self historyBottom], _w, 0);
 }
 
+// 精确版：按原文找回那一块再补译文（中间已经又上了新句也不会补错行）
+- (void)patchZh:(NSString *)zh forEn:(NSString *)en {
+    if (!zh.length) return;
+    if (en.length) {
+        for (NSInteger i = (NSInteger)_blocks.count - 1; i >= 0; i--) {
+            ZKBlockView *b = _blocks[(NSUInteger)i];
+            if (![b.enText isEqualToString:en]) continue;
+            if (b.zhText.length) return;
+            [b applyEn:b.enText zh:zh first:(i == 0) width:_w];
+            [self relayoutAll];
+            return;
+        }
+        if (_tail && [_tail.enText isEqualToString:en] && !_tail.zhText.length) {
+            [self updateTailEn:_tail.enText zh:zh];
+            return;
+        }
+    }
+    [self patchLastZh:zh];
+}
+
+// 译文迟到：只补最后一块落定的句子。位置按新高度重排，上面的块不动、不重建、不重播淡入，
+// 画面上看不出「刷新」，但那一行从「只有原文」变成「译文 + 原文」。
+- (void)patchLastZh:(NSString *)zh {
+    if (!zh.length) return;
+    ZKBlockView *b = _blocks.lastObject;
+    if (b) {
+        NSString *en = b.enText ?: @"";
+        [b applyEn:en zh:zh first:(_blocks.count == 1) width:_w];
+        [self relayoutAll];
+        return;
+    }
+    // 还挂在尾块里（这轮刚上屏、还没落定）
+    if (_tail && (_tail.enText.length || _tail.zhText.length)) {
+        [self updateTailEn:(_tail.enText ?: @"") zh:zh];
+    }
+}
+
 // 超出上限就丢掉最老的一块，再把剩下的往上挪——只搬位置，不重算文字
 - (void)pruneIfNeeded {
     if (_blocks.count <= (NSUInteger)ZK_MAX_BLOCKS) return;
@@ -467,6 +506,8 @@ static UIColor *ZKBackgroundColor(void) {
 - (void)rebuildFromLines:(NSArray *)lines;
 - (void)appendLine:(NSDictionary *)d;
 - (void)setLiveEn:(NSString *)en zh:(NSString *)zh;
+- (void)patchLastZh:(NSString *)zh;
+- (void)patchZh:(NSString *)zh forEn:(NSString *)en;
 - (void)showLiveEn:(NSString *)en zh:(NSString *)zh;
 - (void)setOffsetY:(CGFloat)y;
 - (CGSize)containerSize;
@@ -540,6 +581,7 @@ static NSUInteger ZKVisibleLen(NSString *text) {
 - (void)setBoxWidth:(CGFloat)width height:(CGFloat)height force:(BOOL)force;
 - (void)resetWithLines:(NSArray *)lines;
 - (void)addEn:(NSString *)en zh:(NSString *)zh;
+- (void)patchLastZh:(NSString *)zh;
 - (void)refreshStyle;
 @end
 
@@ -947,6 +989,29 @@ static NSUInteger ZKVisibleLen(NSString *text) {
 - (void)refreshStyle {
     [self recalcFont];
     [self renderAnimated:NO];
+}
+
+// 译文迟到：屏上这一批的最后一句补上译文，整屏重排一次（字号跟着内容重算，不跳位）
+- (void)patchLastZh:(NSString *)zh {
+    if (!zh.length) return;
+    if (_current.count) {
+        NSMutableArray *arr = [_current mutableCopy];
+        NSMutableDictionary *m = [arr.lastObject mutableCopy];
+        NSString *old = m[@"zh"];
+        if ([old isKindOfClass:[NSString class]] && old.length) return;
+        m[@"zh"] = zh;
+        arr[arr.count - 1] = m;
+        _current = arr;
+        [self renderAnimated:NO];
+        return;
+    }
+    if (_queue.count) {
+        NSMutableDictionary *m = [_queue.lastObject mutableCopy];
+        NSString *old = m[@"zh"];
+        if ([old isKindOfClass:[NSString class]] && old.length) return;
+        m[@"zh"] = zh;
+        _queue[_queue.count - 1] = m;
+    }
 }
 
 @end
@@ -1443,6 +1508,28 @@ static NSUInteger ZKVisibleLen(NSString *text) {
     [self applyGeometry];
 }
 
+// 译文迟到：补到最后一行。竖排流里补最后一块，全宽档里补屏上那批的最后一句。
+- (void)patchLastZh:(NSString *)zh {
+    if (!zh.length) return;
+    if ([self isWideMode] && _wide) {
+        [_wide patchLastZh:zh];
+        return;
+    }
+    [self.stream patchLastZh:zh];
+    [self applyGeometry];
+}
+
+// 精确版：按原文找回那一行（中间又上了新句也不会补错）
+- (void)patchZh:(NSString *)zh forEn:(NSString *)en {
+    if (!zh.length) return;
+    if ([self isWideMode] && _wide) {
+        [_wide patchLastZh:zh];
+        return;
+    }
+    [self.stream patchZh:zh forEn:en];
+    [self applyGeometry];
+}
+
 @end
 
 #pragma mark - PiP 控制
@@ -1641,6 +1728,23 @@ static __weak id gActiveSub = nil;
 - (void)showLiveEn:(NSString *)en zh:(NSString *)zh {
     if (!_sub) return;
     [_sub showLiveEn:en zh:zh];
+}
+
+// 译文迟到：共享流里那一行补上译文（下次开画中画读到的也是全的），屏上就地补
+- (void)patchLastZh:(NSString *)zh {
+    if (!zh.length) return;
+    [ZKStore updateLastLineZh:zh];
+    if (!_sub) return;
+    [_sub patchLastZh:zh];
+}
+
+// 精确版：按原文找回那一行再补
+- (void)patchZh:(NSString *)zh forEn:(NSString *)en {
+    if (!zh.length) return;
+    if (en.length) [ZKStore updateLineZh:zh forEn:en];
+    else [ZKStore updateLastLineZh:zh];
+    if (!_sub) return;
+    [_sub patchZh:zh forEn:en];
 }
 
 // 兼容旧调用
