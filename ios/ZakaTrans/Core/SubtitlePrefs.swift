@@ -24,8 +24,8 @@ struct SubtitlePrefs: Codable, Equatable {
     var pip: String = "X"
     /// 输出音频（把译文读出来）
     var tts: Bool = false
-    /// 朗读语速 0.4~0.62（0.5 是系统正常语速）
-    var speechRate: Double = 0.62
+    /// 朗读语速 0.30~0.60（0.5 是系统正常语速）。3.9.5 起整体放慢，默认 0.46
+    var speechRate: Double = 0.46
     /// 朗读时把别的 App 声音压低多少（0 = 不压，100 = 系统最大压低量）
     var duckLevel: Double = 60
     /// 朗读音色：空 = 跟随系统中文默认；否则是 AVSpeechSynthesisVoice.identifier
@@ -53,7 +53,9 @@ struct SubtitlePrefs: Codable, Equatable {
         mode = try c.decodeIfPresent(String.self, forKey: .mode) ?? d.mode
         pip = try c.decodeIfPresent(String.self, forKey: .pip) ?? d.pip
         tts = try c.decodeIfPresent(Bool.self, forKey: .tts) ?? d.tts
-        speechRate = try c.decodeIfPresent(Double.self, forKey: .speechRate) ?? d.speechRate
+        // 老版本存下来的 0.58~0.62 念起来偏快，统一收到新的慢速；更低的不动
+        let savedRate = try c.decodeIfPresent(Double.self, forKey: .speechRate) ?? d.speechRate
+        speechRate = savedRate > 0.52 ? 0.46 : savedRate
         sourceLang = try c.decodeIfPresent(String.self, forKey: .sourceLang) ?? d.sourceLang
         destLang = try c.decodeIfPresent(String.self, forKey: .destLang) ?? d.destLang
         duckLevel = try c.decodeIfPresent(Double.self, forKey: .duckLevel) ?? d.duckLevel
