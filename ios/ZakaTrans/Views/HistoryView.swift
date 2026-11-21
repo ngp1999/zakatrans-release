@@ -70,9 +70,9 @@ struct HistoryView: View {
     /// 一行四件事：什么时候（年月日 + 时分）、聊了多久、花了多少积分、讲的什么。
     /// 「怎么断开的」（主动停止 / 连接断开）不上列表——那是内部状态，不是用户关心的内容。
     private func row(_ s: Cloud.UsageSession) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            // 第一行：内容标题 + 这一场花了多少积分（贴右上角，一眼看到，不再跟时长挤在一行里）
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
+        HStack(alignment: .center, spacing: 10) {
+            // 左边两块：内容标题 + 什么时候、聊了多久
+            VStack(alignment: .leading, spacing: 7) {
                 Text(title(s))
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Theme.ink)
@@ -80,28 +80,27 @@ struct HistoryView: View {
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Spacer(minLength: 6)
-
-                Text("\(s.creditsText) 积分")
-                    .font(.system(size: 12, weight: .medium).monospacedDigit())
-                    .foregroundStyle(Theme.accent)
-                    .layoutPriority(1)
-                    .fixedSize()
+                HStack(spacing: 6) {
+                    Text(Self.dateText(s.startedAt) + " " + Self.timeText(s.startedAt))
+                    dot
+                    Text(s.durationText)
+                    Spacer(minLength: 0)
+                }
+                .font(.system(size: 12).monospacedDigit())
+                .foregroundStyle(Theme.sub)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
             }
 
-            // 第二行：什么时候、聊了多久
-            HStack(spacing: 6) {
-                Text(Self.dateText(s.startedAt) + " " + Self.timeText(s.startedAt))
-                dot
-                Text(s.durationText)
-                Spacer(minLength: 0)
-            }
-            .font(.system(size: 12).monospacedDigit())
-            .foregroundStyle(Theme.sub)
-            .lineLimit(1)
-            .minimumScaleFactor(0.85)
+            // 积分：贴右边，按整行高度上下居中（不再挂在标题那一行的基线上）
+            Text("\(s.creditsText) 积分")
+                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                .foregroundStyle(Theme.accent)
+                .fixedSize()
+                .frame(maxHeight: .infinity, alignment: .center)
         }
         .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var dot: some View {
@@ -146,6 +145,11 @@ struct SessionDetailView: View {
     @State private var error: String?
     /// 分享用的文本文件（按需生成，加载完才有）
     @State private var shareURL: URL?
+    /// 右上角按钮只负责弹「导出方式」，不直接落文件
+    @State private var showExportOptions = false
+    /// 选「导出字幕」之后才进格式与内容的设置页
+    @State private var showExportSheet = false
+    @State private var tip: String?
 
     var body: some View {
         ScrollView {
@@ -164,19 +168,33 @@ struct SessionDetailView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 // 右上角只放系统分享图标，一个字都不写。
-                // 点了直接把这一场的文本交给系统分享面板：存到「文件」、发微信、发邮件都行。
-                if let url = shareURL {
-                    ShareLink(item: url) {
-                        Image(systemName: "square.and.arrow.up")
-                            .font(.system(size: 15, weight: .semibold))
-                    }
-                } else {
+                // 点它是「选导出方式」，不是直接存文件：先出面板，挑导出字幕还是复制全文。
+                Button {
+                    Haptics.tap()
+                    showExportOptions = true
+                } label: {
                     Image(systemName: "square.and.arrow.up")
                         .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(Theme.faint)
                 }
+                .disabled(detail == nil || (detail?.lines.isEmpty ?? true))
             }
         }
+        .confirmationDialog("导出", isPresented: $showExportOptions, titleVisibility: .visible) {
+            Button("导出字幕") {
+                showExportSheet = true
+            }
+            Button("复制全文") {
+                UIPasteboard.general.string = shareURL.flatMap { try? String(contentsOf: $0, encoding: .utf8) }
+                tip = "全文已复制"
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("字幕可导出 SRT / TXT，内容可选原文、译文或双语。")
+        }
+        .sheet(isPresented: $showExportSheet) {
+            SubtitleExportView(session: session, lines: detail?.lines ?? [])
+        }
+        .notice($tip)
         .task { await load() }
     }
 
