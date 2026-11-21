@@ -342,7 +342,7 @@ struct InterpreterView: View {
                 let isFinal = (kind == 2)   // ZKLineKindFinal
                 let lineID = lid ?? UUID().uuidString
                 // 有人开口了（半句也算）：朗读据此避让，只在对方说完的空隙里念
-                Speaker.shared.noteInput(src)
+                Speaker.shared.noteInput(src, final: isFinal)
                 upsert(id: lineID, side: side ?? "a", source: src ?? "", trans: trans ?? "",
                        done: isFinal)
 
