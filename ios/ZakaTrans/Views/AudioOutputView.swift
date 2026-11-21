@@ -54,7 +54,16 @@ struct AudioOutputView: View {
                 haptic.impactOccurred()
                 tts = v
                 app.updatePrefs { $0.tts = v }
-                if !v { Speaker.shared.stop() }
+                if v {
+                    // 上一场停止时朗读会进入暂停态，不解开的话这里开了也不出声
+                    Speaker.shared.usesExternalSession = app.running
+                    Speaker.shared.micCapture = app.running
+                    Speaker.shared.resume()
+                    Speaker.shared.enabled = true
+                } else {
+                    Speaker.shared.enabled = false
+                    Speaker.shared.stop()
+                }
             }
         )) {
             VStack(alignment: .leading, spacing: 3) {
