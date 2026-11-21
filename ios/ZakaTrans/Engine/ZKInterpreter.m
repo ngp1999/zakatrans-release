@@ -201,21 +201,39 @@ static BOOL ZKIsStub(NSString *s) {
     return ZKIsFragment(s);
 }
 
+/// 这一小段里有没有句中标点/句末标点（，,、？?！!。；;：:）。
+/// 有标点就说明它自己是一个完整的句子或分句，不管前面那句收没收尾，都不许接上去。
+/// 上游（豆包）经常整段不带标点，光看「上一句结尾有没有标点」根本判不出说完没说完，
+/// 但「这一句自己带标点」是很硬的信号——截图里那条
+/// 「我没事。你好，你在干嘛」被焊成一句，就是漏了这条。
+static BOOL ZKHasClausePunct(NSString *s) {
+    if (![s isKindOfClass:[NSString class]] || !s.length) return NO;
+    static NSCharacterSet *set = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        set = [NSCharacterSet characterSetWithCharactersInString:@"，,、。．.？?！!；;：:"];
+    });
+    return [s rangeOfCharacterFromSet:set].location != NSNotFound;
+}
+
 /// 上一句没带句末标点时，这一小段是不是「半句话的尾巴」。
-/// 比 ZKIsFragment 宽一点（能接住「名字」这种两三个字，也能接住「old are you」），
-/// 但绝不能宽到把一整句话焊上去——上游经常整段不带标点，
-/// 光看「上一句收没收尾」会把后面连着几句完整的话全并成一条（截图那条就是这么来的）。
+/// 只认很短的：中文 ≤4 字、拉丁 ≤2 个词且 ≤12 字符。
+/// 以前放到「中文 12 字 / 拉丁 3 词 24 字符」，结果上游整段不带标点时，
+/// 后面连着几句完整的话全被当成"尾巴"焊进上一句（截图里
+/// 「What are you doing?What's your name」「我没事。你好，你在干嘛」就是这么来的）。
+/// 现在宁可多起一行，也不许把两句话焊成一句。
+/// 另：带句中标点的一律不接，由调用方先用 ZKHasClausePunct 挡一道。
 static BOOL ZKIsTailLike(NSString *s) {
     NSString *n = ZKNorm(s);
     if (!n.length) return NO;
     ZKScript sc = ZKSriptOf(s);
-    if (sc == ZKScriptHan || sc == ZKScriptKana || sc == ZKScriptHangul) return n.length <= 12;
+    if (sc == ZKScriptHan || sc == ZKScriptKana || sc == ZKScriptHangul) return n.length <= 4;
     if (sc == ZKScriptLatin) {
-        if (n.length > 24) return NO;
+        if (n.length > 12) return NO;
         NSArray *w = [n componentsSeparatedByCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
         NSMutableArray *keep = [NSMutableArray array];
         for (NSString *x in w) if (x.length) [keep addObject:x];
-        return keep.count <= 3;
+        return keep.count <= 2;
     }
     return NO;
 }
@@ -787,9 +805,11 @@ static double ZKSim(NSString *a, NSString *b) {
             // 上一句已经收尾：只有「name」「名字」这种碎片才接回去
             glue = ZKIsFragment(t);
         } else {
-            // 上一句没收尾：只在紧跟其后（1.6 秒内）的短尾巴才接，
+            // 上一句没收尾：只在紧跟其后（1.0 秒内）的短尾巴才接，
+            // 而且这一小段自己不能带标点（带标点 = 一句独立的话），
             // 否则就是另一句完整的话，自己成行
-            glue = !prevLong && (now - tailAt) < 1.6 && ZKIsTailLike(t);
+            glue = !prevLong && (now - tailAt) < 1.0
+                   && !ZKHasClausePunct(t) && ZKIsTailLike(t);
         }
     }
 
@@ -860,7 +880,8 @@ static const NSTimeInterval ZKHoldCap = 0.0;
         NSMutableDictionary *pe = [self entryFor:side seg:prev];
         NSMutableDictionary *ne = [self entryFor:side seg:seg];
         NSString *ns2 = ne[@"src"] ?: @"";
-        if (!closed && ns2.length && (now - tailAt) < 1.2 && ZKIsTailLike(ns2)) {
+        if (!closed && ns2.length && (now - tailAt) < 1.0
+            && !ZKHasClausePunct(ns2) && ZKIsTailLike(ns2)) {
             pe[@"src"] = ZKJoinSrc(pe[@"src"] ?: @"", ns2);
             NSString *nd = ne[@"dst"];
             if (nd.length) pe[@"dst"] = ZKMergeTrans(pe[@"dst"] ?: @"", nd);
