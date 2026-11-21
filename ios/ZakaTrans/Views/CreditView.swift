@@ -188,6 +188,20 @@ struct CreditView: View {
         .padding(.top, 2)
     }
 
+    /// 「已阅读并同意语幕付费协议相关规则」——协议名可点，其余是普通文字。
+    private var agreementSentence: Text {
+        var head = AttributedString("已阅读并同意")
+        head.foregroundColor = Theme.sub
+        var link = AttributedString("语幕付费协议")
+        link.link = URL(string: "zaka://terms")
+        link.foregroundColor = Theme.accent
+        var tail = AttributedString("相关规则")
+        tail.foregroundColor = Theme.sub
+        head.append(link)
+        head.append(tail)
+        return Text(head)
+    }
+
     // MARK: - 未勾协议的确认弹窗
 
     private var agreementDialog: some View {
@@ -196,32 +210,27 @@ struct CreditView: View {
                 .ignoresSafeArea()
                 .onTapGesture { pendingTier = nil }
 
-            VStack(alignment: .leading, spacing: 14) {
-                Text("购买前请确认")
+            VStack(spacing: 16) {
+                Text("语幕付费协议")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(Theme.ink)
+                    .frame(maxWidth: .infinity)
 
-                Text("购买积分需先阅读并同意《付费协议》。积分按实际用量扣除，充值通过 App Store 内购完成，退款按 Apple 规则处理。")
-                    .font(.system(size: 13))
+                // 一句正文，「语幕付费协议」是绿色可点的链接，点了直接展开协议全文。
+                // 用 AttributedString 塞 link，避免 HStack 拼接时换行错位。
+                agreementSentence
+                    .font(.system(size: 14))
                     .foregroundStyle(Theme.sub)
-                    .lineSpacing(3)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(4)
+                    .tint(Theme.accent)
                     .fixedSize(horizontal: false, vertical: true)
-
-                Button {
-                    Haptics.tap()
-                    showTerms = true
-                } label: {
-                    HStack(spacing: 4) {
-                        Text("阅读《付费协议》")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(Theme.accent)
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(Theme.accent)
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
+                    .environment(\.openURL, OpenURLAction { _ in
+                        Haptics.tap()
+                        showTerms = true
+                        return .handled
+                    })
+                    .frame(maxWidth: .infinity)
 
                 HStack(spacing: 10) {
                     Button {
@@ -243,7 +252,7 @@ struct CreditView: View {
                         withAnimation(.easeOut(duration: 0.14)) { agreed = true }
                         if let id { Task { await purch.buy(id: id) } }
                     } label: {
-                        Text("同意并购买")
+                        Text("同意并继续")
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(.white)
                             .frame(maxWidth: .infinity)
