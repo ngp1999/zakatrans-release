@@ -44,18 +44,12 @@ struct SubtitleSettingsView: View {
     }
 
     private var header: some View {
-        VStack(spacing: 5) {
-            Capsule()
-                .fill(Theme.faint.opacity(0.45))
-                .frame(width: 36, height: 4.5)
-            Text("字幕样式")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(Theme.ink)
-        }
-        .padding(.top, 8)
-        .padding(.bottom, 6)
-        .frame(maxWidth: .infinity)
-        .frame(height: 54)
+        // 顶部小横条由首页面板统一提供（两个面板同一条、同一位置），这里只管标题。
+        Text("字幕样式")
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(Theme.ink)
+            .frame(maxWidth: .infinity)
+            .frame(height: 44)
     }
 
     // MARK: - 预览窗口的尺寸
