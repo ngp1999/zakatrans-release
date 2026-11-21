@@ -963,6 +963,10 @@ static CGFloat ZKFitSize(NSString *text, UIFont *font, CGFloat width, CGFloat fl
         srcH = [self heightFor:t font:f width:w lines:r.srcLabel.numberOfLines];
     }
 
+    // 换成「仅原文 / 仅译文」时，另一条必须收干净，否则旧文字会留在原位
+    if (!showTrans) { zhH = 0; r.zhLabel.hidden = YES; r.zhLabel.frame = CGRectZero; }
+    if (!showSource) { srcH = 0; r.srcLabel.hidden = YES; r.srcLabel.frame = CGRectZero; }
+
     CGFloat gap = (zhH > 0 && srcH > 0) ? 2.0 : 0;
     CGFloat total = zhH + gap + srcH;
     CGFloat y = MAX(0, (_slotH - total) / 2.0);
@@ -975,10 +979,18 @@ static CGFloat ZKFitSize(NSString *text, UIFont *font, CGFloat width, CGFloat fl
 - (void)layoutRows {
     NSInteger count = (NSInteger)_rows.count;
     if (count <= 0) return;
-    NSInteger first = MAX(0, _slots - count);
+    // 装不下的老句子先不显示（换档、换语言模式时会短暂多出来），
+    // 一定是从最老的开始让位——最新的那句永远在底下看得见。
+    NSInteger from = MAX(0, count - _slots);
+    NSInteger first = _slots - (count - from);
     for (NSInteger i = 0; i < count; i++) {
         ZKLineRow *r = _rows[(NSUInteger)i];
-        NSInteger slot = first + i;
+        if (i < from) {
+            r.hidden = YES;
+            continue;
+        }
+        r.hidden = NO;
+        NSInteger slot = MAX(0, first + (i - from));
         r.frame = CGRectMake(0, _inset + slot * (_slotH + _gap), _w, _slotH);
         [self layoutRow:r];
     }
@@ -1056,6 +1068,7 @@ static CGFloat ZKFitSize(NSString *text, UIFont *font, CGFloat width, CGFloat fl
     NSInteger firstSlot = MAX(0, _slots - (NSInteger)_rows.count);
     NSInteger st = firstSlot - 1;
     for (ZKLineRow *rr in _retired) {
+        rr.hidden = NO;
         rr.frame = CGRectMake(0, _inset + st * (_slotH + _gap), _w, _slotH);
         [self layoutRow:rr];
         st--;
@@ -1069,6 +1082,15 @@ static CGFloat ZKFitSize(NSString *text, UIFont *font, CGFloat width, CGFloat fl
     if (_typer) {
         [_typer cancel];
         _typer = nil;
+    }
+    // 上一句还在打、这一句就来了：上一句直接显示全，不能停在半句上
+    for (ZKLineRow *row in _rows) {
+        if (row == r) continue;
+        if (row.showZh >= 0 || row.showEn >= 0) {
+            row.showZh = -1;
+            row.showEn = -1;
+            [row refreshText];
+        }
     }
     if (!r) return;
     BOOL showTrans = ![gMode isEqualToString:@"source"];
