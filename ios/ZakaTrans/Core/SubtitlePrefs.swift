@@ -186,8 +186,10 @@ struct SubtitlePrefs: Codable, Equatable {
     /// 之前那两档「半透明黑 / 无背景」在系统窗口里和纯黑一模一样，等于没做。
     static let backgrounds: [(String, String, UIColor)] = [
         ("black",    "纯黑", UIColor(red: 0.00, green: 0.00, blue: 0.00, alpha: 1)),
-        ("graphite", "石墨", UIColor(red: 0.17, green: 0.17, blue: 0.19, alpha: 1)),
-        ("navy",     "深蓝", UIColor(red: 0.03, green: 0.17, blue: 0.42, alpha: 1)),
+        // 二号、三号色以前跟纯黑几乎分不出来（0.17 灰 / 0.17 蓝），
+        // 在屏上看着就是「怎么点都是黑的」。现在拉开：一个中性炭灰、一个明显偏亮的宝蓝。
+        ("graphite", "炭灰", UIColor(red: 0.30, green: 0.30, blue: 0.33, alpha: 1)),
+        ("navy",     "宝蓝", UIColor(red: 0.05, green: 0.26, blue: 0.72, alpha: 1)),
         ("forest",   "墨绿", UIColor(red: 0.03, green: 0.28, blue: 0.21, alpha: 1)),
         ("wine",     "酒红", UIColor(red: 0.40, green: 0.04, blue: 0.14, alpha: 1)),
         ("indigo",   "深紫", UIColor(red: 0.20, green: 0.09, blue: 0.44, alpha: 1)),
