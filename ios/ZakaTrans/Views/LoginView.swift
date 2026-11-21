@@ -26,7 +26,7 @@ struct LoginView: View {
                     Text("语幕")
                         .font(.system(size: 30, weight: .semibold))
                         .foregroundStyle(Theme.ink)
-                    Text("实时字幕翻译")
+                    Text("实时字幕　同声传译")
                         .font(.system(size: 15))
                         .foregroundStyle(Theme.sub)
                 }
