@@ -1386,7 +1386,11 @@ static void ZKSegAppend(NSMutableString *buf, NSString *s) {
     NSInteger k = lo;
     if (k >= n) return n;      // 一个字都装不下
     NSInteger lim = MIN(n - 1, k + 16);
-    static NSString *marks = @" \n。，、；：！？.,;:!?";
+    static NSCharacterSet *marks = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        marks = [NSCharacterSet characterSetWithCharactersInString:@" \n。，、；：！？.,;:!?"];
+    });
     for (NSInteger i = k; i <= lim; i++) {
         unichar c = [vis characterAtIndex:(NSUInteger)i];
         if ([marks characterIsMember:c]) { k = i + 1; break; }
