@@ -44,11 +44,11 @@ struct ProfileView: View {
                 picked = nil
             }
         }
-        .alert("退出登录？", isPresented: $showLogout) {
+        .alert("确认退出登录？", isPresented: $showLogout) {
             Button("取消", role: .cancel) {}
-            Button("退出", role: .destructive) { cloud.logout() }
+            Button("退出登录", role: .destructive) { cloud.logout() }
         } message: {
-            Text("重新用 Apple ID 登录后，积分和记录都还在。")
+            Text("退出登录不会丢失任何数据，你仍可以登录此账号。")
         }
     }
 
