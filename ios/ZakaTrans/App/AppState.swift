@@ -386,7 +386,7 @@ final class AppState: ObservableObject {
         }
         // 帧数没动：超过 6 秒说明扩展活着但没拿到声音
         if lastBufsAt > 0, now - lastBufsAt > 6 {
-            audioHint = "没收到音频（在控制中心重新选「语幕实时翻译」）"
+            audioHint = "没收到音频（在控制中心重新选「语幕」）"
         } else if lastBufsAt == 0 {
             audioHint = "扩展已连上，等音频"
         }
