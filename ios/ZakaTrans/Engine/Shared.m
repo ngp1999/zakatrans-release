@@ -290,6 +290,63 @@ static NSString *_zkSid = nil;
     } @catch (__unused NSException *e) {}
 }
 
++ (void)updateLastLineZh:(NSString *)zh {
+    if (!zh.length) return;
+    @try {
+        NSDictionary *d = [self read:@"zk_lines.json"];
+        NSArray *raw = d[@"lines"];
+        if (![raw isKindOfClass:[NSArray class]] || !raw.count) return;
+        NSMutableArray *a = [raw mutableCopy];
+        NSString *sid = [self sessionId];
+        // 从后往前找当前会话的最后一行：译文可能连补两次（分段），每次都补到最后一行
+        for (NSInteger i = (NSInteger)a.count - 1; i >= 0; i--) {
+            id o = a[(NSUInteger)i];
+            if (![o isKindOfClass:[NSDictionary class]]) continue;
+            NSString *s = ((NSDictionary *)o)[@"sid"];
+            if (![s isKindOfClass:[NSString class]] || ![s isEqualToString:sid]) continue;
+            NSMutableDictionary *m = [((NSDictionary *)o) mutableCopy];
+            NSString *old = m[@"zh"];
+            if ([old isKindOfClass:[NSString class]] && old.length) return;   // 已经有译文了，不覆盖
+            m[@"zh"] = zh;
+            a[(NSUInteger)i] = m;
+            [self write:@{@"lines": a} to:@"zk_lines.json"];
+            CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                (__bridge CFStringRef)ZKNotifySub, NULL, NULL, true);
+            return;
+        }
+    } @catch (__unused NSException *e) {}
+}
+
+// 精确版：从后往前找原文完全相同的那一行
++ (void)updateLineZh:(NSString *)zh forEn:(NSString *)en {
+    if (!zh.length || !en.length) return;
+    @try {
+        NSDictionary *d = [self read:@"zk_lines.json"];
+        NSArray *raw = d[@"lines"];
+        if (![raw isKindOfClass:[NSArray class]] || !raw.count) return;
+        NSMutableArray *a = [raw mutableCopy];
+        NSString *sid = [self sessionId];
+        for (NSInteger i = (NSInteger)a.count - 1; i >= 0; i--) {
+            id o = a[(NSUInteger)i];
+            if (![o isKindOfClass:[NSDictionary class]]) continue;
+            NSDictionary *dd = (NSDictionary *)o;
+            NSString *s = dd[@"sid"];
+            if (![s isKindOfClass:[NSString class]] || ![s isEqualToString:sid]) continue;
+            NSString *e = dd[@"en"];
+            if (![e isKindOfClass:[NSString class]] || ![e isEqualToString:en]) continue;
+            NSMutableDictionary *m = [dd mutableCopy];
+            NSString *old = m[@"zh"];
+            if ([old isKindOfClass:[NSString class]] && old.length) return;
+            m[@"zh"] = zh;
+            a[(NSUInteger)i] = m;
+            [self write:@{@"lines": a} to:@"zk_lines.json"];
+            CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                (__bridge CFStringRef)ZKNotifySub, NULL, NULL, true);
+            return;
+        }
+    } @catch (__unused NSException *e) {}
+}
+
 + (void)clearLines {
     [self write:@{@"lines": @[]} to:@"zk_lines.json"];
 }
