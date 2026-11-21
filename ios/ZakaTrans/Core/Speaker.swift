@@ -41,11 +41,15 @@ final class Speaker: NSObject, ObservableObject {
     /// 等多久才开口。系统声音那一路可以等到对方彻底安静；麦克风这一路
     /// 一旦要求「完全安静」就永远轮不到自己（对话是连续的），于是开了音频输出
     /// 反而一句都不念——所以这边只让很小的一个空隙。
-    private var quietGap: TimeInterval { micCapture ? 0.3 : 0.8 }
+    private var quietGap: TimeInterval { micCapture ? 0.10 : 0.8 }
+    /// 麦克风收音时说话是连续的，几乎没有"完全安静"的空隙。
+    /// 只按空隙判会让队列一直排不上——听起来就是"开了音频输出没有声音"。
+    /// 所以再给一条硬线：排在最前面的译文等够这么久，不管有没有空隙都念。
+    private var starveGap: TimeInterval { micCapture ? 2.0 : 6.0 }
     private var flushTimer: Timer?
 
     /// 待念队列（不含正在念的那句）：文本 + 语言（同声传译要按语言换嗓子）
-    private var queue: [(text: String, lang: String)] = []
+    private var queue: [(text: String, lang: String, at: Date)] = []
     /// 最近说过的内容（归一化后）：同一句不管从哪个回调来都只念一次
     private var recentKeys: [String] = []
     /// 最近念过的句子 + 时间：用来把「我们自己念的声音又被录进去」的回声认出来
@@ -62,7 +66,7 @@ final class Speaker: NSObject, ObservableObject {
     /// 上一次配好的音频会话（避免每句都重配）
     private var configuredKey = ""
 
-    private let maxQueue = 2
+    private let maxQueue = 3
     private let recentLimit = 24
 
     override init() {
@@ -152,7 +156,7 @@ final class Speaker: NSObject, ObservableObject {
         if spoken.count > 30 { spoken.removeFirst(spoken.count - 30) }
 
         if synth.isSpeaking || current != nil {
-            queue.append((text: t, lang: lang))
+            queue.append((text: t, lang: lang, at: Date()))
             if queue.count > maxQueue { queue.removeFirst(queue.count - maxQueue) }
         } else {
             pump()
@@ -172,7 +176,9 @@ final class Speaker: NSObject, ObservableObject {
             closeEchoGate()
             return
         }
-        if Date().timeIntervalSince(lastVoiceAt) < quietGap {
+        let head = queue[0]
+        let waiting = Date().timeIntervalSince(head.at)
+        if Date().timeIntervalSince(lastVoiceAt) < quietGap && waiting < starveGap {
             scheduleFlush()
             return
         }
@@ -206,15 +212,20 @@ final class Speaker: NSObject, ObservableObject {
     /// 1) 决定什么时候才轮到我们开口（只在空隙里念）；
     /// 2) 麦克风收音时，真有人在说话就立刻闭嘴让路——
     ///    这一路没有静音门可挂，不闭嘴就等于用朗读盖住了人家的话。
-    func noteInput(_ text: String?) {
+    /// - Parameter final: 这一条是不是整句落定。
+    ///   半句（还在滚动的那几段）只用来更新"有人在说话"的时间，不再抢朗读。
+    ///   以前半句也进 bargeIn：上游每秒推好几次半句，朗读刚开口就被掐掉，
+    ///   一句都念不完，用户听到的就是"开了音频输出没有声音"。
+    func noteInput(_ text: String?, final: Bool = false) {
         let t = Self.clean(text ?? "")
         guard t.count >= 2 else { return }
         // 自己念出去的声音又被录回来：不算「有人在说话」，否则会自己把自己打断
         if t.count >= 3, isEcho([t], within: 8) { return }
         lastVoiceAt = Date()
-        guard micCapture, enabled, !paused else { return }
+        guard micCapture, enabled, !paused, final else { return }
         // 刚开始念的这半秒不动它：那多半是我们自己的尾音，掐了就等于白念
         if let started = speechStartedAt, Date().timeIntervalSince(started) < 0.6 { return }
+        // 整句落定了：让路。只停当前这句，排着的译文留着接着念。
         if synth.isSpeaking || current != nil {
             bargeIn()
         }
