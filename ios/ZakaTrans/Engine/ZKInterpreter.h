@@ -45,4 +45,18 @@ typedef NS_ENUM(NSInteger, ZKLineKind) {
 /// 这里存着用来认掉这些回声，不当成人话。
 - (void)noteSpoken:(NSString *)text;
 
+#pragma mark - 长按说话
+
+/// 长按说话：打开之后，只有「按住」那段时间的麦克风音频会送给识别服务，
+/// 松手补一小段静音让上游把这一句落定，随后出原文和译文。
+/// 这样每一句都是完整的一段，不会被环境音、咳嗽、中间停顿切碎。
+@property (nonatomic, assign) BOOL pushToTalk;
+
+/// 按下
+- (void)beginUtterance;
+/// 松开：结束这一句，等结果
+- (void)endUtterance;
+/// 上滑取消：这一段不要了，把已经冒出来的结果也撤掉
+- (void)cancelUtterance;
+
 @end
