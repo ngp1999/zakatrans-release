@@ -8,7 +8,10 @@ struct ProfileView: View {
     @ObservedObject private var cloud = Cloud.shared
     @ObservedObject private var app = AppState.shared
     @State private var showLogout = false
-    @State private var picked: PhotosPickerItem?
+    @State private var showEdit = false
+    @State private var showDelete = false
+    @State private var deleting = false
+    @State private var deleteError = ""
 
     @Environment(\.dismiss) private var dismiss
 
@@ -34,15 +37,8 @@ struct ProfileView: View {
             }
         }
         .task { await cloud.refresh() }
-        .onChange(of: picked) { item in
-            guard let item else { return }
-            Task {
-                if let data = try? await item.loadTransferable(type: Data.self),
-                   let img = UIImage(data: data) {
-                    app.setAvatar(img)
-                }
-                picked = nil
-            }
+        .sheet(isPresented: $showEdit) {
+            NavigationStack { AccountEditView() }
         }
         .alert("确认退出登录？", isPresented: $showLogout) {
             Button("取消", role: .cancel) {}
@@ -50,45 +46,67 @@ struct ProfileView: View {
         } message: {
             Text("退出登录不会丢失任何数据，你仍可以登录此账号。")
         }
+        .alert("确认删除账号？", isPresented: $showDelete) {
+            Button("取消", role: .cancel) {}
+            Button("删除", role: .destructive) { deleteAccount() }
+        } message: {
+            Text("账号、余额、购买记录和对记录会一并删除，无法恢复。")
+        }
+        .alert("删除失败", isPresented: Binding(
+            get: { !deleteError.isEmpty },
+            set: { if !$0 { deleteError = "" } }
+        )) {
+            Button("好", role: .cancel) { deleteError = "" }
+        } message: {
+            Text(deleteError)
+        }
+    }
+
+    private func deleteAccount() {
+        guard !deleting else { return }
+        deleting = true
+        Task {
+            let ok = await cloud.deleteAccount()
+            deleting = false
+            if !ok { deleteError = cloud.lastError ?? "删除失败，请稍后重试" }
+        }
     }
 
     // MARK: - 账号
 
     private var accountCard: some View {
-        HStack(spacing: 14) {
-            PhotosPicker(selection: $picked, matching: .images, photoLibrary: .shared()) {
+        // 整张卡就是入口：点头像或昵称都进同一个修改面板，头像上不再挂相机角标
+        Button {
+            showEdit = true
+        } label: {
+            HStack(spacing: 14) {
                 AvatarView(size: 58)
-                    .overlay(alignment: .bottomTrailing) {
-                        Image(systemName: "camera.fill")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 20, height: 20)
-                            .background(Theme.accent, in: Circle())
-                            .overlay(Circle().strokeBorder(Theme.card, lineWidth: 2))
-                            .offset(x: 2, y: 2)
-                    }
-            }
-            .buttonStyle(.plain)
-            .contextMenu {
-                Button("使用默认头像", role: .destructive) { app.setAvatar(nil) }
-            }
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(cloud.profile?.displayName ?? "语幕用户")
-                    .font(.system(size: 19, weight: .semibold))
-                    .foregroundStyle(Theme.ink)
-                    .lineLimit(1)
-
-                if let email = cloud.profile?.email, !email.isEmpty {
-                    Text(email)
-                        .font(.system(size: 14))
-                        .foregroundStyle(Theme.sub)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(cloud.profile?.displayName ?? "语幕用户")
+                        .font(.system(size: 19, weight: .semibold))
+                        .foregroundStyle(Theme.ink)
                         .lineLimit(1)
+
+                    if let email = cloud.profile?.email, !email.isEmpty {
+                        Text(email)
+                            .font(.system(size: 14))
+                            .foregroundStyle(Theme.sub)
+                            .lineLimit(1)
+                    }
                 }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.faint)
             }
-            Spacer(minLength: 0)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
         .card(padding: 18)
+        .contextMenu {
+            Button("使用默认头像", role: .destructive) { app.setAvatar(nil) }
+        }
     }
 
     // MARK: - 积分
@@ -161,6 +179,15 @@ struct ProfileView: View {
                 }
                 .padding(.horizontal, 16).frame(height: 52)
                 .contentShape(Rectangle())
+            }
+            .buttonStyle(RowButtonStyle())
+
+            divider
+
+            // 5.1.1(v)：App 内必须能自助删除账号，不能只写「联系我们」
+            Button { showDelete = true } label: {
+                rowContent(icon: "trash.fill", title: "删除账号", tint: Theme.warn,
+                           detail: "", chevron: false)
             }
             .buttonStyle(RowButtonStyle())
         }
