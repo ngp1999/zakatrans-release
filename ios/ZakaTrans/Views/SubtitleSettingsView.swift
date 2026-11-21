@@ -58,6 +58,9 @@ struct SubtitleSettingsView: View {
         .onChange(of: app.prefs.mode) { _ in
             withAnimation(.easeInOut(duration: 0.22)) { resizeFeed() }
         }
+        .onChange(of: app.prefs.scroll) { _ in
+            withAnimation(.easeInOut(duration: 0.22)) { resizeFeed() }
+        }
     }
 
     private var header: some View {
@@ -145,9 +148,9 @@ struct SubtitleSettingsView: View {
         return ZStack {
             app.prefs.backgroundColor
             if app.prefs.pip == "X" {
-                widePreview(m)
+                if app.prefs.scroll == "push" { widePushPreview(m) } else { widePreview(m) }
             } else {
-                rollingPreview(m)
+                if app.prefs.scroll == "segment" { segmentPreview(m) } else { rollingPreview(m) }
             }
         }
         .frame(width: m.w, height: m.h)
@@ -163,6 +166,8 @@ struct SubtitleSettingsView: View {
     private func widePreview(_ m: (w: CGFloat, h: CGFloat, k: CGFloat)) -> some View {
         let f = previewFonts(k: m.k)
         let a = Self.samples[wideIndex % Self.samples.count]
+        // 只显一种语言时用主字号：单语本该更大，不能拿原文那档小字顶上去
+        let one = app.prefs.mode != "bilingual"
         return VStack(spacing: max(1, m.h * 0.06)) {
             if app.prefs.mode != "source" {
                 Text(a.zh)
@@ -174,7 +179,7 @@ struct SubtitleSettingsView: View {
             }
             if app.prefs.mode != "zh" {
                 Text(a.src)
-                    .font(.system(size: f.src))
+                    .font(.system(size: one ? f.zh : f.src, weight: one ? .bold : .regular))
                     .foregroundStyle(Color(uiColor: app.prefs.secondaryColor))
                     .lineLimit(2)
                     .minimumScaleFactor(1)
@@ -187,11 +192,93 @@ struct SubtitleSettingsView: View {
         .transition(.opacity)
     }
 
+    /// 小档 · 横推：句子按先后排开、靠右对齐；新的一句从右边进来，
+    /// 老的一句被它顶着往左走——走的距离跟着这句长出来的宽度走，跟真实窗口里一致。
+    private func widePushPreview(_ m: (w: CGFloat, h: CGFloat, k: CGFloat)) -> some View {
+        let f = previewFonts(k: m.k)
+        let pf = f.zh * 0.74
+        let idxs = [wrap(wideIndex - 2), wrap(wideIndex - 1), wrap(wideIndex)]
+        let two = app.prefs.mode == "bilingual"
+        return HStack(alignment: .center, spacing: max(6, pf * 0.5)) {
+            ForEach(idxs, id: \.self) { i in
+                VStack(alignment: .leading, spacing: max(1, m.h * 0.02)) {
+                    if app.prefs.mode != "source" {
+                        Text(Self.samples[i].zh)
+                            .font(.system(size: pf, weight: .bold))
+                            .foregroundStyle(Color(uiColor: app.prefs.effectiveColor))
+                    }
+                    if app.prefs.mode != "zh" {
+                        Text(Self.samples[i].src)
+                            .font(.system(size: two ? pf * 0.68 : pf, weight: two ? .regular : .bold))
+                            .foregroundStyle(Color(uiColor: app.prefs.secondaryColor))
+                    }
+                }
+                .fixedSize(horizontal: true, vertical: false)
+                .transition(.asymmetric(insertion: .move(edge: .trailing),
+                                        removal: .move(edge: .leading).combined(with: .opacity)))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .frame(height: m.h)
+        .padding(.horizontal, 6)
+        .clipped()
+    }
+
+    /// 中/大档 · 分段：上半屏是译文段落、下半屏是原文段落，每来一句各自往上加一行。
+    private func segmentPreview(_ m: (w: CGFloat, h: CGFloat, k: CGFloat)) -> some View {
+        let f = previewFonts(k: m.k)
+        let two = app.prefs.mode == "bilingual"
+        let rows = Array(feed.suffix(two ? 2 : 3))
+        let half = two ? m.h * 0.54 : m.h
+        return VStack(spacing: 0) {
+            if app.prefs.mode != "source" {
+                VStack(alignment: .leading, spacing: max(1, m.h * 0.012)) {
+                    Spacer(minLength: 0)
+                    ForEach(rows) { it in
+                        Text(it.zh)
+                            .font(.system(size: f.zh, weight: .bold))
+                            .foregroundStyle(Color(uiColor: app.prefs.effectiveColor))
+                            .lineLimit(2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity),
+                                                    removal: .opacity))
+                    }
+                }
+                .frame(height: half, alignment: .bottom)
+            }
+            if two {
+                Rectangle()
+                    .fill(Color.white.opacity(0.16))
+                    .frame(height: 0.5)
+            }
+            if app.prefs.mode != "zh" {
+                VStack(alignment: .leading, spacing: max(1, m.h * 0.008)) {
+                    Spacer(minLength: 0)
+                    ForEach(rows) { it in
+                        Text(it.src)
+                            .font(.system(size: two ? f.src : f.zh, weight: two ? .regular : .bold))
+                            .foregroundStyle(Color(uiColor: app.prefs.secondaryColor))
+                            .lineLimit(2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity),
+                                                    removal: .opacity))
+                    }
+                }
+                .frame(maxHeight: .infinity, alignment: .bottom)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .frame(width: m.w, height: m.h)
+        .clipped()
+    }
+
     /// 中档 / 大档：真正的字幕流——新句从底下进来，整排一起往上推，最上面那行推出去。
     /// 以前是整块内容一起换（三行同时变），看着像图片切换；现在每行单独进出，
     /// 观感就是「由下往上滚」。
     private func rollingPreview(_ m: (w: CGFloat, h: CGFloat, k: CGFloat)) -> some View {
         let f = previewFonts(k: m.k)
+        let single = app.prefs.mode != "bilingual"
         let rowH = rowHeight(f: f)
         let gap = max(2, m.h * 0.014)
         return VStack(alignment: .leading, spacing: gap) {
@@ -201,20 +288,21 @@ struct SubtitleSettingsView: View {
                         Text(it.zh)
                             .font(.system(size: f.zh, weight: .bold))
                             .foregroundStyle(Color(uiColor: app.prefs.effectiveColor))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.5)
+                            .lineLimit(single ? 2 : 1)
+                            .minimumScaleFactor(single ? 1 : 0.5)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     if app.prefs.mode != "zh" {
+                        // 只显原文时用主字号（不是原文那档小字），并允许多占一行
                         Text(it.src)
-                            .font(.system(size: f.src))
+                            .font(.system(size: single ? f.zh : f.src, weight: single ? .bold : .regular))
                             .foregroundStyle(Color(uiColor: app.prefs.secondaryColor))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.5)
+                            .lineLimit(single ? 2 : 1)
+                            .minimumScaleFactor(single ? 1 : 0.5)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                .frame(height: app.prefs.mode == "bilingual" ? rowH : rowH * 0.6, alignment: .center)
+                .frame(height: rowH, alignment: .center)
                 // 新行只从底下推进来，不带淡入：中档/大档要的是「一直有字」，
                 // 淡入会有半秒是空的，看着像闪。
                 .transition(.asymmetric(
@@ -238,7 +326,13 @@ struct SubtitleSettingsView: View {
         let m = metrics
         let f = previewFonts(k: m.k)
         let h = rowHeight(f: f) + max(2, m.h * 0.014)
-        return max(1, Int((m.h - 12) / max(6, h)))
+        var n = max(1, Int((m.h - 12) / max(6, h)))
+        // 双语：中档最多 3 行、大档 4 行——再多就成一片，一眼扫不完。
+        // 只显一种语言时行数不压（字号大了，能站的句数本来就少）。
+        if app.prefs.mode == "bilingual" && app.prefs.scroll != "segment" {
+            n = min(n, app.prefs.pip == "M" ? 3 : 4)
+        }
+        return n
     }
 
     /// 换档时按新的行数增删，锚定最下面那句不动。
@@ -420,6 +514,26 @@ struct SubtitleSettingsView: View {
                     }
                 )) {
                     ForEach(SubtitlePrefs.pipOptions, id: \.0) { opt in
+                        Text(opt.1).tag(opt.0)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            divider
+
+            settingRow(label: "滚动方式") {
+                Picker("滚动方式", selection: Binding(
+                    get: { app.prefs.scroll },
+                    set: { v in
+                        Haptics.tap()
+                        app.updatePrefs { p in
+                            if p.pip == "X" { p.scrollX = v } else { p.scrollMB = v }
+                        }
+                    }
+                )) {
+                    // 选项跟着浮窗档位走：小窗是「上推 / 横推」，中窗大窗是「上推 / 分段」
+                    ForEach(SubtitlePrefs.scrollOptions(app.prefs.pip), id: \.0) { opt in
                         Text(opt.1).tag(opt.0)
                     }
                 }
