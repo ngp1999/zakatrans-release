@@ -36,7 +36,16 @@ final class AppState: ObservableObject {
         avatarImage = image
         AvatarStore.save(image)
         let b64 = AvatarStore.base64() ?? ""
-        Task { await Cloud.shared.uploadAvatar(b64) }
+        Task {
+            // 换头像要「实时同步到服务器」：一次不成就再试一次，
+            // 成了把 /v1/me 拉一遍，服务端那份和本机这份始终是一张图。
+            var ok = await Cloud.shared.uploadAvatar(b64)
+            if !ok {
+                try? await Task.sleep(nanoseconds: 900_000_000)
+                ok = await Cloud.shared.uploadAvatar(b64)
+            }
+            if ok { await Cloud.shared.refresh() }
+        }
     }
 
     struct SubtitleLine: Identifiable, Equatable {
@@ -87,7 +96,12 @@ final class AppState: ObservableObject {
         }
         s.onSegment = { [weak self] text, _ in
             guard let self else { return }
-            if let t = text, !t.isEmpty { self.liveSource = t }
+            if let t = text, !t.isEmpty {
+                self.liveSource = t
+                // 整句落定才算「该让路了」：半句还在滚动的时候朗读照念，
+                // 否则每秒好几次的半句会把刚开口的那句一直掐掉，听起来就是没声音。
+                Speaker.shared.noteInput(t, final: true)
+            }
         }
         s.onTransPartial = { [weak self] delta in
             guard let self else { return }
