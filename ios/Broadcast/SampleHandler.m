@@ -209,7 +209,7 @@
                         [s finishBroadcastWithError:[NSError errorWithDomain:@"com.zakatrans.app.ext"
                                                                         code:4102
                                                                     userInfo:@{NSLocalizedDescriptionKey:
-                                                                                   @"已停止实时翻译"}]];
+                                                                                   @"已停止实时字幕"}]];
                     });
                     return;
                 }
