@@ -34,6 +34,10 @@ extern NSString *const ZKNotifyLog;
 // 已落进流里的句子不再改动（这是画中画不闪的关键）
 + (NSArray<NSDictionary *> *)lines;
 + (void)appendLineEn:(NSString *)en zh:(NSString *)zh;
+// 原文先落定、译文后到：把译文补进当前会话最后一行（画中画读的就是这份）
++ (void)updateLastLineZh:(NSString *)zh;
+// 精确版：按原文找回那一行再补译文（中间已经又上了新句也不会补错行）
++ (void)updateLineZh:(NSString *)zh forEn:(NSString *)en;
 + (void)clearLines;
 
 // 会话：每次打开 App / 每次起画中画，都算一场新会话。
