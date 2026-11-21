@@ -25,7 +25,7 @@ struct AboutView: View {
             .padding(.bottom, 28)
         }
         .background(Theme.bg)
-        .navigationTitle("关于")
+        .navigationTitle("关于语幕")
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -51,6 +51,16 @@ struct AboutView: View {
                 .font(.system(size: 14))
                 .foregroundStyle(Theme.faint)
                 .padding(.top, 2)
+
+            // 版本号是排查问题的第一手信息，放在名字下面，一眼看得到
+            Text("版本 \(version)")
+                .font(.system(size: 13).monospacedDigit())
+                .foregroundStyle(Theme.sub)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(Theme.fill)
+                .clipShape(Capsule())
+                .padding(.top, 4)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 24)
@@ -82,9 +92,7 @@ struct AboutView: View {
                 HStack {
                     Text("联系我们").font(.system(size: 16)).foregroundStyle(Theme.ink)
                     Spacer()
-                    Text(AboutView.contactEmail)
-                        .font(.system(size: 14))
-                        .foregroundStyle(Theme.sub)
+                    // 邮箱放在页面里面，不在这一行露出来
                     Image(systemName: "chevron.right")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Theme.faint)
