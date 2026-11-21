@@ -403,7 +403,7 @@ struct SubtitleExportView: View {
             )
             .background(Theme.bg)
             }
-            .scrollBounceBehavior(.basedOnSize)
+            .modifier(HugScroll())
             .onPreferenceChange(ExportSheetHeight.self) { h in
                 guard h > 40 else { return }
                 // 导航栏到此为止的高度 + 安全区，才是这块面板真正要占的。
@@ -507,5 +507,16 @@ private struct ExportSheetHeight: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = max(value, nextValue())
+    }
+}
+
+/// 内容比屏幕矮时不要回弹（iOS 16.4 才有 scrollBounceBehavior，这里按可用性降级）。
+private struct HugScroll: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 16.4, *) {
+            content.scrollBounceBehavior(.basedOnSize)
+        } else {
+            content
+        }
     }
 }
