@@ -23,11 +23,12 @@ struct SubtitleSettingsView: View {
             header
             FitScroll(cap: UIScreen.main.bounds.height * 0.70 - SafeArea.bottom) {
                 VStack(spacing: 12) {
+                    // 预览放最上面：进页面第一眼就是它。
+                    // 不再做固定占位槽，切换档位时它自己变高变矮，下面的设置项跟着走，
+                    // 这是当初最直觉的排法，不用为了「不跳」牺牲位置。
+                    previewCard
                     lookCard
                     windowCard
-                    // 预览放最下面：它是这一页里唯一会变高的东西，
-                    // 放在最后就不会把它下面的设置项顶来顶去，面板底部也不会空出一大块。
-                    previewCard
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 2)
@@ -112,10 +113,9 @@ struct SubtitleSettingsView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Color.white.opacity(0.10), lineWidth: 0.6)
         )
-        // 不再用固定占位槽：预览就在这一页最下面，只有它自己在变大变小，
-        // 上面的设置项和面板底边都不会跟着跳。
+        // 预览就在最上面，高度跟着档位走，不再套固定占位槽。
         .frame(maxWidth: .infinity)
-        .animation(.easeInOut(duration: 0.22), value: app.prefs.pip)
+        .animation(.easeInOut(duration: 0.20), value: app.prefs.pip)
     }
 
     /// 小档（5:1）：中文一行在上、原文一行在下；**一行只放一整句**，不跟下一句拼行
