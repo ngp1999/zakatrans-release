@@ -38,8 +38,7 @@ struct HomeView: View {
             NavigationStack { CreditView() }
         }
         .sheet(isPresented: $showStyle) {
-            SubtitleSettingsView()
-                .presentationBackground(Theme.bg)
+            panel(SubtitleSettingsView())
         }
         .onAppear { Haptics.warm() }
         .alert("积分不足", isPresented: Binding(
@@ -50,6 +49,17 @@ struct HomeView: View {
             Button("取消", role: .cancel) { app.alert = nil }
         } message: {
             Text(app.alert ?? "")
+        }
+    }
+
+    /// 面板底色：presentationBackground 是 iOS 16.4 才有的，
+    /// 低版本直接不铺（系统默认背景本来就是浅色，看不出差别），不能因为一句修饰就编不过。
+    @ViewBuilder
+    private func panel<V: View>(_ content: V) -> some View {
+        if #available(iOS 16.4, *) {
+            content.presentationBackground(Theme.bg)
+        } else {
+            content
         }
     }
 
