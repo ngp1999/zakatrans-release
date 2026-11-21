@@ -9,9 +9,6 @@ struct ProfileView: View {
     @ObservedObject private var app = AppState.shared
     @State private var showLogout = false
     @State private var showEdit = false
-    @State private var showDelete = false
-    @State private var deleting = false
-    @State private var deleteError = ""
 
     @Environment(\.dismiss) private var dismiss
 
@@ -45,30 +42,6 @@ struct ProfileView: View {
             Button("退出登录", role: .destructive) { cloud.logout() }
         } message: {
             Text("退出登录不会丢失任何数据，你仍可以登录此账号。")
-        }
-        .alert("确认删除账号？", isPresented: $showDelete) {
-            Button("取消", role: .cancel) {}
-            Button("删除", role: .destructive) { deleteAccount() }
-        } message: {
-            Text("账号、余额、购买记录和对记录会一并删除，无法恢复。")
-        }
-        .alert("删除失败", isPresented: Binding(
-            get: { !deleteError.isEmpty },
-            set: { if !$0 { deleteError = "" } }
-        )) {
-            Button("好", role: .cancel) { deleteError = "" }
-        } message: {
-            Text(deleteError)
-        }
-    }
-
-    private func deleteAccount() {
-        guard !deleting else { return }
-        deleting = true
-        Task {
-            let ok = await cloud.deleteAccount()
-            deleting = false
-            if !ok { deleteError = cloud.lastError ?? "删除失败，请稍后重试" }
         }
     }
 
@@ -179,15 +152,6 @@ struct ProfileView: View {
                 }
                 .padding(.horizontal, 16).frame(height: 52)
                 .contentShape(Rectangle())
-            }
-            .buttonStyle(RowButtonStyle())
-
-            divider
-
-            // 5.1.1(v)：App 内必须能自助删除账号，不能只写「联系我们」
-            Button { showDelete = true } label: {
-                rowContent(icon: "trash.fill", title: "删除账号", tint: Theme.warn,
-                           detail: "", chevron: false)
             }
             .buttonStyle(RowButtonStyle())
         }
