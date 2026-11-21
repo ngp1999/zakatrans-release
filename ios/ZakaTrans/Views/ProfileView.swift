@@ -148,7 +148,14 @@ struct ProfileView: View {
             divider
 
             Button { showLogout = true } label: {
-                HStack {
+                HStack(spacing: 12) {
+                    // 跟上面两行一样的图标方块，只是换成红色系，位置对齐
+                    Image(systemName: "rectangle.portrait.and.arrow.right")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 28, height: 28)
+                        .background(Theme.warn)
+                        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                     Text("退出登录").font(.system(size: 16)).foregroundStyle(Theme.warn)
                     Spacer()
                 }
