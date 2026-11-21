@@ -217,3 +217,79 @@ enum Format {
         return f.string(from: d)
     }
 }
+
+// MARK: - 提示弹窗（自绘）
+
+/// 统一的提示框：白卡、圆角、一枚主题色按钮，跟协议弹窗是同一套语言。
+/// 系统 alert 是灰底方框、字号和控制都不好调，一弹出来就跟 App 其他地方不是一套东西；
+/// 这个自己画，深浅色、圆角、字重都跟页面一致。
+struct NoticeDialog: View {
+    let title: String
+    let message: String
+    var onClose: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.28)
+                .ignoresSafeArea()
+                .onTapGesture { onClose() }
+
+            VStack(spacing: 16) {
+                Text(title)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Theme.ink)
+                    .frame(maxWidth: .infinity)
+
+                ScrollView(showsIndicators: false) {
+                    Text(message)
+                        .font(.system(size: 14))
+                        .foregroundStyle(Theme.sub)
+                        .multilineTextAlignment(.center)
+                        .lineSpacing(4)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity)
+                }
+                .frame(maxHeight: 220)
+
+                Button {
+                    Haptics.tap()
+                    onClose()
+                } label: {
+                    Text("知道了")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                        .background(Theme.accent)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(TileButtonStyle())
+            }
+            .padding(20)
+            .frame(maxWidth: 330)
+            .background(Theme.bg)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(Theme.hairline, lineWidth: 0.7)
+            )
+            .shadow(color: .black.opacity(0.18), radius: 26, y: 10)
+            .padding(.horizontal, 32)
+        }
+        .transition(.opacity)
+    }
+}
+
+extension View {
+    /// 用法：`.notice($errorText)`，把一条可选文案当成弹窗内容，置 nil 即关闭。
+    func notice(_ message: Binding<String?>, title: String = "提示") -> some View {
+        overlay {
+            if let m = message.wrappedValue, !m.isEmpty {
+                NoticeDialog(title: title, message: m) {
+                    message.wrappedValue = nil
+                }
+            }
+        }
+        .animation(.easeOut(duration: 0.16), value: message.wrappedValue)
+    }
+}
