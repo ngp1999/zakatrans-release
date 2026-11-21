@@ -30,7 +30,7 @@ struct FitScroll<Content: View>: View {
         .frame(height: height)
         // 第一次量出来的高度比上限矮时，面板跟着收一下；带一点动画，
         // 不然「先按满高弹出来、再瞬间缩一刀」，看着像闪了一下。
-        .animation(.spring(response: 0.30, dampingFraction: 0.92), value: height)
+        .animation(.easeInOut(duration: 0.22), value: height)
         .onPreferenceChange(PanelContentHeight.self) { v in
             if abs(v - contentH) > 0.5 { contentH = v }
         }
