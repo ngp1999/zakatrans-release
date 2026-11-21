@@ -87,15 +87,6 @@ struct AccountEditView: View {
                 Button("取消") { dismiss() }
                     .foregroundStyle(Theme.sub)
             }
-            ToolbarItem(placement: .confirmationAction) {
-                NavigationLink {
-                    ProfileView()
-                } label: {
-                    Text("账号")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(Theme.accent)
-                }
-            }
         }
         .onAppear {
             guard !loaded else { return }
