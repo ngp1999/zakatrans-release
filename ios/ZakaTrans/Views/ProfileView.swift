@@ -140,7 +140,7 @@ struct ProfileView: View {
             NavigationLink {
                 AboutView()
             } label: {
-                rowContent(icon: "info.circle.fill", title: "关于",
+                rowContent(icon: "info.circle.fill", title: "关于语幕",
                            tint: .gray, detail: "", chevron: true)
             }
             .buttonStyle(RowButtonStyle())
