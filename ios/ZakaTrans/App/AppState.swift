@@ -136,7 +136,6 @@ final class AppState: ObservableObject {
                 self.lines.append(SubtitleLine(source: src, trans: zh))
                 if self.lines.count > 200 { self.lines.removeFirst(self.lines.count - 200) }
                 ZKPip.shared()!.appendLineEn(src, zh: zh)
-                if self.prefs.tts { Speaker.shared.speak(zh) }
             }
             self.liveTrans = ""
             self.liveSource = ""
@@ -195,7 +194,8 @@ final class AppState: ObservableObject {
         prefs.saveLocal()
         // 收音模式改了要立刻切换采集来源（内部收音 / 麦克风收音）
         ZKSpeechStream.shared()?.applyAudioSource()
-        Speaker.shared.enabled = prefs.tts
+        // 实时字幕不再朗读：音频输出已从这一页去掉，声音只留给同声传译里手动点播
+        Speaker.shared.enabled = false
         Speaker.shared.rate = prefs.speechRate
         Speaker.shared.duckLevel = prefs.duckLevel
         Speaker.shared.voiceId = prefs.voiceId
