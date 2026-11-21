@@ -380,8 +380,8 @@ struct InterpreterView: View {
         let switching = app.running
         if switching { app.stop() }
         if switching {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-                self?.beginInterp()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                beginInterp()
             }
         } else {
             beginInterp()
