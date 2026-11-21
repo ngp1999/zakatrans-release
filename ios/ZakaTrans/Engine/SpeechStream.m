@@ -227,6 +227,18 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
         if (s.onTransSegment) s.onTransSegment(t);
     };
 
+    // 半句译文被服务端整句重翻了一遍：当成一条正常的整句译文收下。
+    // 界面上那一行还没译文就被补上，已经有译文就不动（不会冒出第二段字）。
+    ast.onTransReplace = ^(NSString *full, NSInteger seg) {
+        ZKSpeechStream *s = weakSelf;
+        if (!s || !s->_running) return;
+        NSString *t = full.length ? full : s->_curTr;
+        s->_curTr = @"";
+        t = [t stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (!t.length) return;
+        if (s.onTransSegment) s.onTransSegment(t);
+    };
+
     ast.onState = ^(NSString *state) {
         ZKSpeechStream *s = weakSelf;
         if (!s) return;
