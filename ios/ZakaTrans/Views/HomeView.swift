@@ -196,16 +196,6 @@ struct HomeView: View {
             }
 
             HStack(spacing: 10) {
-                // 字幕样式：颜色、字号、背景、窗口大小都在里面，系统 sheet 呈现
-                // 图标用系统自带的画中画（矢量，跟系统其他图标是一套），
-                // 不再自己画调色板——自制图标缩到 17pt 细节全糊，也不像系统图标。
-                iconButton(on: app.pipOn) {
-                    showStyle = true
-                } content: {
-                    Image(systemName: app.pipOn ? "pip.fill" : "pip")
-                        .font(.system(size: 17, weight: .medium))
-                }
-
                 Button {
                     Haptics.tap(0.8)
                     if app.running || app.preparing {
@@ -242,6 +232,16 @@ struct HomeView: View {
                     .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(PrimaryButtonStyle(tint: (app.running && !app.preparing) ? Theme.warn : Theme.accent))
+
+                // 字幕样式：颜色、字号、背景、窗口大小都在里面，系统 sheet 呈现
+                // 图标用系统自带的画中画（矢量，跟系统其他图标是一套），
+                // 不再自己画调色板——自制图标缩到 17pt 细节全糊，也不像系统图标。
+                iconButton(on: app.pipOn) {
+                    showStyle = true
+                } content: {
+                    Image(systemName: app.pipOn ? "pip.fill" : "pip")
+                        .font(.system(size: 17, weight: .medium))
+                }
             }
         }
     }
