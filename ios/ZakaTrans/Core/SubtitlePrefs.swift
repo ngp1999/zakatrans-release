@@ -86,6 +86,25 @@ struct SubtitlePrefs: Codable, Equatable {
     }
 
     static func load() -> SubtitlePrefs {
+        var loaded = loadRaw()
+        loaded.migrateDefaultsOnce()
+        return loaded
+    }
+
+    /// 默认值变更只做一次：用户自己后来打开的不动，只是把老默认值换过来。
+    /// 现在这一条：输出音频默认关闭（开着一开就抢声音，先关掉更省事）。
+    private mutating func migrateDefaultsOnce() {
+        let flag = "zt_migrate_tts_off_v379"
+        if !UserDefaults.standard.bool(forKey: flag) {
+            UserDefaults.standard.set(true, forKey: flag)
+            if tts {
+                tts = false
+                saveLocal()
+            }
+        }
+    }
+
+    private static func loadRaw() -> SubtitlePrefs {
         // v6 之前默认是大窗（4:3）。现在小（5:1 横条）是默认，老存档一次性迁过来，
         // 其它设置（颜色、背景、朗读）原样保留。
         if UserDefaults.standard.data(forKey: key) == nil {
