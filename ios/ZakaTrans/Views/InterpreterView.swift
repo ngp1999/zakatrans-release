@@ -13,7 +13,6 @@ import AVFoundation
 struct InterpreterView: View {
     @ObservedObject private var app = AppState.shared
     @ObservedObject private var cloud = Cloud.shared
-    @ObservedObject private var speaker = Speaker.shared
     private let haptic = UIImpactFeedbackGenerator(style: .light)
 
     struct Line: Identifiable, Equatable {
@@ -32,7 +31,12 @@ struct InterpreterView: View {
     @State private var level: CGFloat = 0
     @State private var showLang = false
     @State private var error: String?
-    @State private var spoken: Set<String> = []
+    /// 这一场的开始时刻和已经过去的秒数（界面上按 时:分:秒 走）
+    /// 刚点开始的头两秒：界面明说「在连」，别让人以为已经在听、对着手机说半天
+    @State private var warming = false
+    @State private var began: Date?
+    @State private var elapsed: TimeInterval = 0
+    @State private var ticker: Timer?
 
     /// 语言名称一律用中文显示：选语言这一步是给自己看的，
     /// 看到「日本語 / 한국어」还得先在心里翻译一遍，没必要。
@@ -58,6 +62,7 @@ struct InterpreterView: View {
     var body: some View {
         VStack(spacing: 0) {
             languageRow
+            clockRow
             transcript
             bottomBar
         }
@@ -72,6 +77,7 @@ struct InterpreterView: View {
         .notice($error)
         .onDisappear {
             if running { stop() }
+            stopClock()
         }
     }
 
@@ -79,6 +85,7 @@ struct InterpreterView: View {
 
     private var languageRow: some View {
         HStack(spacing: 8) {
+            Spacer(minLength: 0)
             Button {
                 guard !running else { return }
                 haptic.impactOccurred()
@@ -141,6 +148,41 @@ struct InterpreterView: View {
         .opacity(running ? 0.45 : 1)
     }
 
+    /// 计时器：开始之后一直走，时:分:秒，居中摆在语言下面。
+    /// 高度始终占着，开始前后下面的对话区不会跳一下。
+    private var clockRow: some View {
+        Text(Self.clockText(elapsed))
+            .font(.system(size: 15, weight: .medium).monospacedDigit())
+            .foregroundStyle(running ? Theme.ink : Theme.faint)
+            .frame(height: 20)
+            .frame(maxWidth: .infinity)
+            .padding(.bottom, 10)
+    }
+
+    static func clockText(_ t: TimeInterval) -> String {
+        let total = max(0, Int(t))
+        return String(format: "%02d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60)
+    }
+
+    private func startClock() {
+        stopClock()
+        elapsed = 0
+        began = Date()
+        let t = Timer(timeInterval: 0.5, repeats: true) { _ in
+            guard let b = began else { return }
+            elapsed = Date().timeIntervalSince(b)
+        }
+        RunLoop.main.add(t, forMode: .common)
+        ticker = t
+    }
+
+    private func stopClock() {
+        ticker?.invalidate()
+        ticker = nil
+        began = nil
+        elapsed = 0
+    }
+
     // MARK: - 对话
 
     private var transcript: some View {
@@ -178,7 +220,7 @@ struct InterpreterView: View {
             Image(systemName: "waveform")
                 .font(.system(size: 38, weight: .ultraLight))
                 .foregroundStyle(Theme.accent)
-            Text("点开始，直接说话")
+            Text(running ? (warming ? "正在连接识别服务…" : "正在听，直接说话") : "点开始，直接说话")
                 .font(.system(size: 15))
                 .foregroundStyle(Theme.sub)
         }
@@ -188,8 +230,11 @@ struct InterpreterView: View {
 
     private func bubble(_ l: Line) -> some View {
         let mineSide = l.side == "a"
-        return HStack(alignment: .bottom, spacing: 0) {
-            if mineSide { Spacer(minLength: 52) }
+        return HStack(alignment: .bottom, spacing: 8) {
+            if mineSide { Spacer(minLength: 44) }
+            // 自己说的话在右边，按钮就摆在气泡左边；对方的话反过来
+            if mineSide { playButton(l) }
+
 
             VStack(alignment: mineSide ? .trailing : .leading, spacing: 5) {
                 if !l.trans.isEmpty {
@@ -217,37 +262,50 @@ struct InterpreterView: View {
             )
             .opacity(l.done ? 1 : 0.82)
 
-            if !mineSide { Spacer(minLength: 52) }
+            if !mineSide { playButton(l) }
+            if !mineSide { Spacer(minLength: 44) }
         }
+    }
+
+    /// 气泡旁边那颗播放键：这一句念出来。
+    /// 同传不再自动出声——现场两个人都在说话，机器一开口就把人声压掉，
+    /// 所以改成一键手动点播，念哪句、什么时候念由自己定。
+    @ViewBuilder
+    private func playButton(_ l: Line) -> some View {
+        let text = l.trans.isEmpty ? l.source : l.trans
+        if l.done, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            Button {
+                play(l, text)
+            } label: {
+                Image(systemName: "play.circle.fill")
+                    .font(.system(size: 25, weight: .light))
+                    .foregroundStyle(Theme.faint)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("朗读这一句")
+        } else {
+            Color.clear.frame(width: 28, height: 1)
+        }
+    }
+
+    private func play(_ l: Line, _ text: String) {
+        haptic.impactOccurred()
+        Speaker.shared.enabled = true
+        Speaker.shared.usesExternalSession = running
+        Speaker.shared.micCapture = running
+        Speaker.shared.voiceId = app.prefs.voiceId
+        Speaker.shared.resume()
+        // 念出去的这句会被麦克风拾回来：先记一笔，引擎据此当回声丢掉，不再冒出一条一模一样的
+        ZKInterpreter.shared()?.noteSpoken(text)
+        Speaker.shared.speak(text, lang: l.side == "a" ? other : mine)
     }
 
     // MARK: - 底部
 
     private var bottomBar: some View {
         HStack(spacing: 10) {
-            // 朗读开关：一眼看得出现在念不念
-            Button {
-                haptic.impactOccurred()
-                let on = !speaker.enabled
-                speaker.enabled = on
-                Speaker.shared.enabled = on
-                if on {
-                    Speaker.shared.resume()
-                    Speaker.shared.usesExternalSession = running
-                } else {
-                    Speaker.shared.stop()
-                }
-                app.updatePrefs { $0.tts = on }
-            } label: {
-                Image(systemName: speaker.enabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(speaker.enabled ? Theme.accent : Theme.sub)
-                    .frame(width: 54, height: 54)
-                    .background(speaker.enabled ? Theme.accentSoft : Theme.surface)
-                    .clipShape(Circle())
-            }
-            .buttonStyle(TileButtonStyle())
-
             Button {
                 haptic.impactOccurred(intensity: 0.8)
                 if running { stop() } else { start() }
@@ -315,11 +373,31 @@ struct InterpreterView: View {
 
     private func begin() {
         guard !running else { return }
-        // 首页字幕翻译和同传都要占音频链路，两个一起跑必然互相打断——开同传就先停掉首页那场
-        if app.running { app.stop() }
+        // 首页字幕翻译和同传都要占音频链路，两个一起跑必然互相打断——开同传就先停掉首页那场。
+        // 停是异步的（引擎在后台队列里拆 tap、放掉录音），这边立刻去抢麦克风会撞车：
+        // 头一两秒录不到东西，用户看到的就是「刚开始那几句认不出来」。
+        // 所以从首页切过来时先等一下，让上一场真把麦克风还回来。
+        let switching = app.running
+        if switching { app.stop() }
+        if switching {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                self?.beginInterp()
+            }
+        } else {
+            beginInterp()
+        }
+    }
+
+    private func beginInterp() {
+        guard !running else { return }
         lines.removeAll()
-        spoken.removeAll()
         running = true
+        warming = true
+        startClock()
+        // 兜底：通道没回报状态也照样在两秒后放开提示，别一直挂着「正在连接」
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [self] in
+            if running { warming = false }
+        }
         // 同传自己管着 PlayAndRecord 会话，朗读这边不许再去改会话类别
         Speaker.shared.usesExternalSession = true
         // 这一路是麦克风在听：没有系统声音可以让位，朗读只能靠"等空隙 + 让路"
@@ -327,12 +405,14 @@ struct InterpreterView: View {
         // 必须解一次暂停：上一场停止时 Speaker 会进入 paused，不解开的话
         // 后面每一句 speak() 都被直接挡掉——用户看到的就是"同传点了音频输出没声音"。
         Speaker.shared.resume()
-        Speaker.shared.enabled = app.prefs.tts
+        // 不自动出声：只把通道准备好，等用户点气泡旁边那颗播放键
+        Speaker.shared.enabled = false
         Speaker.shared.voiceId = app.prefs.voiceId
 
         guard let itp = ZKInterpreter.shared() else {
             error = "同传引擎没启动起来，重开一次试试"
             running = false
+            warming = false
             Speaker.shared.usesExternalSession = false
             return
         }
@@ -345,18 +425,6 @@ struct InterpreterView: View {
                 Speaker.shared.noteInput(src, final: isFinal)
                 upsert(id: lineID, side: side ?? "a", source: src ?? "", trans: trans ?? "",
                        done: isFinal)
-
-                // 朗读：句子里一有译文就念。同一条只念一次
-                let tr = (trans ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                if Speaker.shared.enabled, !tr.isEmpty, isFinal, !spoken.contains(lineID) {
-                    // 自己念出去的那句被麦克风拾回来，会被当成"对方又说了一遍"
-                    let srcText = src ?? ""
-                    if Speaker.shared.isEcho([tr, srcText]) { return }
-                    spoken.insert(lineID)
-                    // 记下这句：麦克风会把它录回来再识别一遍，引擎据此认掉回声
-                    ZKInterpreter.shared()?.noteSpoken(tr)
-                    Speaker.shared.speak(tr, lang: (side ?? "a") == "a" ? other : mine)
-                }
             }
         }
         itp.onLevel = { v in
@@ -394,6 +462,8 @@ struct InterpreterView: View {
 
     private func stop() {
         running = false
+        warming = false
+        stopClock()
         ZKInterpreter.shared()?.stop()
         Speaker.shared.stop()
         // 会话归位：离开同传页之后朗读恢复成自己配会话
