@@ -12,6 +12,8 @@ struct HomeView: View {
     /// 面板是否已经滑到位置。整块面板用 offset 驱动，从屏幕底部整体滑上来，
     /// 不依赖 SwiftUI 的 transition（那个在 overlay 里有时候只有内容在动、面板底不跟着走）。
     @State private var panelUp = false
+    /// 麦克风权限被拒时给的提示
+    @State private var micDenied = false
 
     private enum PanelKind: String {
         case audio, style
@@ -23,6 +25,17 @@ struct HomeView: View {
             subtitlePanel
                 .padding(.horizontal, 20)
                 .padding(.top, 6)
+                // 单独挂在这个视图上：和下面那个「积分不足」各自独立，不会互相抢
+                .alert("需要麦克风权限", isPresented: $micDenied) {
+                    Button("去设置") {
+                        if let u = URL(string: UIApplication.openSettingsURLString) {
+                            UIApplication.shared.open(u)
+                        }
+                    }
+                    Button("取消", role: .cancel) {}
+                } message: {
+                    Text("麦克风收音需要录音权限。到「设置 → 语幕翻译」打开麦克风后再试一次。")
+                }
 
             controls
                 .padding(.horizontal, 20)
@@ -89,7 +102,8 @@ struct HomeView: View {
                 .ignoresSafeArea()
             }
         }
-        .animation(.spring(response: 0.40, dampingFraction: 0.86), value: panelUp)
+        // 阻尼压低一点：滑到位置之后会先过一点再弹回来，手感不再是"推上去就停住"。
+        .animation(.spring(response: 0.44, dampingFraction: 0.60), value: panelUp)
     }
 
     private func openPanel(_ kind: PanelKind) {
@@ -269,8 +283,14 @@ struct HomeView: View {
                         withAnimation(.easeOut(duration: 0.2)) { app.stop() }
                     } else if !app.preparing {
                         Task {
+                            // 麦克风收音：先把权限拿到，再开引擎（没权限直接碰输入节点会闪退）
+                            guard await app.requestMicPermissionIfNeeded() else {
+                                micDenied = true
+                                return
+                            }
                             await app.start()
-                            if app.running { BroadcastTrigger.shared.fire() }
+                            // 麦克风收音不需要屏幕广播权限：只有内部收音（系统声音）才去叫系统面板
+                            if app.running, app.prefs.audioSource != "mic" { BroadcastTrigger.shared.fire() }
                         }
                     }
                 } label: {
@@ -311,8 +331,9 @@ struct HomeView: View {
     }
 }
 
-/// 字幕样式按钮的图标：调色板 + 画笔，颜色一律走主题青绿。
-/// 这一档管的是颜色、背景和窗口大小，用画笔和调色板比「Aa」更直接。
+/// 字幕样式按钮的图标：调色板 + 画笔。
+/// 形状照参考图来——一块压扁的椭圆盘、右下角一个拇指孔、盘上三颗颜料点，
+/// 一支笔从右上斜插到左下、笔头压在盘面上。颜色统一走主题青绿，不跟参考图的彩色走。
 private struct SubtitleGlyph: View {
     var on: Bool
 
@@ -320,49 +341,65 @@ private struct SubtitleGlyph: View {
 
     var body: some View {
         ZStack {
-            // 调色板：圆盘 + 右侧一个拇指缺口，盘里四颗颜料点
-            ZStack {
-                Circle()
-                    .fill(tint.opacity(on ? 0.18 : 0.12))
-                Circle()
-                    .stroke(tint, lineWidth: 1.6)
-                HStack(spacing: 1.8) {
-                    dot; dot; dot
-                }
-                .offset(y: -0.5)
-                VStack(spacing: 1.8) {
-                    Circle().fill(tint).frame(width: 2.0, height: 2.0)
-                }
-                .offset(y: 4.6)
-                // 拇指缺口：盖一个跟按钮底色同色的圆，右侧咬掉一块
-                Circle()
-                    .fill(Theme.surface)
-                    .frame(width: 6.4, height: 6.4)
-                    .offset(x: 8.0, y: 1.5)
-            }
-            .compositingGroup()
-            .frame(width: 17.5, height: 17.5)
-            .offset(x: -3.0, y: -1.5)
+            // 盘面：实心淡色 + 一圈细描边（浅色底上也不糊）
+            PaletteShape()
+                .fill(tint.opacity(on ? 0.26 : 0.18), style: FillStyle(eoFill: true))
+            PaletteShape()
+                .stroke(tint, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
 
-            // 画笔：斜着从右上搭到左下，笔杆 + 笔头
-            ZStack {
-                Capsule()
-                    .fill(tint)
-                    .frame(width: 12.5, height: 2.8)
-                    .offset(x: 0.6)
-                Circle()
-                    .fill(tint)
-                    .frame(width: 3.2, height: 3.2)
-                    .offset(x: -6.6)
-            }
-            .rotationEffect(.degrees(-42))
-            .offset(x: 6.6, y: 6.8)
+            // 三颗颜料点
+            dot(3.0, 13.2)
+            dot(7.6, 11.8)
+            dot(6.4, 16.8)
+
+            // 画笔：右上斜到左下，笔杆 + 笔头 + 笔尖
+            BrushShape()
+                .fill(tint)
+                .rotationEffect(.degrees(-42))
+                .offset(x: 2.6, y: -4.2)
         }
-        .frame(width: 26, height: 26)
+        .frame(width: 27, height: 27)
     }
 
-    private var dot: some View {
-        Circle().fill(tint).frame(width: 2.2, height: 2.2)
+    private func dot(_ x: CGFloat, _ y: CGFloat) -> some View {
+        Circle()
+            .fill(tint)
+            .frame(width: 3.0, height: 3.0)
+            .offset(x: x - 13.5, y: y - 13.5)
+    }
+}
+
+/// 调色板外形：椭圆盘 + 右下角拇指孔（两个子路径配合 eoFill 挖空）
+private struct PaletteShape: Shape {
+    func path(in r: CGRect) -> Path {
+        var p = Path()
+        let body = CGRect(x: r.minX + 1.4, y: r.minY + 8.4,
+                          width: r.width - 7.6, height: r.height - 11.0)
+        p.addEllipse(in: body)
+        let hole = CGRect(x: body.maxX - 5.6, y: body.midY + 2.2, width: 4.4, height: 4.4)
+        p.addEllipse(in: hole)
+        return p
+    }
+}
+
+/// 画笔：横着画好再整体转 -42°
+private struct BrushShape: Shape {
+    func path(in r: CGRect) -> Path {
+        var p = Path()
+        let cx = r.midX
+        let cy = r.midY
+        // 笔杆
+        p.addRoundedRect(in: CGRect(x: cx - 2.6, y: cy - 1.1, width: 10.4, height: 2.2),
+                         cornerSize: CGSize(width: 1.1, height: 1.1))
+        // 笔头（比笔杆粗一点）
+        p.addRoundedRect(in: CGRect(x: cx - 6.2, y: cy - 1.7, width: 3.8, height: 3.4),
+                         cornerSize: CGSize(width: 1.3, height: 1.3))
+        // 笔尖
+        p.move(to: CGPoint(x: cx - 6.2, y: cy - 1.7))
+        p.addLine(to: CGPoint(x: cx - 9.2, y: cy))
+        p.addLine(to: CGPoint(x: cx - 6.2, y: cy + 1.7))
+        p.closeSubpath()
+        return p
     }
 }
 
