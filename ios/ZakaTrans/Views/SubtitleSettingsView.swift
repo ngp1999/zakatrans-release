@@ -59,8 +59,10 @@ struct SubtitleSettingsView: View {
     // MARK: - 预览窗口的尺寸
 
     /// 三档窗口的真实像素，跟画中画里开出来的一致
-    private var realDim: CGSize {
-        switch app.prefs.pip {
+    private var realDim: CGSize { Self.dim(for: app.prefs.pip) }
+
+    private static func dim(for code: String) -> CGSize {
+        switch code {
         case "M": return CGSize(width: 840, height: 360)
         case "B": return CGSize(width: 1080, height: 640)
         default:  return CGSize(width: 1080, height: 216)
@@ -82,12 +84,25 @@ struct SubtitleSettingsView: View {
         return (w, h, k)
     }
 
-    /// 字号：跟画中画同一套算法，再乘以预览的缩放比
+    /// 预览的固定占位高度：按三档里最高的那一档算。
+    /// 切窗口时预览框只是在同一个槽里变大变小，下面的设置项不会跟着上下跳。
+    private var slotHeight: CGFloat {
+        let w = UIScreen.main.bounds.width - 32 - 32
+        let cap: CGFloat = 224
+        var h: CGFloat = 0
+        for code in ["X", "M", "B"] {
+            let dim = Self.dim(for: code)
+            h = max(h, min(dim.height * (w / dim.width), cap))
+        }
+        return h
+    }
+
+    /// 字号：跟画中画同一套算法（含刚放大的那一档），再乘以预览的缩放比
     private func previewFonts(k: CGFloat) -> (zh: CGFloat, src: CGFloat) {
         let dim = realDim
         if app.prefs.pip == "X" {
-            let f = min(dim.width / 24.0, dim.height / 4.5)
-            let font = max(11.0, min(46.0, f)) * k
+            let f = min(dim.width / 22.4, dim.height / 4.35)
+            let font = max(11.0, min(52.0, f)) * k
             return (font, font * 0.68)
         }
         let scale = max(0.45, min(2.10, sqrt((dim.width * dim.height) / (480.0 * 360.0))))
@@ -113,18 +128,19 @@ struct SubtitleSettingsView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Color.white.opacity(0.10), lineWidth: 0.6)
         )
+        // 固定槽位：切窗口时只是这块框在槽里换尺寸，下面的设置项原地不动
         .frame(maxWidth: .infinity)
+        .frame(height: slotHeight)
+        .animation(.easeInOut(duration: 0.22), value: app.prefs.pip)
     }
 
-    /// 小档（5:1）：中文一行在上、原文一行在下，整批换
+    /// 小档（5:1）：中文一行在上、原文一行在下；**一行只放一整句**，不跟下一句拼行
     private func widePreview(_ m: (w: CGFloat, h: CGFloat, k: CGFloat)) -> some View {
         let f = previewFonts(k: m.k)
         let a = Self.samples[wideIndex % Self.samples.count]
-        let b = Self.samples[(wideIndex + 1) % Self.samples.count]
-        let two = (a.zh.count + b.zh.count) <= 14
         return VStack(spacing: max(1, m.h * 0.06)) {
             if app.prefs.mode != "source" {
-                Text(two ? a.zh + "\u{3000}" + b.zh : a.zh)
+                Text(a.zh)
                     .font(.system(size: f.zh, weight: .bold))
                     .foregroundStyle(Color(uiColor: app.prefs.effectiveColor))
                     .lineLimit(2)
@@ -132,7 +148,7 @@ struct SubtitleSettingsView: View {
                     .multilineTextAlignment(.center)
             }
             if app.prefs.mode != "zh" {
-                Text(two ? a.src + "  " + b.src : a.src)
+                Text(a.src)
                     .font(.system(size: f.src))
                     .foregroundStyle(Color(uiColor: app.prefs.secondaryColor))
                     .lineLimit(2)
@@ -203,7 +219,7 @@ struct SubtitleSettingsView: View {
         ticker = nil
         feed = Self.tail(count: visibleRows, endingAt: 0)
         wideIndex = 0
-        let t = Timer.scheduledTimer(withTimeInterval: 1.9, repeats: true) { _ in
+        let t = Timer.scheduledTimer(withTimeInterval: 2.7, repeats: true) { _ in
             advance()
         }
         RunLoop.main.add(t, forMode: .common)
@@ -212,12 +228,12 @@ struct SubtitleSettingsView: View {
 
     private func advance() {
         if app.prefs.pip == "X" {
-            withAnimation(.easeInOut(duration: 0.28)) { wideIndex += 1 }
+            withAnimation(.easeInOut(duration: 0.55)) { wideIndex += 1 }
             return
         }
         let next = (feed.last.flatMap { Self.indexOf($0) } ?? -1) + 1
         let line = PreviewLine(zh: Self.samples[wrap(next)].zh, src: Self.samples[wrap(next)].src)
-        withAnimation(.easeInOut(duration: 0.46)) {
+        withAnimation(.easeInOut(duration: 0.62)) {
             if feed.count >= visibleRows { feed.removeFirst() }
             feed.append(line)
         }
@@ -271,7 +287,7 @@ struct SubtitleSettingsView: View {
     private var lookCard: some View {
         VStack(spacing: 0) {
             settingRow(label: "字体颜色") {
-                HStack(spacing: 7) {
+                HStack(spacing: 6) {
                     ForEach(SubtitlePrefs.colors, id: \.0) { opt in
                         Button {
                             Haptics.tap()
@@ -279,16 +295,26 @@ struct SubtitleSettingsView: View {
                                 app.updatePrefs { $0.color = opt.0 }
                             }
                         } label: {
-                            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .fill(Color(uiColor: opt.2))
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 26)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(
-                                        app.prefs.color == opt.0 ? Theme.ink : Color(uiColor: .separator),
-                                        lineWidth: app.prefs.color == opt.0 ? 2 : 0.7
+                            ZStack {
+                                Circle()
+                                    .fill(Color(uiColor: opt.2))
+                                    .frame(width: 24, height: 24)
+                                    .overlay(
+                                        Circle().strokeBorder(
+                                            app.prefs.color == opt.0 ? Theme.ink : Color(uiColor: .separator),
+                                            lineWidth: app.prefs.color == opt.0 ? 2 : 0.8
+                                        )
                                     )
-                                )
+                                    .overlay(
+                                        // 选中的再加一圈外环，圆圈小的时候也一眼看得出选的是哪个
+                                        Circle()
+                                            .strokeBorder(Theme.ink.opacity(app.prefs.color == opt.0 ? 0.18 : 0),
+                                                          lineWidth: 3)
+                                            .frame(width: 30, height: 30)
+                                    )
+                            }
+                            .frame(maxWidth: .infinity)
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                     }
@@ -343,7 +369,7 @@ struct SubtitleSettingsView: View {
 
     private var windowCard: some View {
         VStack(spacing: 0) {
-            settingRow(label: "悬浮窗大小") {
+            settingRow(label: "浮窗大小") {
                 Picker("窗口大小", selection: Binding(
                     get: { app.prefs.pip },
                     set: { v in
