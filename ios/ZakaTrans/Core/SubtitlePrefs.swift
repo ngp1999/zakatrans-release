@@ -205,18 +205,25 @@ struct SubtitlePrefs: Codable, Equatable {
     /// 之前那两档「半透明黑 / 无背景」在系统窗口里和纯黑一模一样，等于没做。
     static let backgrounds: [(String, String, UIColor)] = [
         ("black",    "纯黑", UIColor(red: 0.00, green: 0.00, blue: 0.00, alpha: 1)),
-        // 二号、三号色以前跟纯黑几乎分不出来（0.17 灰 / 0.17 蓝），
-        // 在屏上看着就是「怎么点都是黑的」。现在拉开：一个中性炭灰、一个明显偏亮的宝蓝。
-        ("graphite", "炭灰", UIColor(red: 0.30, green: 0.30, blue: 0.33, alpha: 1)),
-        ("navy",     "宝蓝", UIColor(red: 0.05, green: 0.26, blue: 0.72, alpha: 1)),
+        // 二号、三号：一个暖褐、一个冷青，跟纯黑、墨绿、深紫都分得开
+        ("cocoa",    "深咖", UIColor(red: 0.22, green: 0.14, blue: 0.10, alpha: 1)),
+        ("teal",     "深青", UIColor(red: 0.04, green: 0.22, blue: 0.26, alpha: 1)),
         ("forest",   "墨绿", UIColor(red: 0.03, green: 0.28, blue: 0.21, alpha: 1)),
         ("wine",     "酒红", UIColor(red: 0.40, green: 0.04, blue: 0.14, alpha: 1)),
         ("indigo",   "深紫", UIColor(red: 0.20, green: 0.09, blue: 0.44, alpha: 1)),
         ("paper",    "米白", UIColor(red: 0.94, green: 0.94, blue: 0.95, alpha: 1)),
     ]
 
+    /// 老版本存下来的背景键（graphite / navy）映射到新档位，
+    /// 升级后不会莫名其妙掉回纯黑。
+    private static let legacyBackground: [String: String] = [
+        "graphite": "cocoa",
+        "navy": "teal",
+    ]
+
     static func uiBackground(_ name: String) -> UIColor {
-        backgrounds.first { $0.0 == name }?.2 ?? UIColor.black
+        let key = legacyBackground[name] ?? name
+        return backgrounds.first { $0.0 == key }?.2 ?? UIColor.black
     }
 
     var backgroundColor: Color { Color(uiColor: SubtitlePrefs.uiBackground(background)) }
