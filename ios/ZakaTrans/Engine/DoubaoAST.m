@@ -209,7 +209,9 @@ static NSString *ZTSign(NSString *token, NSString *method, NSString *path,
             NSString *src = s.srcLang.length ? s.srcLang : ([ZKStore setting:@"asrlang"] ?: @"auto");
             NSString *dst = s.dstLang.length ? s.dstLang : ([ZKStore setting:@"dstlang"] ?: @"zh");
             NSString *md = s.mode.length ? s.mode : @"subtitle";
-            ws = [NSString stringWithFormat:@"%@&src=%@&dst=%@&mode=%@", ws, src, dst, md];
+            // rep=1：这条客户端会处理「整句替换」的译文（replace=true）。
+            // 老版本不认识这个标记，服务端就不发替换，免得把半句和整句接成一段。
+            ws = [NSString stringWithFormat:@"%@&src=%@&dst=%@&mode=%@&rep=1", ws, src, dst, md];
 
             s->_ticket = json[@"ticket"];
             s->_failCount = 0;
@@ -272,10 +274,15 @@ static NSString *ZTSign(NSString *token, NSString *method, NSString *path,
         NSString *t = m[@"text"];
         if (!t.length) return;
         BOOL final = [m[@"final"] boolValue];
+        BOOL replace = [m[@"replace"] boolValue];
         NSInteger seg = [m[@"seg"] integerValue];
         dispatch_async(dispatch_get_main_queue(), ^{
             if (final) {
-                if (self.onTransEnd) self.onTransEnd(t, seg);
+                if (replace && self.onTransReplace) {
+                    self.onTransReplace(t, seg);
+                } else if (self.onTransEnd) {
+                    self.onTransEnd(t, seg);
+                }
             } else {
                 if (self.onTransPartial) self.onTransPartial(t, seg);
             }
