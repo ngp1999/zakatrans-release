@@ -52,6 +52,7 @@ struct RootView: View {
 /// 三个入口变成两个模式 + 一个抽屉，屏效比原来高，也更像专业工具。
 struct MainView: View {
     @ObservedObject private var app = AppState.shared
+    @ObservedObject private var cloud = Cloud.shared
 
     enum Mode: String, CaseIterable, Identifiable {
         case subtitle = "实时字幕"
@@ -60,7 +61,7 @@ struct MainView: View {
     }
 
     @State private var mode: Mode = .subtitle
-    @State private var showProfile = false
+    @State private var showEdit = false
     @Namespace private var segAnim
 
     var body: some View {
@@ -73,8 +74,8 @@ struct MainView: View {
                 content
             }
         }
-        .sheet(isPresented: $showProfile) {
-            NavigationStack { ProfileView() }
+        .sheet(isPresented: $showEdit) {
+            NavigationStack { AccountEditView() }
         }
         // 画中画的锚点必须挂在整个 App 的最外层，而不是某个页面里：
         // 锚点一离开窗口，系统就会把画中画收掉——切模式、进后台都属于这种情况。
@@ -106,14 +107,23 @@ struct MainView: View {
 
             Spacer(minLength: 8)
 
+            // 头像和昵称是同一个入口：点哪一个都直接弹修改面板
             Button {
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                showProfile = true
+                showEdit = true
             } label: {
-                AvatarView(size: 32)
-                    .overlay(
-                        Circle().strokeBorder(Theme.hairline, lineWidth: 0.8)
-                    )
+                HStack(spacing: 8) {
+                    Text(cloud.profile?.displayName ?? "语幕用户")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(Theme.sub)
+                        .lineLimit(1)
+                        .frame(maxWidth: 96, alignment: .trailing)
+                    AvatarView(size: 32)
+                        .overlay(
+                            Circle().strokeBorder(Theme.hairline, lineWidth: 0.8)
+                        )
+                }
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
         }
