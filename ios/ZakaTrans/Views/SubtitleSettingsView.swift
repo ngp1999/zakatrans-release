@@ -11,6 +11,11 @@ struct SubtitleSettingsView: View {
     @State private var ticker: Timer?
     /// 分段档的打字机（跟真窗口同一个速度：中文 22 字/秒、原文 52 字符/秒）
     @State private var typer: Timer?
+    /// 分段档的两块连续文本：上面一整段译文、下面一整段原文（跟画中画里同一条算法）
+    @State private var segZh = TypeBlock()
+    @State private var segSrc = TypeBlock()
+    /// 分段档自己往下接的句子下标
+    @State private var segIndex = 0
     /// 小档（5:1）：一次上一批，整批换
     @State private var wideIndex = 0
     /// sheet 的高度：量完内容再定，避免系统给一档固定高度、底下留一截空白
@@ -23,6 +28,54 @@ struct SubtitleSettingsView: View {
         /// 分段（打字机）用：这一行已经露出几个字。Int.max = 全显示
         var zhShown: Int = Int.max
         var srcShown: Int = Int.max
+    }
+
+    /// 分段档的一整段文本：full 是攒下来的全文，trim 是头顶被顶掉的字数，
+    /// pending 是尾巴上还没露出来的字数。三个数一减就是屏幕上该显示的那一段。
+    private struct TypeBlock: Equatable {
+        var full = ""
+        var trim = 0
+        var pending: CGFloat = 0
+    }
+
+    /// 量高度、算裁几个字——跟真窗口（ZKSegmentView）里那两个方法一字不差。
+    private enum SegType {
+        static func height(_ t: NSString, font: UIFont, width: CGFloat) -> CGFloat {
+            guard t.length > 0, width >= 8 else { return 0 }
+            let r = t.boundingRect(
+                with: CGSize(width: width, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                attributes: [.font: font],
+                context: nil
+            )
+            return ceil(r.height)
+        }
+
+        /// 溢出了就从最前面裁，二分找到「正好装得下」的最小字数，再挪到词/句边界，
+        /// 这样头顶消失的是完整的一行，不会从半个词中间断开。
+        static func trimCount(_ vis: NSString, font: UIFont, width: CGFloat, boxH: CGFloat) -> Int {
+            let n = vis.length
+            if n <= 0 { return 0 }
+            if height(vis, font: font, width: width) <= boxH + 0.5 { return 0 }
+            var lo = 1, hi = n
+            while lo < hi {
+                let mid = (lo + hi) / 2
+                let t = vis.substring(from: mid) as NSString
+                if height(t, font: font, width: width) <= boxH + 0.5 { hi = mid } else { lo = mid + 1 }
+            }
+            var k = lo
+            if k >= n { return n }
+            let marks = CharacterSet(charactersIn: " \n。，、；：！？.,;:!?")
+            var i = k
+            let lim = min(n - 1, k + 16)
+            while i <= lim {
+                if let u = Unicode.Scalar(vis.character(at: i)), marks.contains(u) { k = i + 1; break }
+                i += 1
+            }
+            if k >= n { return n }
+            while k < n - 1, vis.character(at: k) == 32 { k += 1 }
+            return k
+        }
     }
 
     var body: some View {
@@ -61,13 +114,15 @@ struct SubtitleSettingsView: View {
         // 一换档下面的字整批换掉，看着就是「字在跳」。
         .onChange(of: app.prefs.pip) { _ in
             withAnimation(.easeInOut(duration: 0.22)) { resizeFeed() }
+            ensureSegSeed()
         }
         .onChange(of: app.prefs.mode) { _ in
             withAnimation(.easeInOut(duration: 0.22)) { resizeFeed() }
+            ensureSegSeed()
         }
         .onChange(of: app.prefs.scroll) { _ in
-            finishTyping(at: feed.count - 1)
             withAnimation(.easeInOut(duration: 0.22)) { resizeFeed() }
+            ensureSegSeed()
         }
     }
 
@@ -232,43 +287,51 @@ struct SubtitleSettingsView: View {
         .clipped()
     }
 
-    /// 中/大档 · 分段：一行一句、由上往下排满整窗；新句进来时**逐字打出来**（打字机）。
-    /// 以前是上半屏译文、下半屏原文两块各自滚动，跟真窗口对不上，也不是用户要的那个效果。
+    /// 中/大档 · 分段：窗口分上下两块——上面一整段译文、下面一整段原文，各是一段连续文字。
+    /// 新句像打字机一样一个字一个字往后长；长满一屏之后**最上面那一行被顶掉**、其余重新排布，
+    /// 全程没有位移。真窗口（ZKSegmentView）用的是同一套算法，两边看到的一样。
     private func segmentPreview(_ m: (w: CGFloat, h: CGFloat, k: CGFloat)) -> some View {
         let f = previewFonts(k: m.k)
-        let single = app.prefs.mode != "bilingual"
-        let slot = slotHeight(m)
-        let gap = max(2, m.h * 0.012)
-        let rows = Array(feed.suffix(visibleRows))
-        return VStack(alignment: .leading, spacing: gap) {
-            ForEach(rows) { it in
-                VStack(alignment: .leading, spacing: max(0.5, m.h * 0.004)) {
-                    if app.prefs.mode != "source" {
-                        Text(String(it.zh.prefix(max(0, it.zhShown))))
-                            .font(.system(size: f.zh, weight: .bold))
-                            .foregroundStyle(Color(uiColor: app.prefs.effectiveColor))
-                            .lineLimit(single ? 2 : 1)
-                            .minimumScaleFactor(single ? 1 : 0.5)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    if app.prefs.mode != "zh" {
-                        Text(String(it.src.prefix(max(0, it.srcShown))))
-                            .font(.system(size: single ? f.zh : f.src, weight: single ? .bold : .regular))
-                            .foregroundStyle(Color(uiColor: app.prefs.secondaryColor))
-                            .lineLimit(single ? 2 : 1)
-                            .minimumScaleFactor(single ? 1 : 0.5)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-                .frame(height: slot, alignment: .center)
-                .transition(.asymmetric(insertion: .move(edge: .bottom),
-                                        removal: .move(edge: .top)))
+        let two = app.prefs.mode == "bilingual"
+        let inset = max(4, m.h * 0.03)
+        let midGap = two ? max(3, f.zh * 0.30) : 0
+        let avail = max(10, m.h - inset * 2 - midGap)
+        let blockH = two ? (avail / 2).rounded(.down) : avail
+        let padX = max(3, m.w * 0.016)
+        return VStack(alignment: .leading, spacing: 0) {
+            if app.prefs.mode != "source" {
+                Text(segVisible(segZh))
+                    .font(.system(size: f.zh, weight: .bold))
+                    .foregroundStyle(Color(uiColor: app.prefs.effectiveColor))
+                    .lineSpacing(0)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(height: blockH, alignment: .top)
+                    .clipped()
             }
+            if two { Color.clear.frame(height: midGap) }
+            if app.prefs.mode != "zh" {
+                Text(segVisible(segSrc))
+                    .font(.system(size: two ? f.src : f.zh, weight: two ? .regular : .bold))
+                    .foregroundStyle(Color(uiColor: app.prefs.secondaryColor))
+                    .lineSpacing(0)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(height: blockH, alignment: .top)
+                    .clipped()
+            }
+            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .clipped()
+        .padding(.top, inset)
+        .padding(.horizontal, padX)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// 屏幕上该显示的那一段：整段里扣掉头顶被顶掉的、和尾巴还没长出来的。
+    private func segVisible(_ b: TypeBlock) -> String {
+        let s = b.full as NSString
+        let n = s.length
+        let from = min(max(0, b.trim), n)
+        let to = max(from, n - Int(b.pending.rounded(.down)))
+        return s.substring(with: NSRange(location: from, length: to - from))
     }
 
     /// 中档 / 大档 · 上推：一行一句，新句从底下进来，整列被它顶着往上一格。
@@ -358,6 +421,12 @@ struct SubtitleSettingsView: View {
         typer = nil
         feed = Self.tail(count: visibleRows, endingAt: 0)
         wideIndex = 0
+        segZh = TypeBlock()
+        segSrc = TypeBlock()
+        segIndex = 0
+        seedSeg()
+        seedSeg()
+        retrimBlocks()
         let t = Timer.scheduledTimer(withTimeInterval: 2.7, repeats: true) { _ in
             advance()
         }
@@ -371,63 +440,121 @@ struct SubtitleSettingsView: View {
             withAnimation(.easeInOut(duration: 0.30)) { wideIndex += 1 }
             return
         }
-        let next = (feed.last.flatMap { Self.indexOf($0) } ?? -1) + 1
-        var line = PreviewLine(zh: Self.samples[wrap(next)].zh, src: Self.samples[wrap(next)].src)
-        let typing = app.prefs.scroll == "segment"
-        if typing {
-            line.zhShown = 0
-            line.srcShown = 0
+        if app.prefs.scroll == "segment" {
+            segNextSentence()
+            return
         }
+        let next = (feed.last.flatMap { Self.indexOf($0) } ?? -1) + 1
+        let line = PreviewLine(zh: Self.samples[wrap(next)].zh, src: Self.samples[wrap(next)].src)
         // ease-out 0.46s：跟真窗口那条逐帧插值同一个节奏（先快后稳，不是匀速滑过去）
         withAnimation(.easeOut(duration: 0.46)) {
             if feed.count >= visibleRows { feed.removeFirst() }
             feed.append(line)
         }
-        if typing { startTyping() }
     }
 
-    /// 分段档的打字机：中文 22 字/秒、原文 52 字符/秒（跟真窗口一致）。
-    /// 只打最后一行，前面的行不动。
+    // MARK: - 分段（打字机）
+
+    /// 往两段文本的尾巴上接一句，不设位移——字是自己长出来的。
+    private func segJoin(_ buf: String, _ s: String) -> String {
+        if buf.isEmpty { return s }
+        if buf.hasSuffix(s) { return buf }
+        if let c = s.unicodeScalars.first, c.isASCII, !buf.hasSuffix(" ") { return buf + " " + s }
+        return buf + s
+    }
+
+    /// 垫一句进去（已经全显示，不参与打字）
+    private func seedSeg() {
+        let s = Self.samples[wrap(segIndex)]
+        segIndex = wrap(segIndex + 1)
+        if app.prefs.mode != "source" { segZh.full = segJoin(segZh.full, s.zh) }
+        if app.prefs.mode != "zh" { segSrc.full = segJoin(segSrc.full, s.src) }
+    }
+
+    private func segNextSentence() {
+        let s = Self.samples[wrap(segIndex)]
+        segIndex = wrap(segIndex + 1)
+        if app.prefs.mode != "source" {
+            segZh.full = segJoin(segZh.full, s.zh)
+            segZh.pending += CGFloat((s.zh as NSString).length)
+        }
+        if app.prefs.mode != "zh" {
+            segSrc.full = segJoin(segSrc.full, s.src)
+            segSrc.pending += CGFloat((s.src as NSString).length)
+        }
+        startTyping()
+    }
+
+    /// 分段档打字机：译文 22 字/秒、原文 52 字符/秒，落后了会自动快一点（是变速，不是跳字）。
     private func startTyping() {
-        typer?.invalidate()
-        typer = nil
-        finishTyping(at: feed.count - 2)
+        if typer != nil { return }
         let t = Timer(timeInterval: 0.05, repeats: true) { timer in
-            guard app.prefs.scroll == "segment", let last = feed.last else {
-                timer.invalidate()
-                return
-            }
-            if last.zhShown == Int.max {
-                timer.invalidate()
-                return
-            }
-            let zc = last.zh.count
-            let sc = last.src.count
-            var out = last
-            out.zhShown = min(zc, last.zhShown + 2)
-            out.srcShown = min(sc, last.srcShown + 3)
-            if out.zhShown >= zc && out.srcShown >= sc {
-                out.zhShown = Int.max
-                out.srcShown = Int.max
+            guard app.prefs.scroll == "segment" else {
                 timer.invalidate()
                 typer = nil
+                return
             }
-            if feed.last?.id == out.id {
-                feed[feed.count - 1] = out
+            var z = segZh
+            var r = segSrc
+            var changed = false
+            if z.pending > 0 {
+                let boost = min(4, 1 + max(0, z.pending - 12) / 24)
+                z.pending = max(0, z.pending - 0.05 * 22 * boost)
+                changed = true
+            }
+            if r.pending > 0 {
+                let boost = min(4, 1 + max(0, r.pending - 24) / 40)
+                r.pending = max(0, r.pending - 0.05 * 52 * boost)
+                changed = true
+            }
+            if z.pending <= 0.5 { z.pending = 0 }
+            if r.pending <= 0.5 { r.pending = 0 }
+            if changed {
+                segZh = z
+                segSrc = r
+                retrimBlocks()
+            }
+            if z.pending <= 0 && r.pending <= 0 {
+                timer.invalidate()
+                typer = nil
             }
         }
         RunLoop.main.add(t, forMode: .common)
         typer = t
     }
 
-    /// 把还没打完的那一行直接显示全——被下一句顶掉、或者换了档，都不该停在半句上
-    private func finishTyping(at index: Int) {
-        guard index >= 0, index < feed.count else { return }
-        var out = feed[index]
-        if out.zhShown == Int.max && out.srcShown == Int.max { return }
-        out.zhShown = Int.max
-        out.srcShown = Int.max
-        feed[index] = out
+    /// 裁头顶：块高、字号、左右留白都跟真窗口同一套算法（ZKSegmentView.render）。
+    private func retrimBlocks() {
+        let m = metrics
+        let f = previewFonts(k: m.k)
+        let two = app.prefs.mode == "bilingual"
+        let inset = max(4, m.h * 0.03)
+        let midGap = two ? max(3, f.zh * 0.30) : 0
+        let avail = max(10, m.h - inset * 2 - midGap)
+        let blockH = two ? (avail / 2).rounded(.down) : avail
+        let bw = max(8, m.w - 2 * max(3, m.w * 0.016))
+        if app.prefs.mode != "source" {
+            let cut = SegType.trimCount(segVisible(segZh) as NSString,
+                                        font: .systemFont(ofSize: f.zh, weight: .bold),
+                                        width: bw, boxH: blockH)
+            if cut > 0 { segZh.trim += cut }
+        }
+        if app.prefs.mode != "zh" {
+            let font: UIFont = two ? .systemFont(ofSize: f.src) : .systemFont(ofSize: f.zh, weight: .bold)
+            let cut = SegType.trimCount(segVisible(segSrc) as NSString, font: font, width: bw, boxH: blockH)
+            if cut > 0 { segSrc.trim += cut }
+        }
+    }
+
+    /// 换到分段档、或者换档之后，块里没东西就垫两句，别让预览空着
+    private func ensureSegSeed() {
+        guard app.prefs.scroll == "segment", app.prefs.pip != "X" else { return }
+        if segZh.full.isEmpty && segSrc.full.isEmpty {
+            seedSeg()
+            seedSeg()
+        }
+        retrimBlocks()
+        startTyping()
     }
 
     private func wrap(_ i: Int) -> Int {
