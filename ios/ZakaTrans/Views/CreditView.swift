@@ -1,17 +1,17 @@
 import SwiftUI
 import UIKit
 
-/// 我的积分：余额 + 充值档位 + 购买协议勾选。
-/// 计费规则从这里挪走了——统一收进《付费协议》，页面上只留「买多少、付多少」。
+/// 我的积分：余额 + 充值积分档位 + 购买协议勾选。
+/// 计费规则统一收在《付费协议》里，这里只留「买多少、付多少」。
 struct CreditView: View {
     @ObservedObject private var cloud = Cloud.shared
     @ObservedObject private var purch = Purchases.shared
 
-    @State private var showPurchase = false
     /// 协议阅读弹窗
     @State private var showTerms = false
     @State private var agreed = false
-    @State private var hint: String?
+    /// 没勾协议就点了档位：记下点的是哪一档，弹窗里同意了就直接买这一档
+    @State private var pendingTier: String?
 
     private let haptic = UIImpactFeedbackGenerator(style: .light)
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 3)
@@ -22,13 +22,6 @@ struct CreditView: View {
                 balanceBlock
                 tiersBlock
                 agreementRow
-                if let hint {
-                    Text(hint)
-                        .font(.system(size: 13))
-                        .foregroundStyle(Theme.warn)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                }
                 if let m = purch.message {
                     Text(m)
                         .font(.system(size: 13))
@@ -46,11 +39,13 @@ struct CreditView: View {
         .background(Theme.bg)
         .navigationTitle("我的积分")
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $showPurchase) {
-            PurchaseView()
-                .presentationDetents([.fraction(0.66), .large])
-                .presentationDragIndicator(.visible)
+        // 未勾选协议就点档位时的确认弹窗：自绘，因为要在弹窗里直接点开《付费协议》
+        .overlay {
+            if pendingTier != nil {
+                agreementDialog
+            }
         }
+        .animation(.easeOut(duration: 0.18), value: pendingTier)
         .sheet(isPresented: $showTerms) {
             NavigationStack {
                 TermsView(kind: .payment)
@@ -72,54 +67,36 @@ struct CreditView: View {
     // MARK: - 余额
 
     private var balanceBlock: some View {
-        VStack(spacing: 18) {
-            HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("可用积分")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Theme.sub)
-                    HStack(alignment: .firstTextBaseline, spacing: 5) {
-                        Text(Format.credits(cloud.balanceCredits))
-                            .font(.system(size: 40, weight: .semibold).monospacedDigit())
-                            .foregroundStyle(Theme.ink)
-                            .contentTransition(.numericText())
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.6)
-                        Text("积分")
-                            .font(.system(size: 13))
-                            .foregroundStyle(Theme.sub)
-                    }
-                }
-                Spacer(minLength: 0)
-                Button {
-                    Haptics.tap()
-                    showPurchase = true
-                } label: {
-                    Text("充值")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 24)
-                        .frame(height: 38)
-                        .background(Theme.accent)
-                        .clipShape(Capsule())
-                }
-                .buttonStyle(TileButtonStyle())
+        VStack(alignment: .leading, spacing: 6) {
+            Text("可用积分")
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.sub)
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                Text(Format.credits(cloud.balanceCredits))
+                    .font(.system(size: 40, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(Theme.ink)
+                    .contentTransition(.numericText())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                Text("积分")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.sub)
             }
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 20)
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.card)
         .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
     }
 
     // MARK: - 充值档位
 
-    /// 档位直接摆在页面上，不用再点一次「购买积分与档位」才看得到。
-    /// 价格用 StoreKit 返回的本地化价格；拉不到就按兜底表显示。
+    /// 档位直接摆在页面上，点哪一档就是买哪一档。
+    /// 价格用 StoreKit 返回的本地化价格；拉不到就显示「未上架」，不编价格。
     private var tiersBlock: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("充值档位")
+            Text("充值积分")
                 .font(.system(size: 13))
                 .foregroundStyle(Theme.sub)
                 .padding(.leading, 4)
@@ -137,11 +114,12 @@ struct CreditView: View {
         let ready = purch.available(id)
         return Button {
             haptic.impactOccurred()
+            guard ready else { return }
             guard agreed else {
-                hint = "购买前请先阅读并勾选《付费协议》"
+                // 没勾协议：先弹确认，弹窗里可以直接读协议
+                pendingTier = id
                 return
             }
-            hint = nil
             Task { await purch.buy(id: id) }
         } label: {
             VStack(spacing: 5) {
@@ -181,7 +159,6 @@ struct CreditView: View {
             Button {
                 Haptics.tap()
                 withAnimation(.easeOut(duration: 0.14)) { agreed.toggle() }
-                if agreed { hint = nil }
             } label: {
                 Image(systemName: agreed ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 21))
@@ -209,5 +186,86 @@ struct CreditView: View {
             Spacer(minLength: 0)
         }
         .padding(.top, 2)
+    }
+
+    // MARK: - 未勾协议的确认弹窗
+
+    private var agreementDialog: some View {
+        ZStack {
+            Color.black.opacity(0.30)
+                .ignoresSafeArea()
+                .onTapGesture { pendingTier = nil }
+
+            VStack(alignment: .leading, spacing: 14) {
+                Text("购买前请确认")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Theme.ink)
+
+                Text("购买积分需先阅读并同意《付费协议》。积分按实际用量扣除，充值通过 App Store 内购完成，退款按 Apple 规则处理。")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.sub)
+                    .lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Button {
+                    Haptics.tap()
+                    showTerms = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Text("阅读《付费协议》")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(Theme.accent)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Theme.accent)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                HStack(spacing: 10) {
+                    Button {
+                        pendingTier = nil
+                    } label: {
+                        Text("取消")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(Theme.ink)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 44)
+                            .background(Theme.fill)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .buttonStyle(TileButtonStyle())
+
+                    Button {
+                        let id = pendingTier
+                        pendingTier = nil
+                        withAnimation(.easeOut(duration: 0.14)) { agreed = true }
+                        if let id { Task { await purch.buy(id: id) } }
+                    } label: {
+                        Text("同意并购买")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 44)
+                            .background(Theme.accent)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .buttonStyle(TileButtonStyle())
+                }
+                .padding(.top, 2)
+            }
+            .padding(20)
+            .frame(maxWidth: 330)
+            .background(Theme.bg)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(Theme.hairline, lineWidth: 0.7)
+            )
+            .shadow(color: .black.opacity(0.18), radius: 26, y: 10)
+            .padding(.horizontal, 32)
+        }
+        .transition(.opacity)
     }
 }
