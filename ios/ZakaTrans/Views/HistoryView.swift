@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// 对话记录：一场一条，点进去能看完整转写、让 AI 总结、导出字幕。
+/// 对话记录：一场一条，点进去能看完整转写、让 AI 总结。
 /// 列表一行说清四件事：什么时候、聊了多久、花了多少积分、这一场讲了什么。
 struct HistoryView: View {
     @ObservedObject private var cloud = Cloud.shared
@@ -125,7 +125,7 @@ struct HistoryView: View {
     }
 }
 
-/// 单场详情：摘要 + 完整转写 + 导出字幕
+/// 单场详情：摘要 + 完整转写
 struct SessionDetailView: View {
     let session: Cloud.UsageSession
     @ObservedObject private var cloud = Cloud.shared
@@ -135,7 +135,6 @@ struct SessionDetailView: View {
     @State private var loading = true
     @State private var summarizing = false
     @State private var error: String?
-    @State private var showExport = false
 
     var body: some View {
         ScrollView {
@@ -151,22 +150,6 @@ struct SessionDetailView: View {
         .background(Theme.bg)
         .navigationTitle("对话详情")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showExport = true
-                } label: {
-                    Image(systemName: "square.and.arrow.up")
-                        .font(.system(size: 15, weight: .medium))
-                }
-                .disabled((detail?.lines.count ?? 0) == 0)
-            }
-        }
-        .sheet(isPresented: $showExport) {
-            SubtitleExportView(session: session, lines: detail?.lines ?? [])
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-        }
         .task { await load() }
     }
 
@@ -271,11 +254,6 @@ struct SessionDetailView: View {
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(Theme.ink)
                 Spacer()
-                if (detail?.lines.count ?? 0) > 0 {
-                    Button("导出字幕") { showExport = true }
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(Theme.accent)
-                }
             }
 
             if loading {
