@@ -19,6 +19,9 @@
 // 这条会话的语向（不设就读设置里的 asr/dst）
 @property (nonatomic, copy) NSString *srcLang;
 @property (nonatomic, copy) NSString *dstLang;
+// 这条会话是干什么用的：subtitle（实时字幕）/ interp（同声传译）。
+// 只用来给账目标签，结算时随会话一起记下来，使用明细里才分得清。
+@property (nonatomic, copy) NSString *mode;
 
 // 原文（增量 / 整句）。seg = 这一句的编号，译文那头带同一个号。
 @property (nonatomic, copy) void (^onSourcePartial)(NSString *delta, NSInteger seg);
