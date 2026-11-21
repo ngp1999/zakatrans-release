@@ -160,8 +160,8 @@ static BOOL ZKIsStub(NSString *s) {
     ZKScript sc = ZKSriptOf(s);
     // 放宽：上游按静音分句不看标点，「How old are you?」这种整句也会被当成
     // 短段吐下来。门槛按「一整句的量」给，才不会两三个词就自己占一行。
-    if (sc == ZKScriptHan || sc == ZKScriptKana || sc == ZKScriptHangul) return n.length <= 9;
-    if (sc == ZKScriptLatin) return n.length <= 24;
+    if (sc == ZKScriptHan || sc == ZKScriptKana || sc == ZKScriptHangul) return n.length <= 14;
+    if (sc == ZKScriptLatin) return n.length <= 40;
     return NO;
 }
 
@@ -399,6 +399,9 @@ static double ZKSim(NSString *a, NSString *b) {
     // 两条独立会话
     _toOther = [ZKDoubaoAST session];
     _toMine = [ZKDoubaoAST session];
+    // 这两条是面对面对话用的，账目标成同声传译
+    _toOther.mode = @"interp";
+    _toMine.mode = @"interp";
     [self wire:_toOther side:@"a"];
     [self wire:_toMine side:@"b"];
     [self applyLangs];
@@ -718,7 +721,7 @@ static double ZKSim(NSString *a, NSString *b) {
     // 现在短段（拉丁 24 字符内 / 汉字 9 字内）只要在 4 秒内，一律接回上一句；
     // 长句仍按原规则，只在上一句没说完时才接。
     BOOL glue = tailSeg > 0 && (now - tailAt) < 4.0 && ZKIsStub(t);
-    if (!glue && tailSeg > 0 && !tailClosed && (now - tailAt) < 1.8) glue = YES;
+    if (!glue && tailSeg > 0 && !tailClosed && (now - tailAt) < 3.2) glue = YES;
 
     NSInteger seg = 0;
     NSMutableDictionary *e = nil;
@@ -760,15 +763,45 @@ static double ZKSim(NSString *a, NSString *b) {
 /// 立刻上屏的话，界面上先出半句、第二段到了再补长，看着就是「字在跳、句子断开」；
 /// 译文也常常比原文晚半秒到，先上屏就会看到一行只有原文、再单独补一行译文。
 /// 这一小段等待里接回来的尾巴会并进同一条，上屏时就是完整一句带译文。
-static const NSTimeInterval ZKHoldSeconds = 1.1;
+static const NSTimeInterval ZKHoldSeconds = 2.0;
 
 - (void)holdEmit:(NSString *)side seg:(NSInteger)seg {
     if (seg <= 0) return;
     BOOL a = [side isEqualToString:@"a"];
-    // 上一条还在等、这一条已经是新的一句：先把上一条发出去，别把它吞了
+    // 上一条还在压下、这一条又来了
     NSInteger prev = a ? _holdSegA : _holdSegB;
-    if (prev > 0 && prev != seg) [self flushHold:side];
+    if (prev > 0 && prev != seg) {
+        // 上一条结尾没句末标点（话没说完），间隔又短：基本还是同一句被上游按静音切开的两段。
+        // 并进上一条一起上屏——以前这里直接「压一条、放一条」，界面上就是一句话拆成两个气泡。
+        BOOL closed = a ? _tailClosedA : _tailClosedB;
+        NSTimeInterval tailAt = a ? _tailAtA : _tailAtB;
+        NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+        NSMutableDictionary *pe = [self entryFor:side seg:prev];
+        NSMutableDictionary *ne = [self entryFor:side seg:seg];
+        NSString *ns2 = ne[@"src"] ?: @"";
+        if (!closed && ns2.length && (now - tailAt) < 3.2) {
+            pe[@"src"] = ZKJoinSrc(pe[@"src"] ?: @"", ns2);
+            NSString *nd = ne[@"dst"];
+            if (nd.length) pe[@"dst"] = ZKMergeTrans(pe[@"dst"] ?: @"", nd);
+            pe[@"at"] = @(now);
+            // 这一段的号以后再有译文，也挂到并进去的那条上
+            [(a ? _aliasA : _aliasB) setObject:@(prev) forKey:@(seg)];
+            [(a ? _segA : _segB) removeObjectForKey:@(seg)];
+            if (a) { _tailSegA = prev; _tailAtA = now; _tailClosedA = ZKEndsSentence(pe[@"src"]); }
+            else   { _tailSegB = prev; _tailAtB = now; _tailClosedB = ZKEndsSentence(pe[@"src"]); }
+            [self armHold:side seg:prev];   // 重新计时，等这句真正说完再上屏
+            return;
+        }
+        [self flushHold:side];   // 上一条确实是完整的一句：先发出去，别把它吞了
+    }
 
+    [self armHold:side seg:seg];
+}
+
+/// 开始/重置这一条的上屏倒计时
+- (void)armHold:(NSString *)side seg:(NSInteger)seg {
+    if (seg <= 0) return;
+    BOOL a = [side isEqualToString:@"a"];
     if (a) { _holdSegA = seg; _holdGenA += 1; }
     else   { _holdSegB = seg; _holdGenB += 1; }
     NSInteger gen = a ? _holdGenA : _holdGenB;
