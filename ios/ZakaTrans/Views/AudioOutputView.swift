@@ -35,13 +35,12 @@ struct AudioOutputView: View {
     }
 
     private var header: some View {
-        ZStack {
-            Text("音频输出")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(Theme.ink)
-        }
-        .padding(.horizontal, 16)
-        .frame(height: 46)
+        // 顶部小横条由首页面板统一提供（两个面板同一条），这里只管标题。
+        Text("音频输出")
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(Theme.ink)
+            .frame(maxWidth: .infinity)
+            .frame(height: 44)
     }
 
     private func dismissAudio() {
