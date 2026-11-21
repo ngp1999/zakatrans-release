@@ -308,6 +308,8 @@ static double ZKSim(NSString *a, NSString *b) {
 - (void)holdEmit:(NSString *)side seg:(NSInteger)seg;
 - (void)flushHold:(NSString *)side;
 - (void)emitSettled:(NSString *)side seg:(NSInteger)seg;
+- (BOOL)isDropped;
+- (void)pushSilence:(NSTimeInterval)seconds;
 @end
 
 @implementation ZKInterpreter {
@@ -351,6 +353,12 @@ static double ZKSim(NSString *a, NSString *b) {
     // 现在按队列接，先落定的先等到译文，串不了。
     NSMutableArray<NSMutableDictionary *> *_waitA;
     NSMutableArray<NSMutableDictionary *> *_waitB;
+
+    // 长按说话：只有按住这段时间的音频会送给上游；松开补一段静音让上游把整句落定。
+    // 取消（上滑）之后的一小段时间里，上游还会把刚才那段吐出结果，一律丢掉。
+    BOOL _uttOn;
+    CFTimeInterval _uttAt;
+    NSTimeInterval _dropUntil;
 
     // 按句子编号配对的表：编号由服务端给，原文和译文带同一个号。
     // 这一版之前的做法是「译文按到达顺序认领最早一条还没译文的原文」——
@@ -542,6 +550,8 @@ static double ZKSim(NSString *a, NSString *b) {
 
 - (void)stop {
     _running = NO;
+    _uttOn = NO;
+    _dropUntil = 0;
     [self stopMic];
     [_toOther stop]; _toOther = nil;
     [_toMine stop];  _toMine = nil;
@@ -755,6 +765,7 @@ static double ZKSim(NSString *a, NSString *b) {
 
 - (void)sourcePartial:(NSString *)side seg:(NSInteger)segRaw text:(NSString *)text {
     if (!_running) return;
+    if ([self isDropped]) return;   // 刚被取消的那一段：上游迟到的结果一律不要
     NSString *t = ZKClean(text);
     if (!ZKHasContent(t)) return;
     if (![self belongs:side src:t]) return;
@@ -779,6 +790,7 @@ static double ZKSim(NSString *a, NSString *b) {
 
 - (void)sourceEnd:(NSString *)side seg:(NSInteger)segRaw text:(NSString *)text {
     if (!_running) return;
+    if ([self isDropped]) return;   // 刚被取消的那一段：上游迟到的结果一律不要
     NSString *t = ZKClean(text);
     if (!ZKHasContent(t)) return;
     if (![self belongs:side src:t]) return;
@@ -1082,6 +1094,7 @@ static const NSTimeInterval ZKHoldCap = 0.0;
 /// 否则就是「Beijing 欢迎来到北京」这种半句拼接。
 - (void)transReplace:(NSString *)side seg:(NSInteger)segRaw text:(NSString *)text {
     if (!_running) return;
+    if ([self isDropped]) return;   // 刚被取消的那一段：上游迟到的结果一律不要
     NSString *t = ZKClean(text);
     if (!t.length) return;
     if (![self destFits:side dst:t]) return;
@@ -1109,6 +1122,7 @@ static const NSTimeInterval ZKHoldCap = 0.0;
 
 - (void)transPartial:(NSString *)side seg:(NSInteger)segRaw text:(NSString *)text {
     if (!_running) return;
+    if ([self isDropped]) return;   // 刚被取消的那一段：上游迟到的结果一律不要
     NSString *t = ZKClean(text);
     if (!t.length) return;
 
@@ -1145,6 +1159,7 @@ static const NSTimeInterval ZKHoldCap = 0.0;
 
 - (void)transEnd:(NSString *)side seg:(NSInteger)segRaw text:(NSString *)text {
     if (!_running) return;
+    if ([self isDropped]) return;   // 刚被取消的那一段：上游迟到的结果一律不要
     NSString *t = ZKClean(text);
     if (!t.length) return;
 
@@ -1433,6 +1448,53 @@ static BOOL ZKAlike(NSString *a, NSString *b, double thr, NSUInteger minShort) {
     });
 }
 
+#pragma mark - 长按说话
+
+- (BOOL)isDropped {
+    if (_dropUntil <= 0) return NO;
+    return [NSDate date].timeIntervalSince1970 < _dropUntil;
+}
+
+/// 松手之后补一段静音。上游是按「静音多久」分句的：不给它这段静音，
+/// 它不会认为这一句说完了，要等到下一次开口才把上一句吐出来——
+/// 那就成了「松开手半天没反应」。
+- (void)pushSilence:(NSTimeInterval)seconds {
+    if (!_running) return;
+    NSUInteger n = 1600;              // 100ms @ 16k
+    float *z = calloc(n, sizeof(float));
+    if (!z) return;
+    NSInteger times = (NSInteger)ceil(MAX(0.1, seconds) / 0.1);
+    for (NSInteger i = 0; i < times; i++) {
+        [_toOther pushFloat32:z count:n];
+        [_toMine pushFloat32:z count:n];
+    }
+    free(z);
+}
+
+- (void)beginUtterance {
+    if (!_running) return;
+    _dropUntil = 0;                    // 新的一句开始：刚才取消丢掉的那段时间结束
+    _uttOn = YES;
+    _uttAt = CFAbsoluteTimeGetCurrent();
+}
+
+- (void)endUtterance {
+    if (!_uttOn) return;
+    _uttOn = NO;
+    _dropUntil = 0;
+    // 补 1 秒静音：够上游把这一句切成整句、并把译文翻好
+    [self pushSilence:1.0];
+}
+
+- (void)cancelUtterance {
+    BOOL was = _uttOn;
+    _uttOn = NO;
+    if (!_running) return;
+    // 先把已经送进去的那一段用静音收个尾（让上游别再等），再把接下来 2 秒的结果全丢掉
+    if (was) [self pushSilence:0.6];
+    _dropUntil = [NSDate date].timeIntervalSince1970 + 2.0;
+}
+
 #pragma mark - 麦克风
 
 - (void)startMic {
@@ -1468,6 +1530,9 @@ static BOOL ZKAlike(NSString *a, NSString *b, double thr, NSUInteger minShort) {
     [input installTapOnBus:0 bufferSize:1024 format:inFmt block:^(AVAudioPCMBuffer *buf, AVAudioTime *when) {
         __strong typeof(weakSelf) s = weakSelf;
         if (!s || !s->_running || !buf.frameLength) return;
+        // 长按说话：没按住就把这一帧丢掉——送进上游的只有按住那一段，
+        // 环境音、旁边人说话、咳嗽都不会被认进来。
+        if (s->_pushToTalk && !s->_uttOn) return;
         // 朗读期间不收麦：这几十毫秒里全是扬声器里念出来的译文
         double nowS = [[NSDate date] timeIntervalSince1970];
         if (nowS - s->_gateCheckedAt > 0.03) {
