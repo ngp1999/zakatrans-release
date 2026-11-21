@@ -12,6 +12,8 @@ struct CreditView: View {
     @State private var agreed = false
     /// 没勾协议就点了档位：记下点的是哪一档，弹窗里同意了就直接买这一档
     @State private var pendingTier: String?
+    /// 使用明细（右上角三点里进）
+    @State private var showUsage = false
 
     private let haptic = UIImpactFeedbackGenerator(style: .light)
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 3)
@@ -39,6 +41,27 @@ struct CreditView: View {
         .background(Theme.bg)
         .navigationTitle("我的积分")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button {
+                        Haptics.tap()
+                        showUsage = true
+                    } label: {
+                        Label("使用明细", systemImage: "list.bullet.rectangle")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Theme.ink)
+                        .frame(width: 30, height: 30)
+                        .contentShape(Rectangle())
+                }
+            }
+        }
+        .navigationDestination(isPresented: $showUsage) {
+            UsageDetailView()
+        }
         // 未勾选协议就点档位时的确认弹窗：自绘，因为要在弹窗里直接点开《付费协议》
         .overlay {
             if pendingTier != nil {
