@@ -209,6 +209,9 @@ static double ZKSim(NSString *a, NSString *b) {
 
 /// 私有方法先声明一遍：块里调用的方法在下面才定义，不声明会走 id 返回值的隐式推断。
 @interface ZKInterpreter (Private)
+- (void)noteSpoken:(NSString *)text;
+- (BOOL)isSpokenEcho:(NSString *)text;
+- (void)reconcile:(NSString *)side seg:(NSInteger)seg;
 - (void)sourcePartial:(NSString *)side seg:(NSInteger)seg text:(NSString *)text;
 - (void)sourceEnd:(NSString *)side seg:(NSInteger)seg text:(NSString *)text;
 - (void)transPartial:(NSString *)side seg:(NSInteger)seg text:(NSString *)text;
@@ -221,6 +224,9 @@ static double ZKSim(NSString *a, NSString *b) {
 - (BOOL)mayStart:(NSString *)side length:(NSUInteger)n;
 - (void)takeTurn:(NSString *)side;
 - (void)rememberFinal:(NSString *)side src:(NSString *)src dst:(NSString *)dst;
+- (NSInteger)absorb:(NSString *)side seg:(NSInteger)seg src:(NSString **)srcP dst:(NSString **)dstP;
+- (BOOL)isSameAsEmitted:(NSString *)side src:(NSString *)src dst:(NSString *)dst;
+- (BOOL)isSpokenEcho:(NSString *)text;
 @end
 
 @implementation ZKInterpreter {
@@ -254,6 +260,10 @@ static double ZKSim(NSString *a, NSString *b) {
     // 界面上就出现「同一句原文/译文重复一条」，还会把真正的对话切碎。
     NSTimeInterval _gateUntil;
     NSTimeInterval _gateCheckedAt;
+    NSTimeInterval _gateFrom;
+    // 最近念出去的几句译文：自己念的声音会被麦克风录回来再识别一遍，
+    // 那种句子不能当成人话，也不能翻。
+    NSMutableArray<NSDictionary *> *_spoken;
     // 每边「已经落定、还在等译文」的句子，按落定顺序排队。
     // 上游的译文回调只给文字、不说是哪一句的译文。以前用一个「当前句」槽位去接：
     // 连着说两句时，第一句的译文回来会盖到第二句头上，第一句就永远停在只有原文。
@@ -289,10 +299,29 @@ static double ZKSim(NSString *a, NSString *b) {
     BOOL _tailClosedA, _tailClosedB;          // 上一条已经是完整句，不再吃尾巴
     NSMutableDictionary<NSNumber *, NSNumber *> *_aliasA, *_aliasB;   // 碎句号 → 接回去的那条号
 
+    // 每条通道最近一条已经上屏的句子。同一句被上游按静音切开、或者被识别成
+    // 略有出入的两次，会连着吐两条：一条「你叫什么名字?→What's your name?」，
+    // 下一尾巴「名字」又译出一遍「What's your name?」，界面上就是同一句出现两次。
+    // 上屏前拿它比一下：同一路的重复句并回上一条，不再另起一个气泡。
+    NSInteger _emitSegA, _emitSegB;
+    NSString *_emitSrcA, *_emitDstA, *_emitSrcB, *_emitDstB;
+    NSTimeInterval _emitAtA, _emitAtB;
+
     // 每条通道最近几条落定的句子，用来和另一条通道做交叉去重。
     // 两条通道听的是同一路声音，同一句会被两边各出一份（一次中文一次英文），
     // 只比「最后一条」经常比不着——对方那条可能还没落定。
     NSMutableArray<NSDictionary *> *_recentA, *_recentB;
+
+    // 朗读那边正在念的语言（Speaker 每念一句写上，念完清空）。
+    // 手机念出来的声音会被麦克风收回去，只有「念的那种语言」那一路会被污染，
+    // 所以按语言只暂停对应的那一路，另一路照收——整段静音麦克风就会漏读漏翻。
+    NSString *_ttsLang;
+
+    // 已经上屏的气泡（id / 哪一路 / 原文 / 译文 / 时间）。
+    // 一句英文被两条通道各听一遍时（a 通道会把它译成中文当原文吐出来），
+    // 两边各自上屏就是三行：两个「What's your name?」加一条「你叫什么名字? / name」。
+    // 每次落定都到这里对一遍，是同一句的并成一条，多出来的那条从界面上撤掉。
+    NSMutableArray<NSMutableDictionary *> *_shown;
 }
 
 + (instancetype)shared {
@@ -314,6 +343,10 @@ static double ZKSim(NSString *a, NSString *b) {
         _aliasB = [NSMutableDictionary dictionary];
         _recentA = [NSMutableArray array];
         _recentB = [NSMutableArray array];
+        _shown = [NSMutableArray array];
+        _spoken = [NSMutableArray array];
+        _gateFrom = 0;
+        _gateUntil = 0;
         _tailClosedA = YES;
         _tailClosedB = YES;
     }
@@ -392,6 +425,7 @@ static double ZKSim(NSString *a, NSString *b) {
     [_aliasB removeAllObjects];
     [_recentA removeAllObjects];
     [_recentB removeAllObjects];
+    [_shown removeAllObjects];
     _openSegA = _openSegB = 0;
     _localSegA = _localSegB = 0;
     _tailSegA = _tailSegB = 0;
@@ -558,6 +592,7 @@ static double ZKSim(NSString *a, NSString *b) {
     NSString *t = ZKClean(text);
     if (!ZKHasContent(t)) return;
     if (![self belongs:side src:t]) return;
+    if ([self isSpokenEcho:t]) return;   // 自己念出来的译文又录回来一遍，不收
     if (![self mayStart:side length:t.length]) return;
 
     NSInteger seg = [self segFor:side raw:segRaw ending:NO];
@@ -576,6 +611,7 @@ static double ZKSim(NSString *a, NSString *b) {
     NSString *t = ZKClean(text);
     if (!ZKHasContent(t)) return;
     if (![self belongs:side src:t]) return;
+    if ([self isSpokenEcho:t]) return;   // 自己念出来的译文又录回来一遍，不收
 
     BOOL a = [side isEqualToString:@"a"];
     NSTimeInterval now = [NSDate date].timeIntervalSince1970;
@@ -632,10 +668,79 @@ static double ZKSim(NSString *a, NSString *b) {
 
     NSString *src = e[@"src"] ?: @"";
     NSString *dst = e[@"dst"] ?: @"";
+    if ([self absorb:side seg:seg src:&src dst:&dst] > 0) {
+        [self takeTurn:side];
+        [self sweepSegs];
+        return;
+    }
     [self emit:[self lineIdFor:side seg:seg] side:side src:src dst:dst kind:ZKLineKindFinal];
     [self rememberFinal:side src:src dst:dst];
+    if (a) { _emitSegA = seg; _emitSrcA = src; _emitDstA = dst; _emitAtA = now; }
+    else   { _emitSegB = seg; _emitSrcB = src; _emitDstB = dst; _emitAtB = now; }
+    [self reconcile:side seg:seg];
     [self takeTurn:side];
     [self sweepSegs];
+}
+
+/// 上屏前拿「这一边刚刚上屏的那一条」比一下。
+/// 上游按静音把一句话切成两段推下来时（「你叫什么」+「名字」），
+/// 或者在两段之间补推了一次译文，就会出现两条内容相同的句子：
+/// 截图里两个「What's your name?」、以及「你叫什么名字? / name」都是这么来的。
+/// 同一路里跟前一条是同一句的，并回那一条，不再另起气泡；返回并进去的那条号，没并返回 0。
+- (NSInteger)absorb:(NSString *)side seg:(NSInteger)seg src:(NSString **)srcP dst:(NSString **)dstP {
+    BOOL a = [side isEqualToString:@"a"];
+    NSInteger pSeg = a ? _emitSegA : _emitSegB;
+    NSString *pSrc = (a ? _emitSrcA : _emitSrcB) ?: @"";
+    NSString *pDst = (a ? _emitDstA : _emitDstB) ?: @"";
+    NSTimeInterval pAt = a ? _emitAtA : _emitAtB;
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    if (pSeg <= 0 || pSeg == seg) return 0;
+    if (now - pAt > 6.0) return 0;
+
+    NSString *src = *srcP ?: @"";
+    NSString *dst = *dstP ?: @"";
+    if (!src.length) return 0;
+
+    NSString *ns2 = src.lowercaseString;
+    NSString *ps2 = pSrc.lowercaseString;
+    BOOL inside = ps2.length >= 2 && ns2.length >= 2 &&
+                  ([ps2 rangeOfString:ns2].location != NSNotFound ||
+                   [ns2 rangeOfString:ps2].location != NSNotFound);
+    BOOL sameSrc = (ZKSim(src, pSrc) >= 0.8) || inside;
+    BOOL sameDst = dst.length > 0 && pDst.length > 0 &&
+                   ([dst isEqualToString:pDst] || ZKSim(dst, pDst) >= 0.8);
+
+    if (!(sameSrc || sameDst)) return 0;
+    // 两句都是完整句子、只是长得像（「你好」/「你好吗」这种）：不并
+    if (sameSrc && !inside && ZKSim(src, pSrc) < 0.8) return 0;
+
+    NSMutableDictionary *e = [self entryFor:side seg:pSeg];
+    NSString *newSrc = pSrc;
+    if (src.length > pSrc.length && (inside || sameSrc)) newSrc = src;
+    else if (!inside && src.length) newSrc = ZKJoinSrc(pSrc, src);
+    NSString *newDst = pDst;
+    if (!newDst.length) newDst = dst;
+    else if (dst.length) newDst = (dst.length > pDst.length) ? dst : ZKMergeTrans(pDst, dst);
+
+    e[@"src"] = newSrc;
+    e[@"dst"] = newDst;
+    e[@"at"] = @(now);
+
+    if (a) { _emitSrcA = newSrc; _emitDstA = newDst; }
+    else   { _emitSrcB = newSrc; _emitDstB = newDst; }
+
+    // 被并掉的那条：号留下别名，后面迟到的译文还能挂到并进去的那条上；
+    // 它自己的记录清掉，免得界面上再冒一条。
+    if (seg > 0) {
+        NSMutableDictionary *alias = a ? _aliasA : _aliasB;
+        alias[@(seg)] = @(pSeg);
+        NSMutableDictionary *m = a ? _segA : _segB;
+        [m removeObjectForKey:@(seg)];
+    }
+    [self emit:[self lineIdFor:side seg:pSeg] side:side src:newSrc dst:newDst kind:ZKLineKindFinal];
+    [self rememberFinal:side src:newSrc dst:newDst];
+    [self reconcile:side seg:pSeg];
+    return pSeg;
 }
 
 /// 记下这一边最后落定的一条（原文 + 译文 + 时间），并留一份最近几条给跨通道去重用。
@@ -662,7 +767,17 @@ static double ZKSim(NSString *a, NSString *b) {
 
     if (![self destFits:side dst:t]) return;
 
+    BOOL a0 = [side isEqualToString:@"a"];
+    NSInteger open = a0 ? _openSegA : _openSegB;
+    if (segRaw <= 0 && open <= 0) {
+        NSInteger tail = a0 ? _tailSegA : _tailSegB;
+        NSTimeInterval tailAt = a0 ? _tailAtA : _tailAtB;
+        if (tail > 0 && ([NSDate date].timeIntervalSince1970 - tailAt) < 6.0) segRaw = tail;
+    }
     NSInteger seg = [self segFor:side raw:segRaw ending:NO];
+    // 译文不该把「进行中的句子」这个位置占住：占了之后，下一句原文会沿用译文的号，
+    // 整排就错一行。这里还原回原文自己的位置。
+    if (a0) _openSegA = open; else _openSegB = open;
     NSMutableDictionary *e = [self entryFor:side seg:seg];
     NSString *merged = ZKMergeTrans(e[@"dst"] ?: @"", t);
     e[@"dst"] = merged;
@@ -680,7 +795,21 @@ static double ZKSim(NSString *a, NSString *b) {
 
     if (![self destFits:side dst:t]) return;
 
+    // 老服务端这条不带号（seg = 0），而这一边手上已经没有进行中的句子了：
+    // 以前会新开一条「只有译文、没有原文」的记录，之后要么空着、要么挂到下一句上。
+    // 这一边刚落定过一句、还在等译文的，就挂回那一句。
+    if (segRaw <= 0) {
+        BOOL a0 = [side isEqualToString:@"a"];
+        NSInteger open = a0 ? _openSegA : _openSegB;
+        NSInteger tail = a0 ? _tailSegA : _tailSegB;
+        NSTimeInterval tailAt = a0 ? _tailAtA : _tailAtB;
+        if (open <= 0 && tail > 0 && ([NSDate date].timeIntervalSince1970 - tailAt) < 6.0) segRaw = tail;
+    }
+
+    BOOL aHead = [side isEqualToString:@"a"];
+    NSInteger openKeep = aHead ? _openSegA : _openSegB;
     NSInteger seg = [self segFor:side raw:segRaw ending:NO];
+    if (aHead) _openSegA = openKeep; else _openSegB = openKeep;
     NSMutableDictionary *e = [self entryFor:side seg:seg];
     // 上游这条有时给整句、有时只给这一句的最后一段。以前直接覆盖，
     // 「你叫什么名字?」就只剩「名字」。这里合并，短的接上去、长的整体替换。
@@ -689,8 +818,15 @@ static double ZKSim(NSString *a, NSString *b) {
     e[@"at"] = @([NSDate date].timeIntervalSince1970);
     NSString *src = e[@"src"] ?: @"";
     if (!src.length) return;   // 原文还没到，等它落地时一起上屏
-    [self emit:[self lineIdFor:side seg:seg] side:side src:src dst:merged kind:ZKLineKindFinal];
-    [self rememberFinal:side src:src dst:merged];
+    NSString *ds = merged;
+    if ([self absorb:side seg:seg src:&src dst:&ds] > 0) { [self sweepSegs]; return; }
+    [self emit:[self lineIdFor:side seg:seg] side:side src:src dst:ds kind:ZKLineKindFinal];
+    [self rememberFinal:side src:src dst:ds];
+    BOOL a1 = [side isEqualToString:@"a"];
+    NSTimeInterval now1 = [NSDate date].timeIntervalSince1970;
+    if (a1) { _emitSegA = seg; _emitSrcA = src; _emitDstA = ds; _emitAtA = now1; }
+    else    { _emitSegB = seg; _emitSrcB = src; _emitDstB = ds; _emitAtB = now1; }
+    [self reconcile:side seg:seg];
     [self sweepSegs];
 }
 
@@ -717,13 +853,175 @@ static double ZKSim(NSString *a, NSString *b) {
     NSTimeInterval now = [NSDate date].timeIntervalSince1970;
     for (NSDictionary *r in recent.reverseObjectEnumerator) {
         NSTimeInterval at = [r[@"at"] doubleValue];
-        if (now - at > 5.0) break;
+        if (now - at > 8.0) break;
         double s1 = ZKSim(src, r[@"src"] ?: @"");
         double s2 = ZKSim(src, r[@"dst"] ?: @"");
         // 对方的原文或译文有一条几乎一样：同一路声音，只留一条
         if (MAX(s1, s2) >= 0.62) return YES;
     }
     return NO;
+}
+
+/// 两句话像不像：像，或者一句整个包住另一句（「名字」包在「你叫什么名字」里）
+static BOOL ZKAlike(NSString *a, NSString *b, double thr, NSUInteger minShort) {
+    if (a.length < 2 || b.length < 2) return NO;
+    if (ZKSim(a, b) >= thr) return YES;
+    NSString *x = ZKNorm(a), *y = ZKNorm(b);
+    if (x.length < (NSInteger)minShort || y.length < (NSInteger)minShort) return NO;
+    return [x rangeOfString:y].location != NSNotFound ||
+           [y rangeOfString:x].location != NSNotFound;
+}
+
+#pragma mark - 回声 / 重复
+
+/// 这一句是我们自己刚念出去的译文，被麦克风录回来又识别了一遍。
+/// 认得出来就丢：不显示、不翻译，也不再念一遍。
+- (void)noteSpoken:(NSString *)text {
+    NSString *t = ZKClean(text ?: @"");
+    if (!t.length) return;
+    if (!_spoken) _spoken = [NSMutableArray array];
+    [_spoken addObject:@{@"t": t, @"at": @([NSDate date].timeIntervalSince1970)}];
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    NSMutableArray *dead = [NSMutableArray array];
+    for (NSDictionary *d in _spoken) {
+        if (now - [d[@"at"] doubleValue] > 12.0) [dead addObject:d];
+    }
+    [_spoken removeObjectsInArray:dead];
+    while (_spoken.count > 24) [_spoken removeObjectAtIndex:0];
+}
+
+- (BOOL)isSpokenEcho:(NSString *)text {
+    if (!text.length || !_spoken.count) return NO;
+    NSString *k = ZKClean(text).lowercaseString;
+    if (k.length < 3) return NO;
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    for (NSDictionary *d in _spoken) {
+        if (now - [d[@"at"] doubleValue] > 12.0) continue;
+        NSString *s = [d[@"t"] lowercaseString];
+        if (!s.length) continue;
+        if ([s isEqualToString:k]) return YES;
+        if (s.length >= 4 && ([s containsString:k] || [k containsString:s])) return YES;
+    }
+    return NO;
+}
+
+/// 上屏之后对一遍账。
+/// 两条通道听的是同一路声音：对方说一句英文，b 通道如实出英文原文，
+/// a 通道（源语言中文）会把同一句"译"成中文当原文再吐一遍，两边各自上屏，
+/// 界面上就是「What's your name?」「What's your name?」「你叫什么名字? / name」三行。
+/// 同一路里被上游按静音切开、重复推两遍的也一样。这里把重复的并回先上屏的那条。
+- (void)reconcile:(NSString *)side seg:(NSInteger)seg {
+    if (seg <= 0 || !_running) return;
+    if (!_shown) _shown = [NSMutableArray array];
+    NSMutableDictionary *e = [self entryFor:side seg:seg];
+    NSString *src = e[@"src"] ?: @"";
+    NSString *dst = e[@"dst"] ?: @"";
+    if (!src.length) return;
+    NSString *lid = [self lineIdFor:side seg:seg];
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+
+    NSMutableDictionary *me = nil;
+    for (NSMutableDictionary *r in _shown) {
+        if ([r[@"lid"] isEqualToString:lid]) { me = r; break; }
+    }
+    if (!me) {
+        me = [NSMutableDictionary dictionary];
+        me[@"lid"] = lid;
+        me[@"side"] = side;
+        me[@"seg"] = @(seg);
+        [_shown addObject:me];
+    }
+    me[@"src"] = src;
+    me[@"dst"] = dst;
+    me[@"at"] = @(now);
+    while (_shown.count > 24) [_shown removeObjectAtIndex:0];
+
+    for (NSMutableDictionary *r in [_shown copy]) {
+        if (r == me) continue;
+        if (now - [r[@"at"] doubleValue] > 12.0) continue;
+        NSString *rs = r[@"src"] ?: @"";
+        NSString *rd = r[@"dst"] ?: @"";
+        BOOL cross = ![r[@"side"] isEqualToString:side];
+        BOOL hit = NO;
+        if (cross) {
+            // 两条通道听的是同一路声音：能对上的是「一边的原文」和「另一边的译文」，
+            // 四种组合都过一遍，只要有一对够像就是同一句。
+            hit = ZKAlike(src, rs, 0.70, 3) || ZKAlike(src, rd, 0.70, 3) ||
+                  ZKAlike(dst, rs, 0.70, 3) || ZKAlike(dst, rd, 0.70, 3);
+        } else {
+            // 同一路的重复要更严：连着说两遍「好的」「谢谢」是真说了两遍，不能并。
+            if (src.length >= 5 && rs.length >= 5) hit = ZKAlike(src, rs, 0.90, 6);
+            if (!hit && dst.length >= 5 && rd.length >= 5) hit = ZKAlike(dst, rd, 0.90, 6);
+        }
+        if (!hit) continue;
+
+        // 留哪一条：跨通道时优先留「原文正好是这条通道自己的语言」的那条。
+        // 对方说英文时，b 通道直接出英文原文（真转录），a 通道（中文识别）也会
+        // 吐一串中文——那是译文的回声，不该当成原文留在界面上。
+        NSMutableDictionary *keep = r;
+        NSMutableDictionary *drop = me;
+        NSString *kside = r[@"side"] ?: @"a";
+        NSString *dside = side;
+        if (cross) {
+            NSString *rlang = [kside isEqualToString:@"a"] ? _mine : _other;
+            NSString *dlang = [dside isEqualToString:@"a"] ? _mine : _other;
+            BOOL rNative = ZKScriptOfLang(ZKShort(rlang)) == ZKSriptOf(rs);
+            BOOL dNative = ZKScriptOfLang(ZKShort(dlang)) == ZKSriptOf(src);
+            BOOL takeMine = (dNative && !rNative);
+            if (!dNative && !rNative) {
+                takeMine = [me[@"at"] doubleValue] < [r[@"at"] doubleValue]; // 都不是本通道语言，留先上屏的
+            }
+            if (takeMine) {
+                keep = me; drop = r;
+                kside = side; dside = r[@"side"] ?: @"a";
+            }
+        }
+
+        NSString *ks = keep[@"src"] ?: @"";
+        NSString *kd = keep[@"dst"] ?: @"";
+        NSString *dsrc = drop[@"src"] ?: @"";
+        NSString *ddst = drop[@"dst"] ?: @"";
+
+        // 对不上语言的译文是碎渣（中文那行底下挂个「name」），先剔掉
+        if (kd.length && ![self destFits:kside dst:kd]) kd = @"";
+
+        if (cross) {
+            // 留下这一条缺的译文，往往就是被撤那条的原文；都不行就用它的译文
+            if (!kd.length && [self destFits:kside dst:dsrc]) kd = dsrc;
+            if (!kd.length && [self destFits:kside dst:ddst]) kd = ddst;
+            if (!ks.length) ks = dsrc;
+        } else {
+            if (dsrc.length > ks.length && ZKSim(dsrc, ks) >= 0.8) ks = dsrc;
+            if (ddst.length > kd.length && (!kd.length || ZKSim(ddst, kd) >= 0.6)) kd = ddst;
+        }
+        // 同一条记录被反复 updat 时,它的 at 也跟着走,不然 12 秒之后就不认账了
+        keep[@"src"] = ks;
+        keep[@"dst"] = kd;
+        keep[@"at"] = @(now);
+        if (drop != me) {
+            me = keep;
+            me[@"src"] = ks;
+            me[@"dst"] = kd;
+        }
+        [self emit:keep[@"lid"] side:kside src:ks dst:kd kind:ZKLineKindFinal];
+        if ([kside isEqualToString:@"a"]) { _emitSrcA = ks; _emitDstA = kd; }
+        else                              { _emitSrcB = ks; _emitDstB = kd; }
+
+        // 被撤掉的这条：界面上抹掉，它那份记录也清掉，免得迟到的译文又把它顶回来
+        NSInteger dseg = [drop[@"seg"] integerValue];
+        if (dseg > 0) {
+            if ([dside isEqualToString:@"a"]) {
+                [_segA removeObjectForKey:@(dseg)];
+                if (!cross) _aliasA[@(dseg)] = @([keep[@"seg"] integerValue]);
+            } else {
+                [_segB removeObjectForKey:@(dseg)];
+                if (!cross) _aliasB[@(dseg)] = @([keep[@"seg"] integerValue]);
+            }
+        }
+        [_shown removeObject:drop];
+        [self emit:drop[@"lid"] side:dside src:@"" dst:@"" kind:ZKLineKindDraft];
+        return;
+    }
 }
 
 - (void)emit:(NSString *)lid side:(NSString *)side src:(NSString *)src dst:(NSString *)dst kind:(NSInteger)kind {
@@ -776,8 +1074,19 @@ static double ZKSim(NSString *a, NSString *b) {
             double g = [[ZKStore setting:@"tts_gate"] doubleValue];
             if (!(g > nowS) || g > nowS + 6) g = 0;   // 写坏的值一律当没开
             s->_gateUntil = g;
+            NSString *tl = [ZKStore setting:@"tts_lang"];
+            s->_ttsLang = (tl.length && ![tl isEqualToString:@"0"]) ? tl : nil;
         }
-        if (s->_gateUntil > nowS) return;
+        // 朗读期间以前是把麦克风整段丢掉（`return`）——那正是「一开音频输出就漏读、
+        // 漏翻、字幕不翻」的根源：人家在你念的同时说的话，全被扔了。
+        // 现在会话本来就是 voiceChat（系统自带回声消除），不再丢音频；
+        // 只在每句开口的头 120ms 让一下，等回声消除收敛，之后的照收。
+        if (s->_gateUntil > nowS) {
+            if (s->_gateFrom <= 0 || s->_gateFrom > nowS) s->_gateFrom = nowS;
+            if (nowS - s->_gateFrom < 0.12) return;
+        } else {
+            s->_gateFrom = 0;
+        }
 
         NSUInteger cap = (NSUInteger)(buf.frameLength * 16000.0 / MAX(8000, s->_inRate)) + 64;
         AVAudioPCMBuffer *out = [[AVAudioPCMBuffer alloc] initWithPCMFormat:s->_outFmt frameCapacity:cap];
@@ -793,9 +1102,22 @@ static double ZKSim(NSString *a, NSString *b) {
         if (err || !out.floatChannelData || out.frameLength == 0) return;
 
         const float *p = out.floatChannelData[0];
+        // 朗读正在出声时，手机喇叭念的是某一种语言。那种语言的声音会被麦克风收回来，
+        // 只有「源语言正好是这种语言」的那一路会被污染：念英文时污染的是英文那一路，
+        // 中文那一路照收——这样对面接着说话，中文照样识别、照样翻译，一个字不丢。
+        BOOL skipA = NO, skipB = NO;
+        if (s->_ttsLang.length) {
+            ZKScript ts = ZKScriptOfLang(s->_ttsLang);
+            if (ts != ZKScriptUnknown) {
+                skipA = (ZKScriptOfLang(s->_mine) == ts);
+                skipB = (ZKScriptOfLang(s->_other) == ts);
+                // 两边同一种文字（中↔中）：分不出哪一路，就都照收，交给文本回声过滤
+                if (skipA && skipB) { skipA = NO; skipB = NO; }
+            }
+        }
         // 两路同时喂：谁说话由文字体系判定
-        [s->_toOther pushFloat32:p count:out.frameLength];
-        [s->_toMine pushFloat32:p count:out.frameLength];
+        if (!skipA) [s->_toOther pushFloat32:p count:out.frameLength];
+        if (!skipB) [s->_toMine pushFloat32:p count:out.frameLength];
         [s reportLevel:p count:out.frameLength];
     }];
 
