@@ -209,6 +209,36 @@ final class Cloud: ObservableObject {
         }
     }
 
+    // MARK: - 资料
+
+    /// 改昵称。服务端存 display_name，换设备登录也是这个名字。
+    @discardableResult
+    func updateDisplayName(_ name: String) async -> Bool {
+        guard !token.isEmpty else { return false }
+        do {
+            _ = try await request(path: "/v1/profile", body: ["display_name": name], method: "PUT")
+            await refresh()
+            return true
+        } catch {
+            lastError = error.localizedDescription
+            return false
+        }
+    }
+
+    /// 注销账号：服务端把钱、会话、转写、偏好一起删掉，然后清本地登录态。
+    @discardableResult
+    func deleteAccount() async -> Bool {
+        guard !token.isEmpty else { return false }
+        do {
+            _ = try await request(path: "/v1/account", method: "DELETE")
+            logout()
+            return true
+        } catch {
+            lastError = error.localizedDescription
+            return false
+        }
+    }
+
     // MARK: - 使用记录
 
     struct UsageSession: Identifiable {
