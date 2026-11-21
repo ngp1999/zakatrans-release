@@ -17,6 +17,16 @@ final class AppState: ObservableObject {
     @Published var liveSource = ""
     @Published var liveTrans = ""
     @Published var lines: [SubtitleLine] = []
+
+    // 实时字幕的上屏节奏：先按「整句」攒，整句一落定就立刻上屏原文，
+    // 译文到了再就地补上去，等译文的时间不占用上屏速度。
+    private var pendSrc = ""
+    private var pendZh = ""
+    private var pendAt = Date()
+    // 已经落成一行的那条原文（译文迟到时按这个位置补回去）
+    private var lastLineKey = ""
+    private var lastLineAt = Date.distantPast
+    private var pendTimer: DispatchWorkItem?
     @Published var alert: String?
     @Published var prefs: SubtitlePrefs = SubtitlePrefs.load()
     /// 音频到底有没有进来：录屏扩展每秒写心跳，这里对帧数做差。
@@ -51,7 +61,7 @@ final class AppState: ObservableObject {
     struct SubtitleLine: Identifiable, Equatable {
         let id = UUID()
         let source: String
-        let trans: String
+        var trans: String
         let at = Date()
     }
 
@@ -82,6 +92,79 @@ final class AppState: ObservableObject {
         bindLifecycle()
     }
 
+    // MARK: - 整句上屏
+
+    /// 译文/原文收尾了没有：带句末标点就算说完了。
+    static func endsSentence(_ s: String) -> Bool {
+        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let last = t.unicodeScalars.last else { return false }
+        if "。！？!?…；;.".unicodeScalars.contains(last) { return true }
+        return false
+    }
+
+    private static func hanCount(_ s: String) -> Int {
+        return s.unicodeScalars.filter { $0.value >= 0x3400 && $0.value <= 0x9FFF }.count
+    }
+
+    private static func wordCount(_ s: String) -> Int {
+        return s.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).count
+    }
+
+    /// 这段是新一句，还是上一句的尾巴？
+    /// 上一句没说完 → 接上；上一句已经收尾 → 只有「一个词」或三字以内的碎片才接。
+    /// 以前英文放到 40 字符、中文放到 14 字都当尾巴，结果连着几句完整的话被焊成一大条
+    /// （截图里那条「你叫什么名字? / What are you doing? How much? Welcome to China.」就是它们拼的）。
+    static func tailGlued(_ t: String, prev: String, gap: Double) -> Bool {
+        guard !prev.isEmpty, gap >= 0, gap <= 1.8 else { return false }
+        if hanCount(prev) >= 45 || prev.count >= 140 { return false }   // 已经够长，不再接
+        if !endsSentence(prev) { return true }
+        let han = hanCount(t)
+        if han > 0 { return han <= 3 && !endsSentence(t) }
+        return wordCount(t) <= 1
+    }
+
+    static func join(_ a: String, _ b: String) -> String {
+        if a.isEmpty { return b }
+        if b.isEmpty { return a }
+        guard let last = a.unicodeScalars.last, let first = b.unicodeScalars.first else { return a + b }
+        let punct = "，。！？；：、,.!?;:".unicodeScalars
+        if punct.contains(last) { return a + b }
+        if last.value >= 0x2E80 || first.value >= 0x2E80 { return a + b }
+        return a + " " + b
+    }
+
+    private func armPendFlush(_ delay: Double) {
+        pendTimer?.cancel()
+        let w = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.flushPending()
+        }
+        pendTimer = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: w)
+    }
+
+    /// 把这句落成一行：有译文带译文，没译文就只有原文一行。
+    private func flushPending() {
+        pendTimer?.cancel()
+        pendTimer = nil
+        let src = pendSrc.trimmingCharacters(in: .whitespacesAndNewlines)
+        let zh = pendZh.trimmingCharacters(in: .whitespacesAndNewlines)
+        pendSrc = ""
+        pendZh = ""
+        guard !src.isEmpty || !zh.isEmpty else { return }
+        let key = Speaker.key(src) + "\u{1}" + Speaker.key(zh)
+        if recentFinalKeys.contains(key) { return }
+        recentFinalKeys.append(key)
+        if recentFinalKeys.count > 40 {
+            recentFinalKeys.removeFirst(recentFinalKeys.count - 40)
+        }
+        lines.append(SubtitleLine(source: src, trans: zh))
+        lastLineKey = Speaker.key(src)
+        lastLineAt = Date()
+        if lines.count > 200 { lines.removeFirst(lines.count - 200) }
+        ZKPip.shared()!.appendLineEn(src, zh: zh)
+    }
+
     // MARK: - 引擎回调
 
     private func bindEngine() {
@@ -96,49 +179,64 @@ final class AppState: ObservableObject {
         }
         s.onSegment = { [weak self] text, _ in
             guard let self else { return }
-            if let t = text, !t.isEmpty {
-                self.liveSource = t
-                // 整句落定才算「该让路了」：半句还在滚动的时候朗读照念，
-                // 否则每秒好几次的半句会把刚开口的那句一直掐掉，听起来就是没声音。
-                Speaker.shared.noteInput(t, final: true)
+            let raw = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !raw.isEmpty else { return }
+            self.liveSource = raw
+            // 整句落定才算「该让路了」：半句还在滚动的时候朗读照念，
+            // 否则每秒好几次的半句会把刚开口的那句一直掐掉，听起来就是没声音。
+            Speaker.shared.noteInput(raw, final: true)
+
+            if !self.pendSrc.isEmpty {
+                let gap = Date().timeIntervalSince(self.pendAt)
+                if AppState.tailGlued(raw, prev: self.pendSrc, gap: gap) {
+                    self.pendSrc = AppState.join(self.pendSrc, raw)
+                    self.pendAt = Date()
+                    ZKPip.shared()!.showLiveEn(self.pendSrc, zh: self.pendZh)
+                    self.armPendFlush(1.2)
+                    return
+                }
+                // 换了一句：上一句先落定（译文早就到了的话一起带走）
+                self.flushPending()
             }
+            self.pendSrc = raw
+            self.pendZh = ""
+            self.pendAt = Date()
+            ZKPip.shared()!.showLiveEn(raw, zh: "")
+            // 上游一直不返译文时，最迟 1.6～2.2 秒也要把原文落成一行，不能让字吊在尾巴上。
+            // 整句（带句末标点）压得短一点，上屏快；没标点的多给一点时间等尾巴接回来。
+            self.armPendFlush(AppState.endsSentence(raw) ? 1.6 : 2.2)
         }
         s.onTransPartial = { [weak self] delta in
             guard let self else { return }
             self.liveTrans += delta ?? ""
-            ZKPip.shared()!.setLiveEn(self.liveSource, zh: self.liveTrans)
         }
         s.onTransSegment = { [weak self] full in
             guard let self else { return }
             let zh = (full ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let src = self.liveSource.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !zh.isEmpty {
-                // 回声先拦：这句话是我们自己刚念出去的，被录屏录回来又识别了一遍。
-                // 不拦的话既重复显示、又重复念，还会把真实语音的句子切碎。
-                if self.prefs.tts && Speaker.shared.isEcho([zh, src]) {
-                    self.liveTrans = ""
-                    self.liveSource = ""
-                    return
-                }
-                // 去重：同一句（原文+译文）短时间内只收一次。
-                // 只跟上一句比不够——中间夹一句别的，同一句照样会再冒出来一遍。
-                let key = Speaker.key(src) + "\u{1}" + Speaker.key(zh)
-                if self.recentFinalKeys.contains(key) {
-                    self.liveTrans = ""
-                    self.liveSource = ""
-                    return
-                }
-                self.recentFinalKeys.append(key)
-                if self.recentFinalKeys.count > 40 {
-                    self.recentFinalKeys.removeFirst(self.recentFinalKeys.count - 40)
-                }
-
-                self.lines.append(SubtitleLine(source: src, trans: zh))
-                if self.lines.count > 200 { self.lines.removeFirst(self.lines.count - 200) }
-                ZKPip.shared()!.appendLineEn(src, zh: zh)
-            }
             self.liveTrans = ""
-            self.liveSource = ""
+            guard !zh.isEmpty else { return }
+            // 没有对应的原文：这句的原文已经落过一行了。
+            // 译文比原文晚到（整句先落、译文再补）时原地补到那一行上，
+            // 不能直接丢掉——丢了界面上就是「只有原文、一句译文都没有」。
+            guard !self.pendSrc.isEmpty else {
+                // 译文比原文晚到：原文那行已经上屏了，原地把译文补上去
+                guard !self.lastLineKey.isEmpty,
+                      Date().timeIntervalSince(self.lastLineAt) < 8,
+                      let idx = self.lines.indices.last,
+                      self.lines[idx].trans.isEmpty else { return }
+                self.lines[idx].trans = zh
+                return
+            }
+            // 回声先拦：这句话是我们自己刚念出去的，被录屏录回来又识别了一遍
+            if self.prefs.tts && Speaker.shared.isEcho([zh, self.pendSrc]) {
+                self.pendSrc = ""
+                self.pendZh = ""
+                return
+            }
+            self.pendZh = self.pendZh.isEmpty ? zh : AppState.join(self.pendZh, zh)
+            ZKPip.shared()!.showLiveEn(self.pendSrc, zh: self.pendZh)
+            // 译文收尾了：等 0.3 秒看有没有尾巴，没有就当场落定
+            self.armPendFlush(AppState.endsSentence(self.pendZh) ? 0.3 : 0.7)
         }
         s.onDiag = { [weak self] d in
             guard let self, let d, !d.isEmpty else { return }
