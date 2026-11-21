@@ -80,6 +80,8 @@ final class AppState: ObservableObject {
         s.onPartial = { [weak self] stable, unstable in
             guard let self else { return }
             let t = (stable ?? "") + (unstable ?? "")
+            // 有人在说话：朗读据此避让，只在空隙里念（麦克风收音时还会让路）
+            Speaker.shared.noteInput(t)
             self.liveSource = t
             ZKPip.shared()!.setLiveEn(t, zh: self.liveTrans)
         }
@@ -284,6 +286,8 @@ final class AppState: ObservableObject {
         sessionStartAt = Date().timeIntervalSince1970
 
         Speaker.shared.resume()
+        // 麦克风收音这一路由麦克风在听，朗读不能挂静音门（那等于把话筒掐了）
+        Speaker.shared.micCapture = (prefs.audioSource == "mic")
         ZKSpeechStream.shared()!.start()
         keeper.start()
         running = true
@@ -313,6 +317,7 @@ final class AppState: ObservableObject {
         ZKSpeechStream.shared()!.stop()
         // 停止后迟到的翻译回调不许再念
         Speaker.shared.stop()
+        Speaker.shared.micCapture = false
         // 停止就一定要关：之前 stop 后系统窗口偶尔还挂着，就是因为只调了 stop 没清引用
         ZKPip.shared()!.stop()
         // 系统录屏（屏幕广播）ReplayKit 没有提供"从 App 停止"的接口，
