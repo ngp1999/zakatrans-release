@@ -98,16 +98,17 @@ struct SubtitleSettingsView: View {
         return (w, h, k)
     }
 
-    /// 字号：跟画中画同一套算法（含刚放大的那一档），再乘以预览的缩放比
+    /// 字号：跟画中画同一套算法（含刚放大的那一档），再乘以预览的缩放比。
+    /// 两处必须一模一样，否则用户在设置里看到的和真正跑起来的不一样。
     private func previewFonts(k: CGFloat) -> (zh: CGFloat, src: CGFloat) {
         let dim = realDim
         if app.prefs.pip == "X" {
-            let f = min(dim.width / 20.4, dim.height / 4.0)
-            let font = max(11.0, min(56.0, f)) * k
+            let f = min(dim.width / 17.2, dim.height / 3.7)
+            let font = max(13.0, min(64.0, f)) * k
             return (font, font * 0.68)
         }
         let scale = max(0.45, min(2.10, sqrt((dim.width * dim.height) / (480.0 * 360.0))))
-        let zh = max(9.5, min(58.0, app.prefs.size * scale)) * k
+        let zh = max(12.0, min(74.0, app.prefs.size * scale * 1.35)) * k
         return (zh, zh * 0.66)
     }
 
