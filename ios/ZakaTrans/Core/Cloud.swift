@@ -142,6 +142,17 @@ final class Cloud: ObservableObject {
                     if let b64 = p["avatar"] as? String, !b64.isEmpty,
                        AvatarStore.save(base64: b64) {
                         DispatchQueue.main.async { AppState.shared.avatarImage = AvatarStore.load() }
+                    } else if let local = AvatarStore.base64(), !local.isEmpty {
+                        // 本机有头像、服务端还是空的（换了账号、上次上传没成功、
+                        // 或者是老版本只存在本机的头像）：补传一次，让账号上也有。
+                        // 以前只做「服务端有就覆盖本机」，本机这张永远上不去，
+                        // 换台设备登录就变回灰头像。
+                        Task { [weak self] in
+                            guard let self else { return }
+                            if await self.uploadAvatar(local) {
+                                await self.refresh()
+                            }
+                        }
                     }
                     profile = Profile(
                         id: p["id"] as? String ?? accountID,
@@ -250,6 +261,65 @@ final class Cloud: ObservableObject {
                     endReason: row["end_reason"] as? String ?? "",
                     summary: row["summary"] as? String,
                     preview: row["preview"] as? String
+                )
+            }
+        } catch {
+            return []
+        }
+    }
+
+    // MARK: - 积分使用明细
+
+    /// 一条账目：购买、使用扣费、试用赠送、后台调整都走这张表。
+    /// delta 是 token 数，积分按跟会话记录同一套换算（1400 积分 = 100 万 token）。
+    struct LedgerItem: Identifiable {
+        let id: Int64
+        let kind: String
+        let delta: Int64
+        let balanceAfter: Int64
+        let refID: String
+        let meta: String
+        let at: Date
+
+        var credits: Double { Double(delta) * 1400.0 / 1_000_000.0 }
+        var creditsText: String {
+            let v = abs(credits)
+            let body = v >= 100 ? String(format: "%.0f", v)
+                : (v >= 10 ? String(format: "%.1f", v) : String(format: "%.2f", v))
+            return delta >= 0 ? "+" + body : "-" + body
+        }
+        var balanceCredits: Double { Double(balanceAfter) * 1400.0 / 1_000_000.0 }
+
+        /// 明细里出现的东西只有这几类，其它（后台手工调账之类）不摊给用户看。
+        var title: String {
+            switch kind {
+            case "purchase": return "购买积分"
+            case "usage":    return "字幕识别"
+            case "trial":    return "新用户赠送"
+            case "grant":    return "赠送积分"
+            case "refund":   return "退还"
+            case "adjust":   return "调整"
+            default:         return "积分变动"
+            }
+        }
+        var isIncome: Bool { delta >= 0 }
+    }
+
+    func usage(limit: Int = 120) async -> [LedgerItem] {
+        guard !token.isEmpty else { return [] }
+        do {
+            let data = try await request(path: "/v1/usage", query: "limit=\(limit)")
+            guard let d = data as? [String: Any], let items = d["items"] as? [[String: Any]] else { return [] }
+            return items.compactMap { row in
+                guard let id = (row["id"] as? NSNumber)?.int64Value else { return nil }
+                return LedgerItem(
+                    id: id,
+                    kind: row["kind"] as? String ?? "",
+                    delta: (row["delta"] as? NSNumber)?.int64Value ?? 0,
+                    balanceAfter: (row["balance_after"] as? NSNumber)?.int64Value ?? 0,
+                    refID: row["ref_id"] as? String ?? "",
+                    meta: row["meta"] as? String ?? "",
+                    at: Date(timeIntervalSince1970: (row["created_at"] as? NSNumber)?.doubleValue ?? 0)
                 )
             }
         } catch {
