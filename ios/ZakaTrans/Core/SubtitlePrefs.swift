@@ -37,6 +37,21 @@ struct SubtitlePrefs: Codable, Equatable {
     /// 收音模式：system = 内部收音（系统声音，跟别的 App 播放的声音走）
     ///           mic    = 麦克风收音（跟现场说话走）
     var audioSource: String = "system"
+    /// 滚动方式（小窗）：up 上推 | push 横向推（新句把老句往左顶）
+    var scrollX: String = "up"
+    /// 滚动方式（中窗/大窗）：up 上推 | segment 分段（上半译文、下半原文）
+    var scrollMB: String = "up"
+
+    /// 当前窗口档真正生效的滚动方式
+    var scroll: String {
+        let v = (pip == "X") ? scrollX : scrollMB
+        return SubtitlePrefs.scrollOptions(pip).contains(where: { $0.0 == v }) ? v : "up"
+    }
+
+    static func scrollOptions(_ pip: String) -> [(String, String)] {
+        pip == "X" ? [("up", "上推"), ("push", "横推")]
+                   : [("up", "上推"), ("segment", "分段")]
+    }
 
     static let key = "zt_subtitle_prefs_v6"
 
@@ -61,6 +76,10 @@ struct SubtitlePrefs: Codable, Equatable {
         duckLevel = try c.decodeIfPresent(Double.self, forKey: .duckLevel) ?? d.duckLevel
         voiceId = try c.decodeIfPresent(String.self, forKey: .voiceId) ?? d.voiceId
         audioSource = try c.decodeIfPresent(String.self, forKey: .audioSource) ?? d.audioSource
+        scrollX = try c.decodeIfPresent(String.self, forKey: .scrollX) ?? d.scrollX
+        scrollMB = try c.decodeIfPresent(String.self, forKey: .scrollMB) ?? d.scrollMB
+        if !["up", "push"].contains(scrollX) { scrollX = "up" }
+        if !["up", "segment"].contains(scrollMB) { scrollMB = "up" }
 
         // 三档的新代码是 X / M / B（以前没用过），老存档的老代码在这里映射一次，
         // 之后写回去的就是新代码，不会二次映射。
@@ -154,6 +173,8 @@ struct SubtitlePrefs: Codable, Equatable {
             "source_lang": sourceLang,
             "dest_lang": destLang,
             "audio_source": audioSource,
+            "scroll_x": scrollX,
+            "scroll_mb": scrollMB,
         ]
     }
 
@@ -176,6 +197,8 @@ struct SubtitlePrefs: Codable, Equatable {
         if let v = dict["source_lang"] as? String { p.sourceLang = v }
         if let v = dict["dest_lang"] as? String { p.destLang = v }
         if let v = dict["audio_source"] as? String, ["system", "mic"].contains(v) { p.audioSource = v }
+        if let v = dict["scroll_x"] as? String, ["up", "push"].contains(v) { p.scrollX = v }
+        if let v = dict["scroll_mb"] as? String, ["up", "segment"].contains(v) { p.scrollMB = v }
         return p
     }
 
