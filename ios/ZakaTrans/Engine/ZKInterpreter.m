@@ -291,6 +291,7 @@ static double ZKSim(NSString *a, NSString *b) {
 - (void)sourceEnd:(NSString *)side seg:(NSInteger)seg text:(NSString *)text;
 - (void)transPartial:(NSString *)side seg:(NSInteger)seg text:(NSString *)text;
 - (void)transEnd:(NSString *)side seg:(NSInteger)seg text:(NSString *)text;
+- (void)transReplace:(NSString *)side seg:(NSInteger)seg text:(NSString *)text;
 - (void)state:(NSString *)st;
 - (void)fail:(NSString *)why;
 - (void)stopMic;
@@ -577,6 +578,12 @@ static double ZKSim(NSString *a, NSString *b) {
         if (!s) return;
         [s transEnd:side seg:seg text:full];
     };
+    ast.onTransReplace = ^(NSString *full, NSInteger seg) {
+        ZKInterpreter *me = weakSelf;
+        if (!me) return;
+        [me transReplace:side seg:seg text:full];
+    };
+
     ast.onState = ^(NSString *st) {
         __strong typeof(weakSelf) s = weakSelf;
         if (!s) return;
@@ -1063,6 +1070,36 @@ static const NSTimeInterval ZKHoldCap = 0.0;
     if (last && [last[@"src"] isEqualToString:s0]) [recent removeLastObject];
     [recent addObject:@{@"src": s0, @"dst": d0, @"at": @(now)}];
     while (recent.count > 8) [recent removeObjectAtIndex:0];
+}
+
+/// 整句替换：上游这句只翻了半句，服务端重翻了一遍发下来（replace=true）。
+/// 直接把这一行已有的译文换掉——这里绝不能再走 ZKMergeTrans，
+/// 否则就是「Beijing 欢迎来到北京」这种半句拼接。
+- (void)transReplace:(NSString *)side seg:(NSInteger)segRaw text:(NSString *)text {
+    if (!_running) return;
+    NSString *t = ZKClean(text);
+    if (!t.length) return;
+    if (![self destFits:side dst:t]) return;
+
+    BOOL a = [side isEqualToString:@"a"];
+    NSInteger openKeep = a ? _openSegA : _openSegB;
+    NSInteger seg = [self segFor:side raw:segRaw ending:NO];
+    if (a) _openSegA = openKeep; else _openSegB = openKeep;
+
+    NSMutableDictionary *e = [self entryFor:side seg:seg];
+    NSString *src = e[@"src"] ?: @"";
+    e[@"dst"] = t;
+    e[@"at"] = @([NSDate date].timeIntervalSince1970);
+    if (!src.length) {
+        // 原文还没落定：记下就够了，原文上屏时会带着它一起出
+        [self sweepSegs];
+        return;
+    }
+    [self emit:[self lineIdFor:side seg:seg] side:side src:src dst:t kind:ZKLineKindFinal];
+    [self rememberFinal:side src:src dst:t];
+    if (a) { _emitDstA = t; _emitAtA = [NSDate date].timeIntervalSince1970; }
+    else   { _emitDstB = t; _emitAtB = [NSDate date].timeIntervalSince1970; }
+    [self sweepSegs];
 }
 
 - (void)transPartial:(NSString *)side seg:(NSInteger)segRaw text:(NSString *)text {
