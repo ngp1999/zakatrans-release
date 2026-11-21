@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// 实时翻译：一个按钮开始，字幕就在下面滚。
+/// 实时字幕：一个按钮开启，字幕就在下面滚。
 struct HomeView: View {
     @ObservedObject private var app = AppState.shared
     @ObservedObject private var cloud = Cloud.shared
@@ -102,8 +102,8 @@ struct HomeView: View {
                 .ignoresSafeArea()
             }
         }
-        // 阻尼压低一点：滑到位置之后会先过一点再弹回来，手感不再是"推上去就停住"。
-        .animation(.spring(response: 0.44, dampingFraction: 0.60), value: panelUp)
+        // 回弹只留一点点：弹簧收得很紧，滑到位置几乎就是停住，不来回晃。
+        .animation(.spring(response: 0.32, dampingFraction: 0.93), value: panelUp)
     }
 
     private func openPanel(_ kind: PanelKind) {
@@ -180,13 +180,13 @@ struct HomeView: View {
                 .padding(.top, 8)
 
             VStack(alignment: .leading, spacing: 16) {
-                step(1, "点下面的「开始实时翻译」")
+                step(1, "点下面的「开启实时字幕」")
                 if mic {
                     step(2, "第一次会问麦克风权限，点「允许」")
                     step(3, "直接说话，字幕跟着声音出来")
                 } else {
-                    step(2, "在系统面板中打开「语幕实时翻译」的直播录屏权限")
-                    step(3, "等待出现字幕浮窗后即可开始使用")
+                    step(2, "在系统面板中打开「语幕」的直播录屏权限")
+                    step(3, "等待出现字幕浮窗后即可使用")
                 }
             }
         }
@@ -271,10 +271,13 @@ struct HomeView: View {
                 }
 
                 // 字幕样式：颜色、字号、背景、窗口大小都在里面（80% 面板，点空白关闭）
+                // 字幕样式：用系统自带的画中画图标（矢量，跟系统其他图标是一套），
+                // 不再自己画调色板——自制图标缩到 17pt 细节全糊，也不像系统图标。
                 iconButton(on: app.pipOn) {
                     openPanel(.style)
                 } content: {
-                    SubtitleGlyph(on: app.pipOn)
+                    Image(systemName: app.pipOn ? "pip.fill" : "pip")
+                        .font(.system(size: 17, weight: .medium))
                 }
 
                 Button {
@@ -304,7 +307,7 @@ struct HomeView: View {
                             Image(systemName: (app.running && !app.preparing) ? "stop.fill" : "play.fill")
                                 .font(.system(size: 15, weight: .bold))
                         }
-                        Text(app.preparing ? "正在加载字幕浮窗" : (app.running ? "停止" : "开始实时翻译"))
+                        Text(app.preparing ? "正在加载字幕浮窗" : (app.running ? "停止" : "开启实时字幕"))
                             .font(.system(size: 17, weight: .semibold))
                             .contentTransition(.opacity)
                             .lineLimit(1)
@@ -328,78 +331,6 @@ struct HomeView: View {
                 .clipShape(Circle())
         }
         .buttonStyle(TileButtonStyle())
-    }
-}
-
-/// 字幕样式按钮的图标：调色板 + 画笔。
-/// 形状照参考图来——一块压扁的椭圆盘、右下角一个拇指孔、盘上三颗颜料点，
-/// 一支笔从右上斜插到左下、笔头压在盘面上。颜色统一走主题青绿，不跟参考图的彩色走。
-private struct SubtitleGlyph: View {
-    var on: Bool
-
-    private var tint: Color { Theme.accent }
-
-    var body: some View {
-        ZStack {
-            // 盘面：实心淡色 + 一圈细描边（浅色底上也不糊）
-            PaletteShape()
-                .fill(tint.opacity(on ? 0.26 : 0.18), style: FillStyle(eoFill: true))
-            PaletteShape()
-                .stroke(tint, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
-
-            // 三颗颜料点
-            dot(3.0, 13.2)
-            dot(7.6, 11.8)
-            dot(6.4, 16.8)
-
-            // 画笔：右上斜到左下，笔杆 + 笔头 + 笔尖
-            BrushShape()
-                .fill(tint)
-                .rotationEffect(.degrees(-42))
-                .offset(x: 2.6, y: -4.2)
-        }
-        .frame(width: 27, height: 27)
-    }
-
-    private func dot(_ x: CGFloat, _ y: CGFloat) -> some View {
-        Circle()
-            .fill(tint)
-            .frame(width: 3.0, height: 3.0)
-            .offset(x: x - 13.5, y: y - 13.5)
-    }
-}
-
-/// 调色板外形：椭圆盘 + 右下角拇指孔（两个子路径配合 eoFill 挖空）
-private struct PaletteShape: Shape {
-    func path(in r: CGRect) -> Path {
-        var p = Path()
-        let body = CGRect(x: r.minX + 1.4, y: r.minY + 8.4,
-                          width: r.width - 7.6, height: r.height - 11.0)
-        p.addEllipse(in: body)
-        let hole = CGRect(x: body.maxX - 5.6, y: body.midY + 2.2, width: 4.4, height: 4.4)
-        p.addEllipse(in: hole)
-        return p
-    }
-}
-
-/// 画笔：横着画好再整体转 -42°
-private struct BrushShape: Shape {
-    func path(in r: CGRect) -> Path {
-        var p = Path()
-        let cx = r.midX
-        let cy = r.midY
-        // 笔杆
-        p.addRoundedRect(in: CGRect(x: cx - 2.6, y: cy - 1.1, width: 10.4, height: 2.2),
-                         cornerSize: CGSize(width: 1.1, height: 1.1))
-        // 笔头（比笔杆粗一点）
-        p.addRoundedRect(in: CGRect(x: cx - 6.2, y: cy - 1.7, width: 3.8, height: 3.4),
-                         cornerSize: CGSize(width: 1.3, height: 1.3))
-        // 笔尖
-        p.move(to: CGPoint(x: cx - 6.2, y: cy - 1.7))
-        p.addLine(to: CGPoint(x: cx - 9.2, y: cy))
-        p.addLine(to: CGPoint(x: cx - 6.2, y: cy + 1.7))
-        p.closeSubpath()
-        return p
     }
 }
 
