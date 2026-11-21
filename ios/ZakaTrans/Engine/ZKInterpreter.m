@@ -763,6 +763,11 @@ static double ZKSim(NSString *a, NSString *b) {
     // 所以这里只落库，等 sourceEnd 一次成行。
     e[@"src"] = t;
     e[@"at"] = @([NSDate date].timeIntervalSince1970);
+    // 半句也推出去：说话的人还在说，屏幕上已经有字，
+    // 「说完了才有反应」的那种迟滞感就没了。整句落定时同一条 id 就地补全，
+    // 不会多冒出第二个气泡。
+    [self emit:[self lineIdFor:side seg:seg] side:side
+           src:t dst:(e[@"dst"] ?: @"") kind:ZKLineKindDraft];
 }
 
 - (void)sourceEnd:(NSString *)side seg:(NSInteger)segRaw text:(NSString *)text {
@@ -1078,7 +1083,11 @@ static const NSTimeInterval ZKHoldCap = 0.0;
     // 译文不该把「进行中的句子」这个位置占住：占了之后，下一句原文会沿用译文的号，
     // 整排就错一行。这里还原回原文自己的位置。
     if (a0) _openSegA = open; else _openSegB = open;
-    if (![[self entryFor:side seg:seg][@"src"] length]) {
+    // 只有上游没给号（老服务端 seg=0）时才按「最近一句还没译文的」兜底。
+    // 带号的译文一律只挂自己那一条：按"最近空着的"去猜，
+    // 一旦有一句上游没回译文，后面每一句都会整体错一行——
+    // 截图里「Welcome to Beijing」下面写着「你在干嘛」就是这么来的。
+    if (segRaw <= 0 && ![[self entryFor:side seg:seg][@"src"] length]) {
         NSInteger alt = [self hungrySegFor:side near:seg];
         if (alt > 0) seg = alt;
     }
@@ -1114,7 +1123,11 @@ static const NSTimeInterval ZKHoldCap = 0.0;
     NSInteger openKeep = aHead ? _openSegA : _openSegB;
     NSInteger seg = [self segFor:side raw:segRaw ending:NO];
     if (aHead) _openSegA = openKeep; else _openSegB = openKeep;
-    if (![[self entryFor:side seg:seg][@"src"] length]) {
+    // 只有上游没给号（老服务端 seg=0）时才按「最近一句还没译文的」兜底。
+    // 带号的译文一律只挂自己那一条：按"最近空着的"去猜，
+    // 一旦有一句上游没回译文，后面每一句都会整体错一行——
+    // 截图里「Welcome to Beijing」下面写着「你在干嘛」就是这么来的。
+    if (segRaw <= 0 && ![[self entryFor:side seg:seg][@"src"] length]) {
         NSInteger alt = [self hungrySegFor:side near:seg];
         if (alt > 0) seg = alt;
     }
