@@ -30,6 +30,9 @@
 // 译文（增量 / 整句）
 @property (nonatomic, copy) void (^onTransPartial)(NSString *delta, NSInteger seg);
 @property (nonatomic, copy) void (^onTransEnd)(NSString *full, NSInteger seg);
+// 整句替换：上游只翻了半句、服务端重翻了一遍时走这条，
+// 界面要把那一行已有的译文换掉，而不是往后接。
+@property (nonatomic, copy) void (^onTransReplace)(NSString *full, NSInteger seg);
 
 // 状态行 / 自己恢复不了的错
 @property (nonatomic, copy) void (^onState)(NSString *state);
