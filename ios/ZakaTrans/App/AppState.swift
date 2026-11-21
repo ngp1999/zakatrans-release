@@ -94,6 +94,17 @@ final class AppState: ObservableObject {
 
     // MARK: - 整句上屏
 
+    /// 上屏前把**句尾**的标点去掉（句子中间的保留）。
+    /// 一句话说完就是完了，行尾再挂一个「。」既占位又难看；
+    /// 「你好，我想问一下」中间那个逗号要留着，不然读不通。
+    static func trimEndPunct(_ s: String) -> String {
+        var t = s
+        let drop: Set<Character> = ["。", "！", "？", "，", "、", "；", "：",
+                                    ".", ",", "!", "?", ";", ":", "…", " ", "\u{3000}"]
+        while let c = t.last, drop.contains(c) { t.removeLast() }
+        return t
+    }
+
     /// 译文/原文收尾了没有：带句末标点就算说完了。
     static func endsSentence(_ s: String) -> Bool {
         let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -147,8 +158,8 @@ final class AppState: ObservableObject {
     private func flushPending() {
         pendTimer?.cancel()
         pendTimer = nil
-        let src = pendSrc.trimmingCharacters(in: .whitespacesAndNewlines)
-        let zh = pendZh.trimmingCharacters(in: .whitespacesAndNewlines)
+        let src = AppState.trimEndPunct(pendSrc.trimmingCharacters(in: .whitespacesAndNewlines))
+        let zh = AppState.trimEndPunct(pendZh.trimmingCharacters(in: .whitespacesAndNewlines))
         pendSrc = ""
         pendZh = ""
         guard !src.isEmpty || !zh.isEmpty else { return }
@@ -192,7 +203,7 @@ final class AppState: ObservableObject {
                     self.pendSrc = AppState.join(self.pendSrc, raw)
                     self.pendAt = Date()
                     ZKPip.shared()!.showLiveEn(self.pendSrc, zh: self.pendZh)
-                    self.armPendFlush(1.2)
+                    self.armPendFlush(0)
                     return
                 }
                 // 换了一句：上一句先落定（译文早就到了的话一起带走）
@@ -202,9 +213,10 @@ final class AppState: ObservableObject {
             self.pendZh = ""
             self.pendAt = Date()
             ZKPip.shared()!.showLiveEn(raw, zh: "")
-            // 上游一直不返译文时，最迟 1.6～2.2 秒也要把原文落成一行，不能让字吊在尾巴上。
-            // 整句（带句末标点）压得短一点，上屏快；没标点的多给一点时间等尾巴接回来。
-            self.armPendFlush(AppState.endsSentence(raw) ? 1.6 : 2.2)
+            // 不压时间：上游整句一落定就上屏。
+            // 前几版这里压 1.6~2.2 秒等译文和尾巴，用户看到的就是「字幕慢半拍」；
+            // 译文晚到另有通路——落在上一行原地补（见 onTransSegment），所以不用等。
+            self.armPendFlush(0)
         }
         s.onTransPartial = { [weak self] delta in
             guard let self else { return }
@@ -224,7 +236,7 @@ final class AppState: ObservableObject {
                       Date().timeIntervalSince(self.lastLineAt) < 8,
                       let idx = self.lines.indices.last,
                       self.lines[idx].trans.isEmpty else { return }
-                self.lines[idx].trans = zh
+                self.lines[idx].trans = AppState.trimEndPunct(zh)
                 return
             }
             // 回声先拦：这句话是我们自己刚念出去的，被录屏录回来又识别了一遍
@@ -235,8 +247,8 @@ final class AppState: ObservableObject {
             }
             self.pendZh = self.pendZh.isEmpty ? zh : AppState.join(self.pendZh, zh)
             ZKPip.shared()!.showLiveEn(self.pendSrc, zh: self.pendZh)
-            // 译文收尾了：等 0.3 秒看有没有尾巴，没有就当场落定
-            self.armPendFlush(AppState.endsSentence(self.pendZh) ? 0.3 : 0.7)
+            // 译文到了就落定，不再等尾巴
+            self.armPendFlush(0)
         }
         s.onDiag = { [weak self] d in
             guard let self, let d, !d.isEmpty else { return }
