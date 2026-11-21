@@ -347,8 +347,11 @@ struct SubtitleExportView: View {
     private let contents = [("source", "原文"), ("trans", "译文"), ("both", "双语")]
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
+        VStack(spacing: 0) {
+            header
+            // 这里以前是个 ScrollView：面板高度已经按内容算好了，再套一层滚动容器，
+            // 系统会自己再加一道底部安全区的 inset，底下凭空多出一截空白。
+            // 导出面板就四行东西，直接铺开，不用滚。
             VStack(spacing: 16) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("格式")
@@ -394,38 +397,45 @@ struct SubtitleExportView: View {
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.top, 12)
-            .padding(.bottom, 20)
+            .padding(.top, 6)
+            .padding(.bottom, 10)
             .background(
                 GeometryReader { g in
                     Color.clear.preference(key: ExportSheetHeight.self, value: g.size.height)
                 }
             )
-            .background(Theme.bg)
-            }
-            .modifier(HugScroll())
-            .onPreferenceChange(ExportSheetHeight.self) { h in
-                guard h > 40 else { return }
-                // 导航栏到此为止的高度 + 安全区，才是这块面板真正要占的。
-                let want = h + 96
-                let top = UIScreen.main.bounds.height * 0.92
-                sheetH = max(300, min(top, want))
-            }
-            .navigationTitle("导出字幕")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") { dismiss() }
-                }
-            }
-            .onAppear { rebuild() }
-            .onChange(of: format) { _ in rebuild() }
-            .onChange(of: content) { _ in rebuild() }
+
+            Spacer(minLength: 0)
         }
-        // 面板高度贴着内容走：里面就两块选择加一个按钮，内容多大就多大，
-        // 不该占满整屏（以前是写死 430，内容一变就露出半截空白）。
+        .background(Theme.bg)
+        .onPreferenceChange(ExportSheetHeight.self) { h in
+            guard h > 40 else { return }
+            // 内容 + 自己这条标题栏 + 底部安全区，就是面板该有的高度。
+            let want = h + 44 + SafeArea.bottom
+            sheetH = min(UIScreen.main.bounds.height * 0.92, want)
+        }
+        .onAppear { rebuild() }
+        .onChange(of: format) { _ in rebuild() }
+        .onChange(of: content) { _ in rebuild() }
         .presentationDetents([.height(sheetH)])
         .presentationDragIndicator(.visible)
+    }
+
+    /// 自己画一条标题栏，不套导航栏：导航栏自带一层高度和安全区，面板会虚高一截。
+    private var header: some View {
+        ZStack {
+            Text("导出字幕")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(Theme.ink)
+            HStack {
+                Spacer()
+                Button("完成") { dismiss() }
+                    .font(.system(size: 17))
+                    .foregroundStyle(Theme.accent)
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 44)
     }
 
     private var fileName: String {
