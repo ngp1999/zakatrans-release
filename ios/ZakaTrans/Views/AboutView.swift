@@ -6,10 +6,10 @@ struct AboutView: View {
     /// 对外联系邮箱
     static let contactEmail = "1938044162@qq.com"
 
+    /// 只读短版本号（V3.7.5）。构建号是内部排查用的，不给用户看。
     private var version: String {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
-        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? ""
-        return b.isEmpty ? v : "\(v) (\(b))"
+        return v.isEmpty ? "" : "V\(v)"
     }
 
     var body: some View {
@@ -52,14 +52,11 @@ struct AboutView: View {
                 .foregroundStyle(Theme.faint)
                 .padding(.top, 2)
 
-            // 版本号是排查问题的第一手信息，放在名字下面，一眼看得到
-            Text("版本 \(version)")
+            // 版本号是排查问题的第一手信息，放在名字下面，一眼看得到。
+            // 不做胶囊底、不带构建号——一行浅字就够。
+            Text(version)
                 .font(.system(size: 13).monospacedDigit())
-                .foregroundStyle(Theme.sub)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(Theme.fill)
-                .clipShape(Capsule())
+                .foregroundStyle(Theme.faint)
                 .padding(.top, 4)
         }
         .frame(maxWidth: .infinity)
@@ -86,6 +83,25 @@ struct AboutView: View {
 
     private var supportCard: some View {
         VStack(spacing: 0) {
+            // 常见问题放在联系方式上面：先让用户自己查到答案，邮件留给真正需要人处理的事
+            NavigationLink {
+                TermsView(kind: .faq)
+            } label: {
+                HStack {
+                    Text("常见问题").font(.system(size: 16)).foregroundStyle(Theme.ink)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.faint)
+                }
+                .padding(.horizontal, 16)
+                .frame(height: 52)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(RowButtonStyle())
+
+            divider
+
             NavigationLink {
                 TermsView(kind: .contact)
             } label: {
