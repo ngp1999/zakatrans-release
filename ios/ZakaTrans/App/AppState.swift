@@ -226,6 +226,32 @@ final class AppState: ObservableObject {
 
     // MARK: - 开 / 停
 
+    /// 麦克风收音前必须先拿到系统权限：
+    /// 没权限就直接去碰 AVAudioEngine 的输入节点，系统会当场把进程带走（闪退）。
+    func requestMicPermissionIfNeeded() async -> Bool {
+        guard prefs.audioSource == "mic" else { return true }
+        if #available(iOS 17.0, *) {
+            switch AVAudioApplication.shared.recordPermission {
+            case .granted: return true
+            case .denied: return false
+            default: break
+            }
+            return await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
+                AVAudioApplication.requestRecordPermission { ok in c.resume(returning: ok) }
+            }
+        } else {
+            let sess = AVAudioSession.sharedInstance()
+            switch sess.recordPermission {
+            case .granted: return true
+            case .denied: return false
+            default: break
+            }
+            return await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
+                sess.requestRecordPermission { ok in c.resume(returning: ok) }
+            }
+        }
+    }
+
     func start() async {
         guard !running, !preparing else { return }
         // 余额用本地已知的，不再等网络往返（弱网下这一下要好几秒）
@@ -261,8 +287,21 @@ final class AppState: ObservableObject {
         ZKSpeechStream.shared()!.start()
         keeper.start()
         running = true
-        status = "等待录屏"
+        let mic = (prefs.audioSource == "mic")
+        status = mic ? "正在听" : "等待录屏"
         startWatchingBroadcast()
+        if mic {
+            // 麦克风收音：不用等系统录屏面板，直接自己把浮窗浮出来
+            broadcastSeen = true
+            if pipOn {
+                pipRequested = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                    self?.startPipIfPossible()
+                }
+            } else {
+                preparing = false
+            }
+        }
         // 兜底：12 秒还没浮出来也不能一直转圈
         DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in
             self?.preparing = false
@@ -295,12 +334,16 @@ final class AppState: ObservableObject {
     /// 用户点了系统录屏面板之后，扩展会写心跳；轮询到就说明真的开始录了
     private func startWatchingBroadcast() {
         stopWatching()
-        broadcastTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.checkBroadcast() }
-        }
-        // 音频看门狗：扩展的心跳里带累计帧数，数字不涨就是一段都没收到
-        audioTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.checkAudio() }
+        // 麦克风收音不经过录屏扩展：既没有广播权限要等，也没有扩展心跳可看。
+        // 这两条轮询只在内部收音（系统声音）时才需要，否则会一直提示"等待授予直播录屏权限"。
+        if prefs.audioSource != "mic" {
+            broadcastTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.checkBroadcast() }
+            }
+            // 音频看门狗：扩展的心跳里带累计帧数，数字不涨就是一段都没收到
+            audioTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.checkAudio() }
+            }
         }
         // 画中画是否真的起来了，系统不给同步返回值，只能每秒对一次
         pipPollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
