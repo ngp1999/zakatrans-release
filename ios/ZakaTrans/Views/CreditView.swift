@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 /// 我的积分：余额 + 充值积分档位 + 购买协议勾选。
-/// 计费规则统一收在《付费协议》里，这里只留「买多少、付多少」。
+/// 计费规则统一收在《语幕付费协议》里，这里只留「买多少、付多少」。
 struct CreditView: View {
     @ObservedObject private var cloud = Cloud.shared
     @ObservedObject private var purch = Purchases.shared
@@ -62,7 +62,7 @@ struct CreditView: View {
         .navigationDestination(isPresented: $showUsage) {
             UsageDetailView()
         }
-        // 未勾选协议就点档位时的确认弹窗：自绘，因为要在弹窗里直接点开《付费协议》
+        // 未勾选协议就点档位时的确认弹窗：自绘，因为要在弹窗里直接点开《语幕付费协议》
         .overlay {
             if pendingTier != nil {
                 agreementDialog
@@ -199,7 +199,7 @@ struct CreditView: View {
                     Haptics.tap()
                     showTerms = true
                 } label: {
-                    Text("《付费协议》")
+                    Text("《语幕付费协议》")
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.accent)
                 }
@@ -215,7 +215,7 @@ struct CreditView: View {
     private var agreementSentence: Text {
         var head = AttributedString("已阅读并同意")
         head.foregroundColor = Theme.sub
-        var link = AttributedString("语幕付费协议")
+        var link = AttributedString("《语幕付费协议》")
         link.link = URL(string: "zaka://terms")
         link.foregroundColor = Theme.accent
         var tail = AttributedString("相关规则")
