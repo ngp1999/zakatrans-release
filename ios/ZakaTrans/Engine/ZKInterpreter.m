@@ -153,6 +153,28 @@ static BOOL ZKEndsSentence(NSString *s) {
         || c == '?' || c == 0x2026 || c == 0xFF1B || c == ';' || c == 0xFF1A || c == ':';
 }
 
+/// 上屏用的文本：**句尾**的标点一律不要。
+///
+/// 一句话说完就完了，屏幕上一行结尾再多一个「。」既占位置又难看，
+/// 尤其在同传气泡里，原文那行小字后面挂个句号显得很啰嗦。
+/// 但句子**中间**的标点必须留着——「你好，我想问一下路」里的逗号去掉就读不通了。
+/// 所以这里只从结尾往前连着删，碰到第一个非标点字符就停。
+static NSString *ZKTrimEndPunct(NSString *s) {
+    if (!s.length) return @"";
+    NSMutableString *m = [s mutableCopy];
+    while (m.length > 0) {
+        unichar c = [m characterAtIndex:m.length - 1];
+        BOOL punct = (c == 0x3002 || c == 0xFF01 || c == 0xFF1F || c == 0xFF0C
+                      || c == 0x3001 || c == 0xFF1B || c == 0xFF1A
+                      || c == '.' || c == ',' || c == '!' || c == '?'
+                      || c == ';' || c == ':' || c == 0x2026 || c == ' '
+                      || c == 0x3000 || c == '\n');
+        if (!punct) break;
+        [m deleteCharactersInRange:NSMakeRange(m.length - 1, 1)];
+    }
+    return m;
+}
+
 /// 是不是一个被切碎的碎片（一个词、两三个字）。
 /// 只在「上一句已经收尾」时用来判断要不要接回去。
 ///
@@ -811,16 +833,18 @@ static double ZKSim(NSString *a, NSString *b) {
 /// 立刻上屏的话，界面上先出半句、第二段到了再补长，看着就是「字在跳、句子断开」；
 /// 译文也常常比原文晚半秒到，先上屏就会看到一行只有原文、再单独补一行译文。
 /// 这一小段等待里接回来的尾巴会并进同一条，上屏时就是完整一句带译文。
-// 上屏延迟不再是一个死数。以前一律压 2.0 秒，一句完整的话从上蒸到上屏要两秒多，
-// 用户说的「同传太慢、好几秒才出来」就是这个。现在的规则：
-//   · 原文、译文都齐了，而且这句已经收尾      → 0.55 秒（够吸收两条通道的到达时差）
-//   · 原文齐了、还差译文                      → 0.95 秒
-//   · 这句还没收尾（还可能有尾巴要接回来）    → 1.20 秒
-// 任何一条最多压 ZKHoldCap：从第一次开始压算起，到点必须上屏，宁可不完美也不能卡住。
-static const NSTimeInterval ZKHoldReady = 0.55;
-static const NSTimeInterval ZKHoldWaitDst = 0.95;
-static const NSTimeInterval ZKHoldOpen = 1.20;
-static const NSTimeInterval ZKHoldCap = 1.80;
+// 上屏不再压时间：上游一句落定，这边立刻上屏。
+//
+// 前几版在这里压 0.55~2.0 秒，为的是等译文、等被上游按静音切开的尾巴，
+// 结果整句要一秒多才出来，用户看到的就是「字幕慢」。
+// 现在改成最原生的返回速度：上游给一句就上屏一句；
+// 同一句的后半段若紧接着再来，会并回同一条（见 sourceEnd 的 glue 与 holdEmit 的合并），
+// 界面上是同一行补长，不会多出一个气泡；译文晚到也照样就地补在原文下面。
+// 也就是说：速度由上游决定，不吃我们额外加的等待。
+static const NSTimeInterval ZKHoldReady = 0.0;
+static const NSTimeInterval ZKHoldWaitDst = 0.0;
+static const NSTimeInterval ZKHoldOpen = 0.0;
+static const NSTimeInterval ZKHoldCap = 0.0;
 
 - (void)holdEmit:(NSString *)side seg:(NSInteger)seg {
     if (seg <= 0) return;
@@ -890,6 +914,8 @@ static const NSTimeInterval ZKHoldCap = 1.80;
     NSInteger gen = a ? _holdGenA : _holdGenB;
 
     NSTimeInterval delay = [self holdDelay:side seg:seg];
+    // 不压时间：立刻上屏。留这条分支是为了以后想调回「等译文」时只改常量就行。
+    if (delay <= 0) { [self flushHold:side]; return; }
     __weak typeof(self) weakSelf = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
@@ -1311,7 +1337,11 @@ static BOOL ZKAlike(NSString *a, NSString *b, double thr, NSUInteger minShort) {
 
 - (void)emit:(NSString *)lid side:(NSString *)side src:(NSString *)src dst:(NSString *)dst kind:(NSInteger)kind {
     if (!_running) return;
-    if (self.onLine) self.onLine(lid ?: @"", side ?: @"a", src ?: @"", dst ?: @"", kind);
+    // 显示层裁掉句尾标点：内部存的还是带标点的原文（判断断句、去重、导出 SRT 都要用），
+    // 只有推给界面的这一份去掉句尾那一个符号。
+    NSString *s = ZKTrimEndPunct(src ?: @"");
+    NSString *d = ZKTrimEndPunct(dst ?: @"");
+    if (self.onLine) self.onLine(lid ?: @"", side ?: @"a", s, d, kind);
 }
 
 - (void)state:(NSString *)s {
