@@ -35,7 +35,7 @@ struct HistoryView: View {
     // MARK: - 列表行
 
     /// 标题就是这一场的内容本身：有 AI 总结取总结首句，没总结取第一句转写的前几个字。
-    /// 不写「实时翻译」这种功能名——一列功能名等于没有标题。
+    /// 不写「实时字幕」这种功能名——一列功能名等于没有标题。
     private func title(_ s: Cloud.UsageSession) -> String {
         if let sum = s.summary?.trimmingCharacters(in: .whitespacesAndNewlines), !sum.isEmpty {
             let first = sum
