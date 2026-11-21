@@ -322,6 +322,8 @@ struct InterpreterView: View {
         running = true
         // 同传自己管着 PlayAndRecord 会话，朗读这边不许再去改会话类别
         Speaker.shared.usesExternalSession = true
+        // 这一路是麦克风在听：没有系统声音可以让位，朗读只能靠"等空隙 + 让路"
+        Speaker.shared.micCapture = true
         // 必须解一次暂停：上一场停止时 Speaker 会进入 paused，不解开的话
         // 后面每一句 speak() 都被直接挡掉——用户看到的就是"同传点了音频输出没声音"。
         Speaker.shared.resume()
@@ -339,6 +341,8 @@ struct InterpreterView: View {
                 guard running else { return }
                 let isFinal = (kind == 2)   // ZKLineKindFinal
                 let lineID = lid ?? UUID().uuidString
+                // 有人开口了（半句也算）：朗读据此避让，只在对方说完的空隙里念
+                Speaker.shared.noteInput(src)
                 upsert(id: lineID, side: side ?? "a", source: src ?? "", trans: trans ?? "",
                        done: isFinal)
 
@@ -349,6 +353,8 @@ struct InterpreterView: View {
                     let srcText = src ?? ""
                     if Speaker.shared.isEcho([tr, srcText]) { return }
                     spoken.insert(lineID)
+                    // 记下这句：麦克风会把它录回来再识别一遍，引擎据此认掉回声
+                    ZKInterpreter.shared()?.noteSpoken(tr)
                     Speaker.shared.speak(tr, lang: (side ?? "a") == "a" ? other : mine)
                 }
             }
@@ -392,6 +398,7 @@ struct InterpreterView: View {
         Speaker.shared.stop()
         // 会话归位：离开同传页之后朗读恢复成自己配会话
         Speaker.shared.usesExternalSession = false
+        Speaker.shared.micCapture = false
         level = 0
         if let itp = ZKInterpreter.shared() {
             itp.onLine = nil
