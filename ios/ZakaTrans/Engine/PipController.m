@@ -510,6 +510,20 @@ static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CG
     return MIN(h, cap);
 }
 
+#pragma mark - 阅读速度
+
+/// 这一句里「看得见的字」有几个：空格、换行不算，标点算半个（扫读时占位很小）。
+static NSUInteger ZKVisibleLen(NSString *text) {
+    if (![text isKindOfClass:[NSString class]] || !text.length) return 0;
+    NSUInteger n = 0;
+    for (NSUInteger i = 0; i < text.length; i++) {
+        unichar c = [text characterAtIndex:i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == 0x3000) continue;
+        n++;
+    }
+    return n;
+}
+
 #pragma mark - 小档（5:1 横条）：两行，中文在上、源语言在下
 
 // 做三件事：
@@ -517,7 +531,7 @@ static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CG
 // 2) 字号只跟窗口走，跟这一句多长完全无关——长句靠换行，绝不缩字、绝不缩窗；
 // 3) 一批句子要么整批塞得进（两行都按换行算高度），要么就整批换下一批，
 //    不存在「这一行的后半句跑到下一行开头」那种串行。
-// 节奏：新句到了立刻上屏，只留 0.18 秒防抖，不攒不压。
+// 节奏：按阅读速度定每一屏停多久（见 holdSecondsFor），积压时自动压缩，绝不无限延迟。
 @interface ZKWideView : UIView
 - (void)setBoxWidth:(CGFloat)width height:(CGFloat)height force:(BOOL)force;
 - (void)resetWithLines:(NSArray *)lines;
@@ -533,7 +547,8 @@ static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CG
     CGFloat _font;                             // 译文行字号，原文行按比例取小
     NSArray<NSDictionary *> *_current;         // 现在屏上这一批，由哪几句拼成
     NSMutableArray<NSDictionary *> *_queue;    // 还没上屏的整句
-    NSDate *_shownAt;
+    NSDate *_shownAt;                          // 这一屏是什么时候上来的
+    NSDate *_holdUntil;                        // 这一屏最少停到什么时候（按阅读速度算）
     NSTimer *_drain;
 }
 
@@ -581,13 +596,15 @@ static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CG
 - (NSInteger)zhCap {
     if (_h < 1 || _font < 1) return 2;
     if (![self twoRows]) return MAX(1, (NSInteger)floor(_h / MAX(1.0, [self zhLineH])));
-    return MAX(1, (NSInteger)floor((_h * 0.60) / MAX(1.0, [self zhLineH])));
+    // 0.66：字号提上去之后，长句还得能在译文行里折成两行，
+    // 换算下来两行译文 + 一行原文正好落在窗高之内。
+    return MAX(1, (NSInteger)floor((_h * 0.66) / MAX(1.0, [self zhLineH])));
 }
 
 - (NSInteger)srcCap {
     if (_h < 1 || _font < 1) return 2;
     if (![self twoRows]) return MAX(1, (NSInteger)floor(_h / MAX(1.0, [self srcLineH])));
-    return MAX(1, (NSInteger)floor((_h * 0.34) / MAX(1.0, [self srcLineH])));
+    return MAX(1, (NSInteger)floor((_h * 0.30) / MAX(1.0, [self srcLineH])));
 }
 
 #pragma mark 字号
@@ -598,10 +615,10 @@ static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CG
     if (_w < 1 || _h < 1) return;
     // 一句一行之后，横条上的留白变多了，字号可以再放大一档（45 → 48 左右）。
     // 仍然只跟窗口走，跟这一句多长无关：长句靠换行，绝不缩字。
-    CGFloat byWidth = _w / 22.4;       // 一行二十来个汉字，横条上读起来最舒服
-    CGFloat byHeight = _h / 4.35;      // 两行译文 + 一行原文，各自留一点余量
+    CGFloat byWidth = _w / 20.4;       // 一行二十个汉字左右，横条上读起来最舒服
+    CGFloat byHeight = _h / 4.0;       // 两行译文 + 一行原文，各自留一点余量
     CGFloat f = MIN(byWidth, byHeight);
-    _font = MAX(11.0, MIN(52.0, f));
+    _font = MAX(11.0, MIN(56.0, f));
 }
 
 #pragma mark 文本与测量
@@ -705,29 +722,76 @@ static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CG
     if (_w < 1 || _h < 1) return;
     if (_queue.count == 0) return;
 
-    // 最小间隔只防抖：一帧里连来两句时不至于闪两下。
-    // 不做「每行必须停够多久」——那正是跟不上说话节奏的原因。
-    if (_shownAt) {
-        NSTimeInterval elapsed = -[_shownAt timeIntervalSinceNow];
-        NSTimeInterval gap = (_queue.count >= 3) ? 0.06 : 0.18;
-        if (elapsed < gap) {
-            [self scheduleAfter:gap - elapsed];
+    // 这一屏还没到「读得完」的时间，就先不换——下限由下面的 holdSecondsFor 控住，
+    // 不会因为等它而落后：积压越多，每一屏停得越短。
+    if (_holdUntil) {
+        NSTimeInterval left = [_holdUntil timeIntervalSinceNow];
+        if (left > 0.02) {
+            [self scheduleAfter:left];
             return;
         }
     }
 
-    // 一句一批：屏上只放「一整句」。
-    // 以前会把短句拼到同一行（最多三句并排），横条上读起来像串行；
-    // 现在一条原文就是一行，塞不下就整句换下一句，绝不把两句并在一行。
-    // 节奏：新句到了立刻上屏，只留极短的防抖，不攒不压。
-    NSDictionary *next = _queue.firstObject;
-    if (!next) return;
+    NSInteger pressure = (NSInteger)_queue.count;
+
+    // 一句一批：默认屏上只放「一整句」。
+    // 只有真的积压（快速连说、句子又短）时，才把相邻两句并成一批：
+    // 少换一次屏，等于这两句在屏上多待一会儿，语速再快也不会一闪而过。
+    // 合并只发生在整句之间，句子本身仍然不会被劈到两行。
+    NSMutableArray *batch = [NSMutableArray arrayWithObject:_queue.firstObject];
+    if (pressure >= 3 && _queue.count > 1) {
+        NSArray *pair = @[_queue[0], _queue[1]];
+        if ([self pairIsShort:pair] && [self fits:pair] && [self readSeconds:pair] <= 2.4) {
+            [batch addObject:_queue[1]];
+            [_queue removeObjectAtIndex:1];
+        }
+    }
     [_queue removeObjectAtIndex:0];
-    _current = @[next];
+    _current = batch;
     [self renderAnimated:YES];
     _shownAt = [NSDate date];
 
-    if (_queue.count) [self scheduleAfter:0.16];
+    NSTimeInterval hold = [self holdSecondsFor:batch pressure:(NSInteger)_queue.count];
+    _holdUntil = [NSDate dateWithTimeIntervalSinceNow:hold];
+    if (_queue.count) [self scheduleAfter:hold];
+}
+
+/// 这两句合起来是不是「短句」——只有短句才值得合并，
+/// 长句拼一起一行塞不下，合并也没意义。
+- (BOOL)pairIsShort:(NSArray *)items {
+    NSUInteger zh = 0, en = 0;
+    for (NSDictionary *it in items) {
+        if ([self showTrans]) zh += ZKVisibleLen(it[@"zh"]);
+        if ([self showSource]) en += ZKVisibleLen(it[@"en"]);
+    }
+    return zh <= 30 && en <= 64;
+}
+
+/// 读完这一批大概要多久：中文按 10 字/秒，英文按 18 字符/秒，
+/// 再加 0.35 秒「眼睛锁定这一行」的固定开销。都是横条字幕的扫读速度，不是逐字朗读。
+- (NSTimeInterval)readSeconds:(NSArray *)items {
+    NSUInteger zh = 0, en = 0;
+    for (NSDictionary *it in items) {
+        if ([self showTrans]) zh += ZKVisibleLen(it[@"zh"]);
+        if ([self showSource]) en += ZKVisibleLen(it[@"en"]);
+    }
+    CGFloat need = MAX(zh / 10.0, en / 18.0) + 0.35;
+    return need;
+}
+
+/// 这一屏该停多久。
+///
+/// 规则：按字数算出「读得完」的时间，再用积压量往下压——
+/// 后面堆得越多，每一屏停得越短，保证画面追得上嘴，而不是无限往后拖。
+/// 下限 0.55 秒（再快就成了闪一下），上限 2.6 秒（再长就跟不上说话了）。
+- (NSTimeInterval)holdSecondsFor:(NSArray *)items pressure:(NSInteger)pressure {
+    CGFloat need = [self readSeconds:items];
+    CGFloat factor = 1.0;
+    if (pressure >= 2) factor = 0.85;
+    if (pressure >= 4) factor = 0.65;
+    if (pressure >= 6) factor = 0.50;
+    CGFloat hold = need * factor;
+    return MIN(2.6, MAX(0.55, hold));
 }
 
 - (NSAttributedString *)attr:(NSString *)t font:(UIFont *)f color:(UIColor *)c {
@@ -830,6 +894,7 @@ static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CG
     if (_current.count) [self renderAnimated:NO];
     if (_queue.count) {
         _shownAt = nil;         // 尺寸变了：新句立刻上屏，不用等防抖
+        _holdUntil = nil;
         [self pump];
     }
 }
@@ -842,6 +907,7 @@ static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CG
     _zhLabel.attributedText = nil;
     _srcLabel.attributedText = nil;
     _shownAt = nil;
+    _holdUntil = nil;
     if (![lines isKindOfClass:[NSArray class]]) return;
     // 画中画重建（切窗口、改设置）时把最近两句接上，不至于一片空
     NSInteger from = MAX(0, (NSInteger)lines.count - 2);
@@ -864,6 +930,11 @@ static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CG
     [_queue addObject:@{@"en": e, @"zh": z}];
     // 越落越远时只保最后几句，宁可跳过也不让画面追不上嘴
     while (_queue.count > 6) [_queue removeObjectAtIndex:0];
+    // 已经堆到六句以上：这一屏只要停够了最短时间（0.45 秒），就不再等它读满，
+    // 立刻往下走——积压的时候宁可快一点，也不能把画面拖在嘴后面。
+    if (_queue.count >= 6 && _shownAt && -[_shownAt timeIntervalSinceNow] >= 0.45) {
+        _holdUntil = nil;
+    }
     [self pump];
 }
 
