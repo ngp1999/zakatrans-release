@@ -146,8 +146,11 @@ static UIColor *ZKBackgroundColor(void) {
             // 必须和 Swift 侧 SubtitlePrefs.backgrounds 逐条一致，
             // 否则「设置里换了底色，画中画没变」——以前两处各写一套，深浅差一点点看不出来。
             @"black":    [UIColor colorWithRed:0.00 green:0.00 blue:0.00 alpha:1],
-            @"graphite": [UIColor colorWithRed:0.30 green:0.30 blue:0.33 alpha:1],
-            @"navy":     [UIColor colorWithRed:0.05 green:0.26 blue:0.72 alpha:1],
+            @"cocoa":    [UIColor colorWithRed:0.22 green:0.14 blue:0.10 alpha:1],
+            @"teal":     [UIColor colorWithRed:0.04 green:0.22 blue:0.26 alpha:1],
+            // 老版本存下来的键照旧给色，升级那一下也不会闪成纯黑
+            @"graphite": [UIColor colorWithRed:0.22 green:0.14 blue:0.10 alpha:1],
+            @"navy":     [UIColor colorWithRed:0.04 green:0.22 blue:0.26 alpha:1],
             @"forest":   [UIColor colorWithRed:0.03 green:0.28 blue:0.21 alpha:1],
             @"wine":     [UIColor colorWithRed:0.40 green:0.04 blue:0.14 alpha:1],
             @"indigo":   [UIColor colorWithRed:0.20 green:0.09 blue:0.44 alpha:1],
