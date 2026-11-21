@@ -146,8 +146,8 @@ static UIColor *ZKBackgroundColor(void) {
             // 必须和 Swift 侧 SubtitlePrefs.backgrounds 逐条一致，
             // 否则「设置里换了底色，画中画没变」——以前两处各写一套，深浅差一点点看不出来。
             @"black":    [UIColor colorWithRed:0.00 green:0.00 blue:0.00 alpha:1],
-            @"graphite": [UIColor colorWithRed:0.17 green:0.17 blue:0.19 alpha:1],
-            @"navy":     [UIColor colorWithRed:0.03 green:0.17 blue:0.42 alpha:1],
+            @"graphite": [UIColor colorWithRed:0.30 green:0.30 blue:0.33 alpha:1],
+            @"navy":     [UIColor colorWithRed:0.05 green:0.26 blue:0.72 alpha:1],
             @"forest":   [UIColor colorWithRed:0.03 green:0.28 blue:0.21 alpha:1],
             @"wine":     [UIColor colorWithRed:0.40 green:0.04 blue:0.14 alpha:1],
             @"indigo":   [UIColor colorWithRed:0.20 green:0.09 blue:0.44 alpha:1],
@@ -596,10 +596,12 @@ static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CG
 // 用户设置里的字号在这一档不生效——窗口长宽比和竖排完全不是一回事，强塞会挤爆两行。
 - (void)recalcFont {
     if (_w < 1 || _h < 1) return;
-    CGFloat byWidth = _w / 24.0;       // 一行二十来个汉字，横条上读起来最舒服
-    CGFloat byHeight = _h / 4.5;       // 两行译文 + 两行原文，各自留一行余量
+    // 一句一行之后，横条上的留白变多了，字号可以再放大一档（45 → 48 左右）。
+    // 仍然只跟窗口走，跟这一句多长无关：长句靠换行，绝不缩字。
+    CGFloat byWidth = _w / 22.4;       // 一行二十来个汉字，横条上读起来最舒服
+    CGFloat byHeight = _h / 4.35;      // 两行译文 + 一行原文，各自留一点余量
     CGFloat f = MIN(byWidth, byHeight);
-    _font = MAX(11.0, MIN(46.0, f));
+    _font = MAX(11.0, MIN(52.0, f));
 }
 
 #pragma mark 文本与测量
@@ -714,32 +716,18 @@ static CGFloat ZKTextHeightLines(NSString *text, CGFloat width, UIFont *font, CG
         }
     }
 
-    // 以屏上这一批为基础接新句：塞得进就接，塞不进就整批换下一句。
-    // 关键是「整批判定」——一批里面的句子永远同进同出，不会有一半留在上一行、一半跑到下一行。
-    NSMutableArray<NSDictionary *> *take = _current ? [_current mutableCopy] : [NSMutableArray array];
-    NSInteger used = 0;
-    for (NSDictionary *it in _queue) {
-        if (take.count >= 3) break;
-        NSMutableArray<NSDictionary *> *probe = [take mutableCopy];
-        [probe addObject:it];
-        if (take.count > 0 && ![self fits:probe]) break;
-        take = probe;
-        used++;
-    }
-    if (used == 0) {
-        // 屏上这批已经塞满：整体换成队列里的第一句
-        [take removeAllObjects];
-        NSDictionary *first = _queue.firstObject;
-        if (first) [take addObject:first];
-        used = first ? 1 : 0;
-    }
-    if (used > 0) [_queue removeObjectsInRange:NSMakeRange(0, (NSUInteger)used)];
-
-    _current = [take copy];
+    // 一句一批：屏上只放「一整句」。
+    // 以前会把短句拼到同一行（最多三句并排），横条上读起来像串行；
+    // 现在一条原文就是一行，塞不下就整句换下一句，绝不把两句并在一行。
+    // 节奏：新句到了立刻上屏，只留极短的防抖，不攒不压。
+    NSDictionary *next = _queue.firstObject;
+    if (!next) return;
+    [_queue removeObjectAtIndex:0];
+    _current = @[next];
     [self renderAnimated:YES];
     _shownAt = [NSDate date];
 
-    if (_queue.count) [self scheduleAfter:0.18];
+    if (_queue.count) [self scheduleAfter:0.16];
 }
 
 - (NSAttributedString *)attr:(NSString *)t font:(UIFont *)f color:(UIColor *)c {
