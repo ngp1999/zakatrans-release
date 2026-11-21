@@ -40,8 +40,14 @@ struct SubtitleSettingsView: View {
             ticker?.invalidate()
             ticker = nil
         }
-        .onChange(of: app.prefs.pip) { _ in restartPreview() }
-        .onChange(of: app.prefs.mode) { _ in restartPreview() }
+        // 换档只改「站几行」，不重建内容：以前这里重播一遍预览，
+        // 一换档下面的字整批换掉，看着就是「字在跳」。
+        .onChange(of: app.prefs.pip) { _ in
+            withAnimation(.easeInOut(duration: 0.22)) { resizeFeed() }
+        }
+        .onChange(of: app.prefs.mode) { _ in
+            withAnimation(.easeInOut(duration: 0.22)) { resizeFeed() }
+        }
     }
 
     private var header: some View {
@@ -115,7 +121,8 @@ struct SubtitleSettingsView: View {
         )
         // 预览就在最上面，高度跟着档位走，不再套固定占位槽。
         .frame(maxWidth: .infinity)
-        .animation(.easeInOut(duration: 0.20), value: app.prefs.pip)
+        // 跟面板收放用同一条曲线，两段动画错开就会看着「先跳一下再滑」
+        .animation(.easeInOut(duration: 0.22), value: app.prefs.pip)
     }
 
     /// 小档（5:1）：中文一行在上、原文一行在下；**一行只放一整句**，不跟下一句拼行
@@ -174,8 +181,10 @@ struct SubtitleSettingsView: View {
                     }
                 }
                 .frame(height: app.prefs.mode == "bilingual" ? rowH : rowH * 0.6, alignment: .center)
+                // 新行只从底下推进来，不带淡入：中档/大档要的是「一直有字」，
+                // 淡入会有半秒是空的，看着像闪。
                 .transition(.asymmetric(
-                    insertion: .move(edge: .bottom).combined(with: .opacity),
+                    insertion: .move(edge: .bottom),
                     removal: .move(edge: .top).combined(with: .opacity)
                 ))
             }
@@ -196,6 +205,20 @@ struct SubtitleSettingsView: View {
         let f = previewFonts(k: m.k)
         let h = rowHeight(f: f) + max(2, m.h * 0.014)
         return max(1, Int((m.h - 12) / max(6, h)))
+    }
+
+    /// 换档时按新的行数增删，锚定最下面那句不动。
+    private func resizeFeed() {
+        guard app.prefs.pip != "X" else { return }
+        let n = visibleRows
+        if feed.isEmpty { feed = Self.tail(count: n, endingAt: 0); return }
+        var out = feed
+        while out.count > n { out.removeFirst() }
+        while out.count < n, let first = out.first, let i = Self.indexOf(first) {
+            let idx = wrap(i - 1)
+            out.insert(PreviewLine(zh: Self.samples[idx].zh, src: Self.samples[idx].src), at: 0)
+        }
+        feed = out
     }
 
     private func restartPreview() {
