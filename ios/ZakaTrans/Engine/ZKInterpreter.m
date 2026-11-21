@@ -459,10 +459,13 @@ static double ZKSim(NSString *a, NSString *b) {
 
     NSInteger seg = [self segFor:side raw:segRaw ending:NO];
     NSMutableDictionary *e = [self entryFor:side seg:seg];
+    // 边说边出的半句只存着，不上屏。
+    // 同传这一档要的是「整句准」，不是「出字快」：半句先上屏，等整句落定时
+    // 文字会整段变一次，肉眼看到的就是「字幕在跳着改」；更糟的是译文经常比原文整句先到，
+    // 半句和译文对不齐，就会出现截图上那种「你好，/How are you?」的错行。
+    // 所以这里只落库，等 sourceEnd 一次成行。
     e[@"src"] = t;
     e[@"at"] = @([NSDate date].timeIntervalSince1970);
-    NSString *dst = e[@"dst"] ?: @"";
-    [self emit:[self lineIdFor:side seg:seg] side:side src:t dst:dst kind:ZKLineKindDraft];
 }
 
 - (void)sourceEnd:(NSString *)side seg:(NSInteger)segRaw text:(NSString *)text {
@@ -511,11 +514,9 @@ static double ZKSim(NSString *a, NSString *b) {
     e[@"dst"] = merged;
     e[@"at"] = @([NSDate date].timeIntervalSince1970);
 
-    NSString *src = e[@"src"] ?: @"";
-    // 原文还没到就只存着，不先建一条只有译文的气泡——
-    // 那种空气泡以前会留在列表里，看着就是"凭空多出来一条翻译"。
-    if (!src.length) return;
-    [self emit:[self lineIdFor:side seg:seg] side:side src:src dst:merged kind:ZKLineKindUpdate];
+    // 译文也是整句才上屏：边说边补的译文先攒在记录里，
+    // 等这句的译文整句（655）到了再一次性显示，避免同一行被反复改写。
+    // 原文还没到的，先存着等原文整句到了再一起上屏。
 }
 
 - (void)transEnd:(NSString *)side seg:(NSInteger)segRaw text:(NSString *)text {
