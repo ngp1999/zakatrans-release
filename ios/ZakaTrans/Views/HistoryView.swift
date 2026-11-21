@@ -71,21 +71,30 @@ struct HistoryView: View {
     /// 「怎么断开的」（主动停止 / 连接断开）不上列表——那是内部状态，不是用户关心的内容。
     private func row(_ s: Cloud.UsageSession) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text(title(s))
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(Theme.ink)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
+            // 第一行：内容标题 + 这一场花了多少积分（贴右上角，一眼看到，不再跟时长挤在一行里）
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(title(s))
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
 
+                Spacer(minLength: 6)
+
+                Text("\(s.creditsText) 积分")
+                    .font(.system(size: 12, weight: .medium).monospacedDigit())
+                    .foregroundStyle(Theme.accent)
+                    .layoutPriority(1)
+                    .fixedSize()
+            }
+
+            // 第二行：什么时候、聊了多久
             HStack(spacing: 6) {
                 Text(Self.dateText(s.startedAt) + " " + Self.timeText(s.startedAt))
                 dot
                 Text(s.durationText)
-                Spacer(minLength: 6)
-                Text("\(s.creditsText) 积分")
-                    .font(.system(size: 12, weight: .medium).monospacedDigit())
-                    .foregroundStyle(Theme.accent)
+                Spacer(minLength: 0)
             }
             .font(.system(size: 12).monospacedDigit())
             .foregroundStyle(Theme.sub)
@@ -135,6 +144,8 @@ struct SessionDetailView: View {
     @State private var loading = true
     @State private var summarizing = false
     @State private var error: String?
+    /// 分享用的文本文件（按需生成，加载完才有）
+    @State private var shareURL: URL?
 
     var body: some View {
         ScrollView {
@@ -150,6 +161,22 @@ struct SessionDetailView: View {
         .background(Theme.bg)
         .navigationTitle("对话详情")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                // 右上角只放系统分享图标，一个字都不写。
+                // 点了直接把这一场的文本交给系统分享面板：存到「文件」、发微信、发邮件都行。
+                if let url = shareURL {
+                    ShareLink(item: url) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 15, weight: .semibold))
+                    }
+                } else {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Theme.faint)
+                }
+            }
+        }
         .task { await load() }
     }
 
@@ -222,7 +249,7 @@ struct SessionDetailView: View {
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.sub)
             } else {
-                Text("把这一场的对话压成「概要 + 要点 + 待办」，几秒钟就好。")
+                Text("将本场对话压缩为概要、要点、待办，数秒即可完成。")
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.sub)
                 Button {
@@ -292,8 +319,33 @@ struct SessionDetailView: View {
             let d = try await cloud.transcript(sessionID: session.id)
             detail = d
             summary = d.summary
+            buildShareFile(d.lines)
         } catch {
             self.error = "记录加载失败：\(error.localizedDescription)"
+        }
+    }
+
+    /// 把这一场拼成一份纯文本放到临时目录，供右上角分享按钮使用。
+    /// 中文在上、原文在下，跟详情页里看到的一致。
+    private func buildShareFile(_ lines: [Cloud.TranscriptLine]) {
+        let rows = lines.compactMap { l -> String? in
+            if l.trans.isEmpty { return l.source.isEmpty ? nil : l.source }
+            if l.source.isEmpty || l.source == l.trans { return l.trans }
+            return l.trans + "\n" + l.source
+        }
+        guard !rows.isEmpty else {
+            shareURL = nil
+            return
+        }
+        let head = "语幕 · " + Self.dayText(session.startedAt) + " " + Self.timeText(session.startedAt)
+            + " · " + session.durationText
+        let text = head + "\n\n" + rows.joined(separator: "\n\n") + "\n"
+        let f = DateFormatter()
+        f.dateFormat = "yyyyMMdd_HHmm"
+        let name = "语幕对话_\(f.string(from: session.startedAt)).txt"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        if (try? text.data(using: .utf8)?.write(to: url, options: .atomic)) != nil {
+            shareURL = url
         }
     }
 
