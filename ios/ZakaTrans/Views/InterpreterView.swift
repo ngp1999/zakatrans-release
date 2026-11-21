@@ -457,8 +457,28 @@ struct InterpreterView: View {
         }
         let text = trans.isEmpty ? source : trans
         if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return }
+        // 兜底去重：同一句被两条通道各吐一遍（中→英 / 英→中 听的是同一路声音），
+        // 引擎已经挡过一层，这里再按文字比一次——紧挨着重复的那句并到上一行，不再多一个气泡。
+        // 只比够长的句子，像「好」「是」这种短句不动，免得把真的两句吞成一句。
+        let k = Self.normForDedup(source)
+        if k.count >= 6 {
+            for i in stride(from: lines.count - 1, through: max(0, lines.count - 3), by: -1) {
+                guard lines.indices.contains(i) else { break }
+                let prev = lines[i]
+                guard Self.normForDedup(prev.source) == k else { continue }
+                if !trans.isEmpty, prev.trans.isEmpty { lines[i].trans = trans }
+                if done { lines[i].done = true }
+                return
+            }
+        }
         lines.append(Line(id: id, side: side, source: source, trans: trans, done: done))
         if lines.count > 240 { lines.removeFirst(lines.count - 240) }
+    }
+
+    /// 比重复用：去掉空白和标点、统一小写
+    private static func normForDedup(_ s: String) -> String {
+        let drop = CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters)
+        return String(s.unicodeScalars.filter { !drop.contains($0) }).lowercased()
     }
 
     private func stop() {
