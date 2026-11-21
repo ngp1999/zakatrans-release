@@ -41,4 +41,8 @@ typedef NS_ENUM(NSInteger, ZKLineKind) {
 // 交换两边语言，不用重开
 - (void)setMine:(NSString *)a other:(NSString *)b;
 
+/// 记下我们刚刚念出去的一句译文。麦克风会把它录回来再识别一遍，
+/// 这里存着用来认掉这些回声，不当成人话。
+- (void)noteSpoken:(NSString *)text;
+
 @end
