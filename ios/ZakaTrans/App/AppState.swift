@@ -231,12 +231,17 @@ final class AppState: ObservableObject {
             // 译文比原文晚到（整句先落、译文再补）时原地补到那一行上，
             // 不能直接丢掉——丢了界面上就是「只有原文、一句译文都没有」。
             guard !self.pendSrc.isEmpty else {
-                // 译文比原文晚到：原文那行已经上屏了，原地把译文补上去
-                guard !self.lastLineKey.isEmpty,
-                      Date().timeIntervalSince(self.lastLineAt) < 8,
-                      let idx = self.lines.indices.last,
-                      self.lines[idx].trans.isEmpty else { return }
-                self.lines[idx].trans = AppState.trimEndPunct(zh)
+                // 译文比原文晚到：原文那行已经上屏了，原地把译文补上去。
+                // 从前往后找第一条还没有译文的行（译文按说话顺序到，先补最早那条），
+                // 连续两句原文都还没译文时不会一直往最后一行上堆。
+                guard let idx = self.lines.firstIndex(where: {
+                    $0.trans.isEmpty && Date().timeIntervalSince($0.at) < 20
+                }) else { return }
+                let t = AppState.trimEndPunct(zh)
+                self.lines[idx].trans = t
+                // 画中画读的是共享字幕流，那边也得补上——以前只改了内存里这份，
+                // 所以 App 内对话记录有译文、画中画永远只有原文
+                ZKPip.shared()!.patchZh(t, forEn: self.lines[idx].source)
                 return
             }
             // 回声先拦：这句话是我们自己刚念出去的，被录屏录回来又识别了一遍
