@@ -43,7 +43,7 @@ struct AboutView: View {
                         .strokeBorder(Theme.hairline, lineWidth: 0.6)
                 )
 
-            Text("语幕实时翻译")
+            Text("语幕")
                 .font(.system(size: 21, weight: .semibold))
                 .foregroundStyle(Theme.ink)
 
