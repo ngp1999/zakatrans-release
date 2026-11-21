@@ -3,7 +3,7 @@ import UIKit
 
 /// 充值弹窗：6 个档位，每行 3 个。
 /// 价格和积分的对应关系固定，客户端改不了——服务端按商品 id 发货。
-/// 下单前必须勾选《付费协议》，这是审核要求，也让用户清楚买的是什么。
+/// 下单前必须勾选《语幕付费协议》，这是审核要求，也让用户清楚买的是什么。
 struct PurchaseView: View {
     @ObservedObject private var cloud = Cloud.shared
     @ObservedObject private var purch = Purchases.shared
@@ -75,7 +75,7 @@ struct PurchaseView: View {
                     if let id { Task { await purch.buy(id: id) } }
                 }
             } message: {
-                Text("购买积分需要先阅读并同意《付费协议》。积分按实际用量扣除，充值通过 App Store 内购完成，退款按 Apple 规则处理。")
+                Text("购买积分需要先阅读并同意《语幕付费协议》。积分按实际用量扣除，充值通过 App Store 内购完成，退款按 Apple 规则处理。")
             }
             .navigationTitle("充值")
             .navigationBarTitleDisplayMode(.inline)
@@ -109,7 +109,7 @@ struct PurchaseView: View {
                 NavigationLink {
                     TermsView(kind: .payment)
                 } label: {
-                    Text("《付费协议》")
+                    Text("《语幕付费协议》")
                         .font(.system(size: 14))
                         .foregroundStyle(Theme.accent)
                 }
