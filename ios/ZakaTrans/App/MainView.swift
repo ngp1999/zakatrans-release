@@ -54,7 +54,7 @@ struct MainView: View {
     @ObservedObject private var app = AppState.shared
 
     enum Mode: String, CaseIterable, Identifiable {
-        case subtitle = "实时翻译"
+        case subtitle = "实时字幕"
         case interpreter = "同声传译"
         var id: String { rawValue }
     }
