@@ -11,6 +11,8 @@ struct SubtitleSettingsView: View {
     @State private var ticker: Timer?
     /// 小档（5:1）：一次上一批，整批换
     @State private var wideIndex = 0
+    /// sheet 的高度：量完内容再定，避免系统给一档固定高度、底下留一截空白
+    @State private var sheetH: CGFloat = 620
 
     private struct PreviewLine: Identifiable, Equatable {
         let id = UUID()
@@ -23,18 +25,26 @@ struct SubtitleSettingsView: View {
             header
             FitScroll(cap: UIScreen.main.bounds.height * 0.70 - SafeArea.bottom) {
                 VStack(spacing: 12) {
-                    // 预览放最上面：进页面第一眼就是它。
-                    // 不再做固定占位槽，切换档位时它自己变高变矮，下面的设置项跟着走，
-                    // 这是当初最直觉的排法，不用为了「不跳」牺牲位置。
-                    previewCard
+                    // 预览固定按最高那一档占位、下沿对齐：换档时字是往上缩的，
+                    // 卡片底边不动，所以后面的设置项一行都不挪。
+                    previewSlot
                     lookCard
                     windowCard
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 2)
                 .padding(.bottom, 10)
+                .background(
+                    GeometryReader { g in
+                        Color.clear
+                            .onAppear { fitSheet(g.size.height) }
+                            .onChange(of: g.size.height) { fitSheet($0) }
+                    }
+                )
             }
         }
+        .presentationDetents([.height(sheetH)])
+        .presentationDragIndicator(.visible)
         .onAppear { restartPreview() }
         .onDisappear {
             ticker?.invalidate()
@@ -103,6 +113,43 @@ struct SubtitleSettingsView: View {
 
     // MARK: - 预览
 
+    /// 预览槽：高度恒等于最大档，卡片贴着槽底往上长。
+    ///
+    /// 这里的 frame 高度**不许**跟着档位变——一变，外面 VStack 的总高就变，
+    /// 面板高度跟着重算，底下的设置项被推着上下走，就是用户说的「字在跳」。
+    /// 槽的高度写死成最大档：小档时上面留白，往上长到中档、大档，底边一格不动。
+    /// 动画只挂在卡片自己身上，槽不动，所以下面一行都不会挪。
+    private var previewSlot: some View {
+        ZStack(alignment: .bottom) {
+            Color.clear
+            previewCard
+                .animation(.easeInOut(duration: 0.22), value: app.prefs.pip)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: slotHeight, alignment: .bottom)
+    }
+
+    /// 最高那一档（大档 1080×640）在屏宽下算出来的高度
+    private var slotHeight: CGFloat {
+        let w = UIScreen.main.bounds.width - 32
+        let dim = Self.dim(for: "B")
+        return min(240, dim.height * (w / dim.width))
+    }
+
+    /// 面板高度只在第一次量内容时定下来。
+    /// 后面切档不再重算——槽高是固定的，内容高度本来就没变，
+    /// 重算只会在动画中途拿到一个中间值，面板跟着抖一下。
+    @State private var sheetLocked = false
+
+    /// 量完内容把 sheet 收到刚好装下的高度，底下一个像素都不多留
+    private func fitSheet(_ content: CGFloat) {
+        guard content > 0, !sheetLocked else { return }
+        let want = 44 + content + SafeArea.bottom + 2
+        let h = min(UIScreen.main.bounds.height * 0.94, max(320, want))
+        sheetLocked = true
+        if abs(h - sheetH) > 0.5 { sheetH = h }
+    }
+
     private var previewCard: some View {
         let m = metrics
         return ZStack {
@@ -119,10 +166,7 @@ struct SubtitleSettingsView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Color.white.opacity(0.10), lineWidth: 0.6)
         )
-        // 预览就在最上面，高度跟着档位走，不再套固定占位槽。
-        .frame(maxWidth: .infinity)
-        // 跟面板收放用同一条曲线，两段动画错开就会看着「先跳一下再滑」
-        .animation(.easeInOut(duration: 0.22), value: app.prefs.pip)
+        .frame(width: m.w)
     }
 
     /// 小档（5:1）：中文一行在上、原文一行在下；**一行只放一整句**，不跟下一句拼行
