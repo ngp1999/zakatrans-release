@@ -294,7 +294,11 @@ final class Cloud: ObservableObject {
         var title: String {
             switch kind {
             case "purchase": return "购买积分"
-            case "usage":    return "字幕识别"
+            case "usage":
+                // 同声传译和实时字幕都是按用量扣费，靠结算时带回来的模式分开显示。
+                // 这里不挑引号格式：meta 是服务端写的 JSON 串，字段顺序和转义都可能变，
+                // 只要出现 interp 就当同传——以前只认一种写法，同传的记录全被算成了字幕识别。
+                return meta.range(of: "interp", options: .caseInsensitive) != nil ? "同声传译" : "字幕识别"
             case "trial":    return "新用户赠送"
             case "grant":    return "赠送积分"
             case "refund":   return "退还"
