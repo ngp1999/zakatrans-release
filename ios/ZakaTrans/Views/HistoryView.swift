@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 /// 对话记录：一场一条，点进去能看完整转写、让 AI 总结。
-/// 列表一行说清四件事：什么时候、聊了多久、花了多少积分、这一场讲了什么。
+/// 列表一行说清三件事：什么时候、聊了多久、这一场讲了什么。
 struct HistoryView: View {
     @ObservedObject private var cloud = Cloud.shared
     @State private var items: [Cloud.UsageSession] = []
@@ -67,7 +67,7 @@ struct HistoryView: View {
         return f.string(from: d)
     }
 
-    /// 一行四件事：什么时候（年月日 + 时分）、聊了多久、花了多少积分、讲的什么。
+    /// 一行三件事：什么时候（年月日 + 时分）、聊了多久、讲的什么。
     /// 「怎么断开的」（主动停止 / 连接断开）不上列表——那是内部状态，不是用户关心的内容。
     private func row(_ s: Cloud.UsageSession) -> some View {
         HStack(alignment: .center, spacing: 10) {
@@ -92,12 +92,8 @@ struct HistoryView: View {
                 .minimumScaleFactor(0.85)
             }
 
-            // 积分：贴右边，按整行高度上下居中（不再挂在标题那一行的基线上）
-            Text("\(s.creditsText) 积分")
-                .font(.system(size: 12, weight: .medium).monospacedDigit())
-                .foregroundStyle(Theme.accent)
-                .fixedSize()
-                .frame(maxHeight: .infinity, alignment: .center)
+            // 积分不在这里出现：一场花多少是账目，放在积分页的「使用明细」里看，
+            // 混在对话记录里既占位置又要跟总账对不上。
         }
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -143,13 +139,8 @@ struct SessionDetailView: View {
     @State private var loading = true
     @State private var summarizing = false
     @State private var error: String?
-    /// 分享用的文本文件（按需生成，加载完才有）
-    @State private var shareURL: URL?
-    /// 右上角按钮只负责弹「导出方式」，不直接落文件
-    @State private var showExportOptions = false
     /// 选「导出字幕」之后才进格式与内容的设置页
     @State private var showExportSheet = false
-    @State private var tip: String?
 
     var body: some View {
         ScrollView {
@@ -168,10 +159,10 @@ struct SessionDetailView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 // 右上角只放系统分享图标，一个字都不写。
-                // 点它是「选导出方式」，不是直接存文件：先出面板，挑导出字幕还是复制全文。
+                // 点它直接进「导出字幕」：格式和内容都在那一页选，中间不再插一层「复制全文」。
                 Button {
                     Haptics.tap()
-                    showExportOptions = true
+                    showExportSheet = true
                 } label: {
                     Image(systemName: "square.and.arrow.up")
                         .font(.system(size: 15, weight: .semibold))
@@ -179,22 +170,9 @@ struct SessionDetailView: View {
                 .disabled(detail == nil || (detail?.lines.isEmpty ?? true))
             }
         }
-        .confirmationDialog("导出", isPresented: $showExportOptions, titleVisibility: .visible) {
-            Button("导出字幕") {
-                showExportSheet = true
-            }
-            Button("复制全文") {
-                UIPasteboard.general.string = shareURL.flatMap { try? String(contentsOf: $0, encoding: .utf8) }
-                tip = "全文已复制"
-            }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("字幕可导出 SRT / TXT，内容可选原文、译文或双语。")
-        }
         .sheet(isPresented: $showExportSheet) {
             SubtitleExportView(session: session, lines: detail?.lines ?? [])
         }
-        .notice($tip)
         .task { await load() }
     }
 
@@ -207,9 +185,6 @@ struct SessionDetailView: View {
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(Theme.ink)
                 Spacer()
-                Text("\(session.creditsText) 积分")
-                    .font(.system(size: 15, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(Theme.accent)
             }
             HStack(spacing: 14) {
                 Label(Self.timeText(session.startedAt), systemImage: "clock")
@@ -337,33 +312,8 @@ struct SessionDetailView: View {
             let d = try await cloud.transcript(sessionID: session.id)
             detail = d
             summary = d.summary
-            buildShareFile(d.lines)
         } catch {
             self.error = "记录加载失败：\(error.localizedDescription)"
-        }
-    }
-
-    /// 把这一场拼成一份纯文本放到临时目录，供右上角分享按钮使用。
-    /// 中文在上、原文在下，跟详情页里看到的一致。
-    private func buildShareFile(_ lines: [Cloud.TranscriptLine]) {
-        let rows = lines.compactMap { l -> String? in
-            if l.trans.isEmpty { return l.source.isEmpty ? nil : l.source }
-            if l.source.isEmpty || l.source == l.trans { return l.trans }
-            return l.trans + "\n" + l.source
-        }
-        guard !rows.isEmpty else {
-            shareURL = nil
-            return
-        }
-        let head = "语幕 · " + Self.dayText(session.startedAt) + " " + Self.timeText(session.startedAt)
-            + " · " + session.durationText
-        let text = head + "\n\n" + rows.joined(separator: "\n\n") + "\n"
-        let f = DateFormatter()
-        f.dateFormat = "yyyyMMdd_HHmm"
-        let name = "语幕对话_\(f.string(from: session.startedAt)).txt"
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
-        if (try? text.data(using: .utf8)?.write(to: url, options: .atomic)) != nil {
-            shareURL = url
         }
     }
 
@@ -390,6 +340,7 @@ struct SubtitleExportView: View {
     @State private var format = "srt"
     @State private var content = "both"
     @State private var fileURL: URL?
+    @State private var sheetH: CGFloat = 400
     @Environment(\.dismiss) private var dismiss
 
     private let formats = [("srt", "SRT 字幕"), ("txt", "TXT 文本")]
@@ -397,6 +348,7 @@ struct SubtitleExportView: View {
 
     var body: some View {
         NavigationStack {
+            ScrollView {
             VStack(spacing: 16) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("格式")
@@ -425,8 +377,6 @@ struct SubtitleExportView: View {
                     .foregroundStyle(Theme.faint)
                     .multilineTextAlignment(.center)
 
-                Spacer(minLength: 0)
-
                 if let url = fileURL {
                     ShareLink(item: url) {
                         Text("保存 / 分享")
@@ -446,7 +396,21 @@ struct SubtitleExportView: View {
             .padding(.horizontal, 16)
             .padding(.top, 12)
             .padding(.bottom, 20)
+            .background(
+                GeometryReader { g in
+                    Color.clear.preference(key: ExportSheetHeight.self, value: g.size.height)
+                }
+            )
             .background(Theme.bg)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .onPreferenceChange(ExportSheetHeight.self) { h in
+                guard h > 40 else { return }
+                // 导航栏到此为止的高度 + 安全区，才是这块面板真正要占的。
+                let want = h + 96
+                let top = UIScreen.main.bounds.height * 0.92
+                sheetH = max(300, min(top, want))
+            }
             .navigationTitle("导出字幕")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -458,6 +422,10 @@ struct SubtitleExportView: View {
             .onChange(of: format) { _ in rebuild() }
             .onChange(of: content) { _ in rebuild() }
         }
+        // 面板高度贴着内容走：里面就两块选择加一个按钮，内容多大就多大，
+        // 不该占满整屏（以前是写死 430，内容一变就露出半截空白）。
+        .presentationDetents([.height(sheetH)])
+        .presentationDragIndicator(.visible)
     }
 
     private var fileName: String {
@@ -531,5 +499,13 @@ struct SubtitleExportView: View {
         let s = total % 60
         let ms = Int(((t - floor(t)) * 1000).rounded())
         return String(format: "%02d:%02d:%02d,%03d", h, m, s, ms)
+    }
+}
+
+/// 导出面板量高：内容多高，面板就多高。
+private struct ExportSheetHeight: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
