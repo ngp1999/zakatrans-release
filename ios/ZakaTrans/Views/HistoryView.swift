@@ -341,7 +341,6 @@ struct SubtitleExportView: View {
     @State private var content = "both"
     @State private var fileURL: URL?
     @State private var sheetH: CGFloat = 400
-    @Environment(\.dismiss) private var dismiss
 
     private let formats = [("srt", "SRT 字幕"), ("txt", "TXT 文本")]
     private let contents = [("source", "原文"), ("trans", "译文"), ("both", "双语")]
@@ -411,31 +410,26 @@ struct SubtitleExportView: View {
         .onPreferenceChange(ExportSheetHeight.self) { h in
             guard h > 40 else { return }
             // 内容 + 自己这条标题栏 + 底部安全区，就是面板该有的高度。
-            let want = h + 44 + SafeArea.bottom
+            let want = h + 40 + SafeArea.bottom
             sheetH = min(UIScreen.main.bounds.height * 0.92, want)
         }
         .onAppear { rebuild() }
         .onChange(of: format) { _ in rebuild() }
         .onChange(of: content) { _ in rebuild() }
         .presentationDetents([.height(sheetH)])
-        .presentationDragIndicator(.visible)
+        // 面板顶上那条小横杠不要：这个面板是按内容定高的，本来就没有可拖拽的余地，
+        // 挂一条横杠只会让人以为还能往上拉。
+        .presentationDragIndicator(.hidden)
     }
 
     /// 自己画一条标题栏，不套导航栏：导航栏自带一层高度和安全区，面板会虚高一截。
+    /// 也不放「完成」按钮：面板高度就是内容高度，选完直接下滑走人。
     private var header: some View {
-        ZStack {
-            Text("导出字幕")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(Theme.ink)
-            HStack {
-                Spacer()
-                Button("完成") { dismiss() }
-                    .font(.system(size: 17))
-                    .foregroundStyle(Theme.accent)
-            }
-        }
-        .padding(.horizontal, 16)
-        .frame(height: 44)
+        Text("导出字幕")
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(Theme.ink)
+            .frame(maxWidth: .infinity)
+            .frame(height: 40)
     }
 
     private var fileName: String {
