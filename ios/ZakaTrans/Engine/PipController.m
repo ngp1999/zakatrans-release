@@ -779,7 +779,7 @@ static NSUInteger ZKVisibleLen(NSString *text) {
         if ([self showTrans]) zh += ZKVisibleLen(it[@"zh"]);
         if ([self showSource]) en += ZKVisibleLen(it[@"en"]);
     }
-    CGFloat need = MAX(zh / 10.0, en / 18.0) + 0.35;
+    CGFloat need = MAX(zh / 10.0, en / 18.0) + 0.25;
     return need;
 }
 
@@ -787,15 +787,17 @@ static NSUInteger ZKVisibleLen(NSString *text) {
 ///
 /// 规则：按字数算出「读得完」的时间，再用积压量往下压——
 /// 后面堆得越多，每一屏停得越短，保证画面追得上嘴，而不是无限往后拖。
-/// 下限 0.55 秒（再快就成了闪一下），上限 2.6 秒（再长就跟不上说话了）。
+/// 下限 0.30 秒（再快就成了闪一下），上限 1.8 秒。
+/// 上一版是 0.55~2.6 秒，小窗里一句要等一秒多才换上来，看着就是「上屏慢」；
+/// 现在整条节奏往前挪一档：积压一出现就压缩，不等堆到两句才开始。
 - (NSTimeInterval)holdSecondsFor:(NSArray *)items pressure:(NSInteger)pressure {
     CGFloat need = [self readSeconds:items];
-    CGFloat factor = 1.0;
-    if (pressure >= 2) factor = 0.85;
-    if (pressure >= 3) factor = 0.65;
-    if (pressure >= 5) factor = 0.50;
+    CGFloat factor = 0.85;
+    if (pressure >= 1) factor = 0.70;
+    if (pressure >= 2) factor = 0.55;
+    if (pressure >= 3) factor = 0.45;
     CGFloat hold = need * factor;
-    return MIN(2.6, MAX(0.55, hold));
+    return MIN(1.8, MAX(0.30, hold));
 }
 
 - (NSAttributedString *)attr:(NSString *)t font:(UIFont *)f color:(UIColor *)c {
