@@ -467,6 +467,7 @@ static UIColor *ZKBackgroundColor(void) {
 - (void)rebuildFromLines:(NSArray *)lines;
 - (void)appendLine:(NSDictionary *)d;
 - (void)setLiveEn:(NSString *)en zh:(NSString *)zh;
+- (void)showLiveEn:(NSString *)en zh:(NSString *)zh;
 - (void)setOffsetY:(CGFloat)y;
 - (CGSize)containerSize;
 - (void)startSizeProbe;
@@ -1424,14 +1425,21 @@ static NSUInteger ZKVisibleLen(NSString *text) {
 // 正在说的这句：就地改流尾那一块，整条流会随文字增长连续往上顶
 - (void)setLiveEn:(NSString *)en zh:(NSString *)zh {
     // 画中画里不显示「正在说的半句」：整句翻完才落一行。
-    // 以前这里只在全宽档关掉，竖排档仍会显示一个字一个字长出来的草稿，
-    // 看上去就是「打字机动画」——用户明确不要这个效果，统一去掉。
+    // 尾块现在用来挂「已经落定、还在等译文」的整句（见 showLiveEn:），
+    // 这里绝不能清尾块，否则那句原文刚出现就被半句回调擦掉了。
     if (en.length || zh.length) [self hidePlaceholder];
-    if (self.liveEn.length || self.liveZh.length) {
-        self.liveEn = nil;
-        self.liveZh = nil;
-        [self.stream clearTail];
-    }
+}
+
+// 整句落定就先上屏原文，译文到了再就地补在它上面：
+// 一句说完 0.2 秒内就能看见字；译文到齐时只往上长一行，屏幕上的字不重排、不跳。
+- (void)showLiveEn:(NSString *)en zh:(NSString *)zh {
+    if (!en.length && !zh.length) return;
+    [self hidePlaceholder];
+    self.liveEn = en.length ? en : nil;
+    self.liveZh = zh.length ? zh : nil;
+    [self.stream updateTailEn:(en ?: @"") zh:(zh ?: @"")];
+    [self applyGeometry];
+}
 }
 
 @end
@@ -1627,6 +1635,11 @@ static __weak id gActiveSub = nil;
 - (void)setLiveEn:(NSString *)en zh:(NSString *)zh {
     if (!_sub) return;
     [_sub setLiveEn:en zh:zh];
+}
+
+- (void)showLiveEn:(NSString *)en zh:(NSString *)zh {
+    if (!_sub) return;
+    [_sub showLiveEn:en zh:zh];
 }
 
 // 兼容旧调用
