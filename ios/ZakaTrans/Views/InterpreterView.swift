@@ -68,11 +68,8 @@ struct InterpreterView: View {
                 ZKInterpreter.shared()?.setMine(a, other: b)
             }
         }
-        .alert("提示", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
-            Button("知道了", role: .cancel) { error = nil }
-        } message: {
-            Text(error ?? "")
-        }
+        // 用自绘提示框，跟 App 其他地方的卡片是同一套语言（系统 alert 一弹出来就出戏）
+        .notice($error)
         .onDisappear {
             if running { stop() }
         }
