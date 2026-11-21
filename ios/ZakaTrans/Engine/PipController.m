@@ -1440,7 +1440,6 @@ static NSUInteger ZKVisibleLen(NSString *text) {
     [self.stream updateTailEn:(en ?: @"") zh:(zh ?: @"")];
     [self applyGeometry];
 }
-}
 
 @end
 
