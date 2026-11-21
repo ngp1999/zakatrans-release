@@ -30,6 +30,9 @@ static NSString *gMode = @"bilingual";         // bilingual | zh | source
 static NSString *gBackground = @"black";       // 7 种实色背景，见 ZKBackgroundColor()
 static CGSize gPipSize = {1080, 216};          // 5:1 全宽横条（默认，最不挡画面）
 static NSString *gPipStyle = @"X";             // 当前窗口档：X 小(5:1) / M 中(21:9) / B 大(16:10)
+// 滚动方式：up = 上推（老样子）/ push = 横向推（小窗）/ segment = 分段（中窗、大窗）
+// 只影响字幕怎么"进来"，字号、行数、颜色一概不动。
+static NSString *gScroll = @"up";
 // 小窗兜底：窗口被拖得很小、字号已压到下限还是放不下时，原文限行（0 = 不限）。
 // 优先保住中文主字幕的完整，原文宁可截一行，也不把两个字都缩到看不清。
 static NSInteger gEnMaxLines = 0;
@@ -39,7 +42,7 @@ static const CGFloat ZK_MAX_BLOCKS = 120.0;   // 历史句上限（正常一场�
 // 滚动弹簧：固有频率越高追得越快（临界阻尼下约 4/ω 秒到位）。
 // 22 ≈ 0.18s 到位，正好把"一行文字长出来"那 25 点的落差摊成一段连续位移。
 // 大位移（重建、画中画被缩放）用慢一档的，看得清也更有质感。
-static const CGFloat ZK_SPRING_W = 22.0;
+static const CGFloat ZK_SPRING_W = 27.0;
 static const CGFloat ZK_SPRING_W_BIG = 13.0;
 
 #pragma mark 一块（一句）
@@ -569,7 +572,125 @@ static NSUInteger ZKVisibleLen(NSString *text) {
     return n;
 }
 
-#pragma mark - 小档（5:1 横条）：两行，中文在上、源语言在下
+#pragma mark - 小档（5:1）：两行，中文在上、源语言在下
+
+/// 横向滚动的一行：句子按顺序排开、整体靠右。
+/// 新的一句从右边进来；它的字越来越多（译文边翻边补进来）时，
+/// 整排被它顶着往左走——走多远正比于这一下长出来的宽度，
+/// 所以是「按翻译速度推」，不是匀速跑马灯。
+@interface ZKPushRow : UIView
+@property (nonatomic, strong) UIFont *font;
+@property (nonatomic, strong) UIColor *color;
+- (void)setTexts:(NSArray<NSString *> *)texts animated:(BOOL)animated;
+@end
+
+@implementation ZKPushRow {
+    NSMutableArray<UILabel *> *_chips;
+    CGFloat _lastTotal;
+}
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        self.clipsToBounds = YES;
+        self.userInteractionEnabled = NO;
+        self.backgroundColor = [UIColor clearColor];
+        _chips = [NSMutableArray array];
+        _font = [UIFont boldSystemFontOfSize:20];
+        _color = [UIColor whiteColor];
+        _lastTotal = 0;
+    }
+    return self;
+}
+
+- (CGFloat)chipWidth:(NSString *)t limit:(CGFloat)limit {
+    if (!t.length) return 0;
+    CGSize s = [t sizeWithAttributes:@{NSFontAttributeName: self.font ?: [UIFont systemFontOfSize:20]}];
+    return MIN(limit, ceil(s.width) + 2.0);
+}
+
+- (CGFloat)chipHeight:(NSString *)t width:(CGFloat)cw {
+    if (!t.length || cw < 1) return 0;
+    CGRect r = [t boundingRectWithSize:CGSizeMake(cw, CGFLOAT_MAX)
+                               options:(NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading)
+                            attributes:@{NSFontAttributeName: self.font ?: [UIFont systemFontOfSize:20]}
+                               context:nil];
+    return ceil(r.size.height) + 2.0;
+}
+
+- (void)setTexts:(NSArray<NSString *> *)texts animated:(BOOL)animated {
+    CGFloat w = self.bounds.size.width;
+    CGFloat h = self.bounds.size.height;
+    if (w < 1 || h < 1) return;
+    NSArray *arr = [texts isKindOfClass:[NSArray class]] ? texts : @[];
+
+    // label 数量跟文本数量对齐：多了删、少了补
+    while (_chips.count > arr.count) {
+        [_chips.lastObject removeFromSuperview];
+        [_chips removeLastObject];
+    }
+    while (_chips.count < arr.count) {
+        UILabel *l = [UILabel new];
+        l.numberOfLines = 2;
+        l.lineBreakMode = NSLineBreakByWordWrapping;
+        l.textAlignment = NSTextAlignmentLeft;
+        l.backgroundColor = [UIColor clearColor];
+        l.userInteractionEnabled = NO;
+        [self addSubview:l];
+        [_chips addObject:l];
+    }
+
+    CGFloat limit = MAX(24.0, w - 14.0);
+    CGFloat gap = MAX(8.0, (self.font ?: [UIFont systemFontOfSize:20]).pointSize * 0.5);
+
+    NSMutableArray<NSNumber *> *widths = [NSMutableArray array];
+    CGFloat total = 0;
+    for (NSUInteger i = 0; i < arr.count; i++) {
+        CGFloat cw = [self chipWidth:arr[i] limit:limit];
+        [widths addObject:@(cw)];
+        total += cw;
+        if (i + 1 < arr.count) total += gap;
+    }
+
+    // 先按最终位置算好每一块，再一起动：这样整排是一次连续平移，不是逐块跳
+    CGFloat x = w - total;
+    NSMutableArray<NSValue *> *frames = [NSMutableArray array];
+    for (NSUInteger i = 0; i < arr.count; i++) {
+        CGFloat cw = widths[i].doubleValue;
+        CGFloat ch = [self chipHeight:arr[i] width:cw];
+        [frames addObject:[NSValue valueWithCGRect:CGRectMake(x, (h - ch) / 2.0, cw, ch)]];
+        x += cw + gap;
+    }
+
+    CGFloat shift = fabs(total - _lastTotal);
+    _lastTotal = total;
+
+    void (^apply)(void) = ^{
+        for (NSUInteger i = 0; i < self->_chips.count; i++) {
+            UILabel *l = self->_chips[i];
+            l.text = arr[i];
+            l.font = self.font;
+            l.textColor = self.color;
+            l.alpha = 1.0;
+            l.frame = [frames[i] CGRectValue];
+        }
+    };
+
+    if (!animated || shift < 0.5) {
+        apply();
+        return;
+    }
+    // 位移越大走得越从容：一眼能看出「是被新字顶过去的」，
+    // 而不是"每隔固定时间跳一下"的跑马灯。
+    CGFloat dur = MIN(0.46, MAX(0.08, shift / 900.0));
+    [UIView animateWithDuration:dur
+                          delay:0
+                        options:(UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction)
+                     animations:apply
+                     completion:nil];
+}
+
+@end
 
 // 做三件事：
 // 1) 中文一行一组、源语言一行一组，各自居中，中文在上、原文在下；
@@ -586,6 +707,10 @@ static NSUInteger ZKVisibleLen(NSString *text) {
 - (void)refreshStyle;
 - (BOOL)needsZh:(NSDictionary *)it;
 - (BOOL)applyZh:(NSString *)zh forEn:(NSString *)en;
+// 横向推（小窗）：新句把老句往左顶
+- (BOOL)pushMode;
+- (void)renderPush:(BOOL)animated;
+- (void)trimPushItems;
 @end
 
 @implementation ZKWideView {
@@ -600,6 +725,10 @@ static NSUInteger ZKVisibleLen(NSString *text) {
     NSDate *_holdUntil;                        // 这一屏最少停到什么时候（按阅读速度算）
     NSMutableArray<NSString *> *_pending;      // 已经上队、译文还没到的原文（先进先出，补译文时按顺序对号）
     NSTimer *_drain;
+    // 横向推模式：屏上的句子（按先后），和上下两行
+    NSMutableArray<NSMutableDictionary *> *_pushItems;
+    ZKPushRow *_pushZh;
+    ZKPushRow *_pushSrc;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -615,6 +744,14 @@ static NSUInteger ZKVisibleLen(NSString *text) {
         _srcLabel = [self makeRow];
         [self addSubview:_zhLabel];
         [self addSubview:_srcLabel];
+
+        _pushItems = [NSMutableArray array];
+        _pushZh = [ZKPushRow new];
+        _pushSrc = [ZKPushRow new];
+        _pushZh.hidden = YES;
+        _pushSrc.hidden = YES;
+        [self addSubview:_pushZh];
+        [self addSubview:_pushSrc];
     }
     return self;
 }
@@ -636,6 +773,9 @@ static NSUInteger ZKVisibleLen(NSString *text) {
 - (BOOL)showTrans { return ![gMode isEqualToString:@"source"]; }
 - (BOOL)showSource { return ![gMode isEqualToString:@"zh"]; }
 - (BOOL)twoRows { return [self showTrans] && [self showSource]; }
+
+/// 小窗的横向推：新句把老句往左顶
+- (BOOL)pushMode { return [gScroll isEqualToString:@"push"]; }
 
 - (UIFont *)zhFont:(CGFloat)f { return [UIFont boldSystemFontOfSize:f]; }
 - (UIFont *)srcFont:(CGFloat)f { return [UIFont systemFontOfSize:f * 0.68]; }
@@ -779,6 +919,7 @@ static NSUInteger ZKVisibleLen(NSString *text) {
 - (void)pump {
     [_drain invalidate];
     _drain = nil;
+    if ([self pushMode]) return;      // 横向推不用队列，新句直接挂右边
     if (_w < 1 || _h < 1) return;
     if (_queue.count == 0) return;
 
@@ -794,27 +935,24 @@ static NSUInteger ZKVisibleLen(NSString *text) {
 
     NSInteger pressure = (NSInteger)_queue.count;
 
-    // 译文还没到就先挂着等一等（最多 1.2 秒）。
-    // 横条一屏只停一两句、换得比中档大档快得多，以前"落定就上屏、译文后补"，
-    // 等译文（1~3 秒）到的时候那句早就下屏了，屏幕上就永远只有英文——
-    // 用户截图里「只有原文没有中文」就是这么来的。
-    // 等到就带着中文一起上屏；等超时也不死等，先把原文放出去，译文到了再按原文精确回填。
-    if ([self showTrans] && [self needsZh:_queue.firstObject]) {
-        NSDate *at = ((NSDictionary *)_queue.firstObject)[@"at"];
-        // 没有时间戳的老数据（历史行）不参与等待，直接放行，免得一直重排
-        NSTimeInterval waited = [at isKindOfClass:[NSDate class]] ? -[at timeIntervalSinceNow] : 999;
-        if (waited < 1.2) {
-            [self scheduleAfter:0.10];
-            return;
-        }
-    }
+    // 不再为了等译文把整条流压住。
+    //
+    // 上一版在这里有两道闸：队首那句没译文就等最多 1.2 秒，屏上这句没译文再多留 2 秒。
+    // 结果是一句话在说快的时候，每句都要先等一会，队列只增不减——
+    // 说得越久屏幕上越落后，用户看到的就是「越用越慢、延迟越来越高」。
+    // 现在的规矩：原文来了立刻上屏；译文到了按原文精确回填到那一行（patchZh:forEn:），
+    // 回填不了就说明那句早就下屏了，那也是正常的——画面不再为它停下来等。
 
-    // 屏上这一句还只有原文：再多留一会儿等译文（最多 2.0 秒），
-    // 译文落在还在屏上的这句话头上才看得见——横条一换屏就再也补不回来了。
-    if ([self showTrans] && _shownAt && [self needsZh:_current.firstObject]
-        && -[_shownAt timeIntervalSinceNow] < 2.0) {
-        [self scheduleAfter:0.12];
-        return;
+    // 追赶：后面还堆着两句以上，说明已经落后于嘴了。
+    // 这时候不逐句补播（越补越远），只留最新一句，把时间拉回来。
+    if (pressure >= 3) {
+        while (_queue.count > 1) {
+            NSString *dropped = ((NSDictionary *)_queue.firstObject)[@"en"];
+            if ([dropped isKindOfClass:[NSString class]] && dropped.length) [_pending removeObject:dropped];
+            [_queue removeObjectAtIndex:0];
+        }
+        pressure = (NSInteger)_queue.count;
+        _holdUntil = nil;
     }
 
     // 一句一批：默认屏上只放「一整句」。
@@ -835,6 +973,11 @@ static NSUInteger ZKVisibleLen(NSString *text) {
     _shownAt = [NSDate date];
 
     NSTimeInterval hold = [self holdSecondsFor:batch pressure:(NSInteger)_queue.count];
+    // 屏上这句还只有原文、后面又没别的话要上：那就多留一会儿等译文。
+    // 这时候压着不会造成"越拖越远"（队列是空的），但能让中文落到看得见的那一行上。
+    if (!_queue.count && [self showTrans] && [self needsZh:batch.firstObject]) {
+        hold = MAX(hold, 1.0);
+    }
     _holdUntil = [NSDate dateWithTimeIntervalSinceNow:hold];
     if (_queue.count) [self scheduleAfter:hold];
 }
@@ -871,12 +1014,12 @@ static NSUInteger ZKVisibleLen(NSString *text) {
 /// 现在整条节奏往前挪一档：积压一出现就压缩，不等堆到两句才开始。
 - (NSTimeInterval)holdSecondsFor:(NSArray *)items pressure:(NSInteger)pressure {
     CGFloat need = [self readSeconds:items];
-    CGFloat factor = 0.85;
-    if (pressure >= 1) factor = 0.70;
-    if (pressure >= 2) factor = 0.55;
-    if (pressure >= 3) factor = 0.45;
+    CGFloat factor = 0.80;
+    if (pressure >= 1) factor = 0.62;
+    if (pressure >= 2) factor = 0.48;
+    if (pressure >= 3) factor = 0.36;
     CGFloat hold = need * factor;
-    return MIN(1.8, MAX(0.30, hold));
+    return MIN(1.6, MAX(0.24, hold));
 }
 
 - (NSAttributedString *)attr:(NSString *)t font:(UIFont *)f color:(UIColor *)c {
@@ -954,16 +1097,86 @@ static NSUInteger ZKVisibleLen(NSString *text) {
         CABasicAnimation *fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
         fade.fromValue = @(0.0);
         fade.toValue = @(1.0);
-        fade.duration = 0.18;
+        fade.duration = 0.12;
         fade.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
         [l.layer addAnimation:fade forKey:@"wideFade"];
 
         CABasicAnimation *rise = [CABasicAnimation animationWithKeyPath:@"transform.translation.y"];
         rise.fromValue = @(5.0);
         rise.toValue = @(0.0);
-        rise.duration = 0.22;
+        rise.duration = 0.15;
         rise.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
         [l.layer addAnimation:rise forKey:@"wideRise"];
+    }
+}
+
+#pragma mark 横向推（小窗专用）
+
+- (void)renderPush:(BOOL)animated {
+    if (_w < 1 || _h < 1) return;
+    BOOL two = [self twoRows];
+    UIColor *main = ZKMainColor();
+
+    _zhLabel.hidden = YES;
+    _srcLabel.hidden = YES;
+    _pushZh.hidden = !two && ![self showTrans];
+    _pushSrc.hidden = !two && ![self showSource];
+
+    CGFloat pf = _font * 0.74;   // 横向滚动一屏要放下不止一句，字号收一档
+    CGFloat zhH = 0, srcH = 0, gap = 0;
+    if (two) {
+        gap = MAX(2.0, _h * 0.05);
+        zhH = ceil((_h - gap) * 0.56);
+        srcH = (_h - gap) - zhH;
+    } else if ([self showTrans]) {
+        zhH = _h;
+    } else {
+        srcH = _h;
+    }
+
+    NSMutableArray<NSString *> *zhTexts = [NSMutableArray array];
+    NSMutableArray<NSString *> *srcTexts = [NSMutableArray array];
+    for (NSDictionary *it in _pushItems) {
+        NSString *z = it[@"zh"], *e = it[@"en"];
+        if ([z isKindOfClass:[NSString class]] && z.length) [zhTexts addObject:z];
+        if ([e isKindOfClass:[NSString class]] && e.length) [srcTexts addObject:e];
+    }
+
+    if (zhH > 0) {
+        _pushZh.hidden = NO;
+        _pushZh.frame = CGRectMake(0, two ? 0 : 0, _w, zhH);
+        _pushZh.font = [UIFont boldSystemFontOfSize:pf];
+        _pushZh.color = main;
+        [_pushZh setTexts:zhTexts animated:animated];
+    }
+    if (srcH > 0) {
+        _pushSrc.hidden = NO;
+        _pushSrc.frame = CGRectMake(0, two ? (zhH + gap) : 0, _w, srcH);
+        // 只显原文时用主字号：单语本该更大，不能拿原文的小字号顶上去
+        _pushSrc.font = two ? [UIFont systemFontOfSize:pf * 0.68] : [UIFont boldSystemFontOfSize:pf];
+        _pushSrc.color = two ? [main colorWithAlphaComponent:0.62] : main;
+        [_pushSrc setTexts:srcTexts animated:animated];
+    }
+}
+
+/// 横向模式下把老句挤出去：屏上只留装得下的一半，再多就整句从左边丢掉
+- (void)trimPushItems {
+    while (_pushItems.count > 6) [_pushItems removeObjectAtIndex:0];
+    if (_w < 1 || _pushItems.count <= 1) return;
+    UIFont *zf = [UIFont boldSystemFontOfSize:_font * 0.74];
+    UIFont *sf = [UIFont systemFontOfSize:_font * 0.74 * 0.68];
+    CGFloat gap = MAX(8.0, zf.pointSize * 0.5);
+    while (_pushItems.count > 1) {
+        CGFloat total = 0;
+        for (NSDictionary *it in _pushItems) {
+            CGFloat wz = 0, we = 0;
+            NSString *z = it[@"zh"], *e = it[@"en"];
+            if ([z isKindOfClass:[NSString class]] && z.length) wz = ZKTextWidth(z, zf);
+            if ([e isKindOfClass:[NSString class]] && e.length) we = ZKTextWidth(e, sf);
+            total += MAX(wz, we) + gap;
+        }
+        if (total <= _w * 1.5) break;
+        [_pushItems removeObjectAtIndex:0];
     }
 }
 
@@ -976,6 +1189,11 @@ static NSUInteger ZKVisibleLen(NSString *text) {
     _h = height;
     if (!changed && !force) return;
     [self recalcFont];
+    if ([self pushMode]) {
+        [self trimPushItems];
+        [self renderPush:NO];
+        return;
+    }
     if (_current.count) [self renderAnimated:NO];
     if (_queue.count) {
         _shownAt = nil;         // 尺寸变了：新句立刻上屏，不用等防抖
@@ -992,6 +1210,7 @@ static NSUInteger ZKVisibleLen(NSString *text) {
     _current = nil;
     _zhLabel.attributedText = nil;
     _srcLabel.attributedText = nil;
+    [_pushItems removeAllObjects];
     _shownAt = nil;
     _holdUntil = nil;
     if (![lines isKindOfClass:[NSArray class]]) return;
@@ -1006,6 +1225,12 @@ static NSUInteger ZKVisibleLen(NSString *text) {
         if (!e.length && !z.length) continue;
         // 历史行不参与「等译文」那套计时：它们本来就是落定过的句子
         [_queue addObject:@{@"en": e, @"zh": z, @"at": [NSDate dateWithTimeIntervalSinceNow:-60]}];
+        if ([self pushMode]) [_pushItems addObject:[@{@"en": e, @"zh": z} mutableCopy]];
+    }
+    if ([self pushMode]) {
+        [self trimPushItems];
+        [self renderPush:NO];
+        return;
     }
     [self pump];
 }
@@ -1014,6 +1239,22 @@ static NSUInteger ZKVisibleLen(NSString *text) {
     NSString *e = [en isKindOfClass:[NSString class]] ? en : @"";
     NSString *z = [zh isKindOfClass:[NSString class]] ? zh : @"";
     if (!e.length && !z.length) return;
+
+    // 横向推：新句直接挂到最右边，整排被它顶过去
+    if ([self pushMode]) {
+        // 同一句被重复推上来（断线重连）就不再排第二遍
+        NSMutableDictionary *last = _pushItems.lastObject;
+        if (last && [last[@"en"] isEqualToString:e]) {
+            if (![last[@"zh"] length] && z.length) last[@"zh"] = z;
+            [self renderPush:YES];
+            return;
+        }
+        [_pushItems addObject:[@{@"en": e, @"zh": z} mutableCopy]];
+        [self trimPushItems];
+        [self renderPush:YES];
+        return;
+    }
+
     [_queue addObject:@{@"en": e, @"zh": z, @"at": [NSDate date]}];
     // 只有原文没有译文：记一笔，等译文到了按这个顺序对号补上
     if (!z.length && e.length && [self showTrans]) [_pending addObject:e];
@@ -1030,11 +1271,29 @@ static NSUInteger ZKVisibleLen(NSString *text) {
     if (_queue.count >= 5 && _shownAt && -[_shownAt timeIntervalSinceNow] >= 0.4) {
         _holdUntil = nil;
     }
+    // 屏上这句还在等译文、新的已经来了：不等了，新句立刻上。
+    // 等译文只在"没有下句"的时候才做，不能为了它把整条流压住。
+    if (_current.count && [self showTrans] && [self needsZh:_current.firstObject]
+        && _shownAt && -[_shownAt timeIntervalSinceNow] >= 0.35) {
+        _holdUntil = nil;
+    }
     [self pump];
 }
 
 - (void)refreshStyle {
     [self recalcFont];
+    if ([self pushMode]) {
+        if (!_pushItems.count && _current.count) {
+            for (NSDictionary *it in _current) {
+                [_pushItems addObject:[it mutableCopy]];
+            }
+        }
+        [self trimPushItems];
+        [self renderPush:NO];
+        return;
+    }
+    _pushZh.hidden = YES;
+    _pushSrc.hidden = YES;
     [self renderAnimated:NO];
 }
 
@@ -1043,6 +1302,30 @@ static NSUInteger ZKVisibleLen(NSString *text) {
 // 那样补出来的中文和屏幕上的英文根本不是一句话。
 - (void)patchZh:(NSString *)zh forEn:(NSString *)en {
     if (![zh isKindOfClass:[NSString class]] || !zh.length) return;
+    if ([self pushMode]) {
+        // 横向：按原文找回那一句补上；补完这一排会重新量宽，
+        // 变宽的部分就是"被新字顶出去"的那一段，走的距离跟着翻译的量走。
+        BOOL hit = NO;
+        for (NSInteger i = (NSInteger)_pushItems.count - 1; i >= 0; i--) {
+            NSString *e = _pushItems[i][@"en"];
+            if (![e isKindOfClass:[NSString class]]) continue;
+            if (en.length && ![e isEqualToString:en]) continue;
+            if ([_pushItems[i][@"zh"] length]) break;
+            _pushItems[i][@"zh"] = zh;
+            hit = YES;
+            break;
+        }
+        if (!hit && !en.length) {
+            for (NSInteger i = (NSInteger)_pushItems.count - 1; i >= 0; i--) {
+                if ([_pushItems[i][@"en"] length] && ![_pushItems[i][@"zh"] length]) {
+                    _pushItems[i][@"zh"] = zh;
+                    break;
+                }
+            }
+        }
+        [self renderPush:YES];
+        return;
+    }
     if (en.length && [self applyZh:zh forEn:en]) return;
     // 上游把这条并进了别的句子：按先进先出，补最早那句还没译文的
     for (NSString *pe in [_pending copy]) {
@@ -1092,6 +1375,16 @@ static NSUInteger ZKVisibleLen(NSString *text) {
 // 译文迟到：屏上这一批的最后一句补上译文，整屏重排一次（字号跟着内容重算，不跳位）
 - (void)patchLastZh:(NSString *)zh {
     if (!zh.length) return;
+    if ([self pushMode]) {
+        for (NSInteger i = (NSInteger)_pushItems.count - 1; i >= 0; i--) {
+            if ([_pushItems[i][@"en"] length] && ![_pushItems[i][@"zh"] length]) {
+                _pushItems[i][@"zh"] = zh;
+                break;
+            }
+        }
+        [self renderPush:YES];
+        return;
+    }
     if (_current.count) {
         NSMutableArray *arr = [_current mutableCopy];
         NSMutableDictionary *m = [arr.lastObject mutableCopy];
@@ -1114,6 +1407,287 @@ static NSUInteger ZKVisibleLen(NSString *text) {
 
 @end
 
+#pragma mark - 中窗 / 大窗分段式：上半屏译文、下半屏原文，一句一句往上加
+
+/// 分段式：窗口分成上下两半，上半是一大段译文、下半是一大段原文，
+/// 每来一句就各自往上加一行、最老的从顶上淡出——像一段文字被一句句"贴"进去。
+/// 只显一种语言时它占满整个窗口，字号也用主字号（单语本该更大）。
+@interface ZKSegmentView : UIView
+- (void)setBoxWidth:(CGFloat)w height:(CGFloat)h force:(BOOL)force;
+- (void)resetWithLines:(NSArray *)lines;
+- (void)addEn:(NSString *)en zh:(NSString *)zh;
+- (void)patchZh:(NSString *)zh forEn:(NSString *)en;
+- (void)refreshStyle;
+@end
+
+@interface ZKSegmentView ()
+- (void)render:(BOOL)animated;
+- (BOOL)twoRows;
+- (UIFont *)zhFont;
+- (UIFont *)srcFont;
+- (void)recalcFont;
+@end
+
+@implementation ZKSegmentView {
+    CGFloat _w;
+    CGFloat _h;
+    CGFloat _font;
+    NSMutableArray<NSMutableDictionary *> *_items;
+    NSMutableArray<UILabel *> *_zhLabels;
+    NSMutableArray<UILabel *> *_srcLabels;
+    UIView *_divider;
+}
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        self.clipsToBounds = YES;
+        self.userInteractionEnabled = NO;
+        self.backgroundColor = [UIColor clearColor];
+        _items = [NSMutableArray array];
+        _zhLabels = [NSMutableArray array];
+        _srcLabels = [NSMutableArray array];
+        _font = 24;
+        _divider = [UIView new];
+        _divider.userInteractionEnabled = NO;
+        [self addSubview:_divider];
+    }
+    return self;
+}
+
+- (BOOL)twoRows {
+    return ![gMode isEqualToString:@"zh"] && ![gMode isEqualToString:@"source"];
+}
+
+- (UIFont *)zhFont { return [UIFont boldSystemFontOfSize:_font]; }
+- (UIFont *)srcFont { return [UIFont systemFontOfSize:([self twoRows] ? _font * 0.68 : _font)]; }
+
+- (void)recalcFont {
+    if (_w < 1 || _h < 1) return;
+    CGFloat area = (_w * _h) / (480.0 * 360.0);
+    CGFloat scale = sqrt(MAX(0.04, area));
+    scale = MAX(0.45, MIN(2.10, scale));
+    _font = MAX(12.0, MIN(74.0, gZhBase * scale * 1.35));
+}
+
+- (CGFloat)heightFor:(NSString *)t font:(UIFont *)f width:(CGFloat)w {
+    if (![t isKindOfClass:[NSString class]] || !t.length || w < 1 || !f) return 0;
+    CGRect r = [t boundingRectWithSize:CGSizeMake(w, CGFLOAT_MAX)
+                               options:(NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading)
+                            attributes:@{NSFontAttributeName: f}
+                               context:nil];
+    return ceil(r.size.height) + 1.0;
+}
+
+- (UILabel *)makeLineLabel {
+    UILabel *l = [UILabel new];
+    l.numberOfLines = 0;
+    l.lineBreakMode = NSLineBreakByWordWrapping;
+    l.textAlignment = NSTextAlignmentLeft;
+    l.backgroundColor = [UIColor clearColor];
+    l.userInteractionEnabled = NO;
+    return l;
+}
+
+- (void)setBoxWidth:(CGFloat)w height:(CGFloat)h force:(BOOL)force {
+    if (w < 1 || h < 1) return;
+    BOOL changed = fabs(w - _w) > 0.5 || fabs(h - _h) > 0.5;
+    _w = w;
+    _h = h;
+    if (!changed && !force) return;
+    [self recalcFont];
+    [self render:NO];
+}
+
+- (void)resetWithLines:(NSArray *)lines {
+    [_items removeAllObjects];
+    for (UILabel *l in _zhLabels) [l removeFromSuperview];
+    [_zhLabels removeAllObjects];
+    for (UILabel *l in _srcLabels) [l removeFromSuperview];
+    [_srcLabels removeAllObjects];
+    if ([lines isKindOfClass:[NSArray class]]) {
+        NSInteger from = MAX(0, (NSInteger)lines.count - 3);
+        for (NSInteger i = from; i < (NSInteger)lines.count; i++) {
+            id o = lines[i];
+            if (![o isKindOfClass:[NSDictionary class]]) continue;
+            NSString *e = o[@"en"] ?: @"";
+            NSString *z = o[@"zh"] ?: @"";
+            if (![e isKindOfClass:[NSString class]]) e = @"";
+            if (![z isKindOfClass:[NSString class]]) z = @"";
+            if (!e.length && !z.length) continue;
+            [_items addObject:[@{@"en": e, @"zh": z} mutableCopy]];
+        }
+    }
+    [self render:NO];
+}
+
+- (void)addEn:(NSString *)en zh:(NSString *)zh {
+    NSString *e = [en isKindOfClass:[NSString class]] ? en : @"";
+    NSString *z = [zh isKindOfClass:[NSString class]] ? zh : @"";
+    if (!e.length && !z.length) return;
+    NSMutableDictionary *last = _items.lastObject;
+    if (last && e.length && [last[@"en"] isEqualToString:e]) {
+        if (![last[@"zh"] length] && z.length) last[@"zh"] = z;
+        [self render:YES];
+        return;
+    }
+    [_items addObject:[@{@"en": e, @"zh": z} mutableCopy]];
+    [self render:YES];
+}
+
+- (void)patchZh:(NSString *)zh forEn:(NSString *)en {
+    if (![zh isKindOfClass:[NSString class]] || !zh.length) return;
+    BOOL hit = NO;
+    for (NSInteger i = (NSInteger)_items.count - 1; i >= 0; i--) {
+        NSString *e = _items[i][@"en"];
+        if (![e isKindOfClass:[NSString class]]) continue;
+        if (en.length && ![e isEqualToString:en]) continue;
+        if ([_items[i][@"zh"] length]) break;
+        _items[i][@"zh"] = zh;
+        hit = YES;
+        break;
+    }
+    if (!hit && !en.length) {
+        for (NSInteger i = (NSInteger)_items.count - 1; i >= 0; i--) {
+            if ([_items[i][@"en"] length] && ![_items[i][@"zh"] length]) {
+                _items[i][@"zh"] = zh;
+                break;
+            }
+        }
+    }
+    [self render:YES];
+}
+
+- (void)refreshStyle {
+    [self recalcFont];
+    [self render:NO];
+}
+
+/// 两栏各站几句：从最新一句往前量，越界就停（译文栏比原文栏高，主字幕优先）
+- (void)render:(BOOL)animated {
+    if (_w < 1 || _h < 1) return;
+    BOOL two = [self twoRows];
+    BOOL showTrans = ![gMode isEqualToString:@"source"];
+    BOOL showSource = ![gMode isEqualToString:@"zh"];
+    CGFloat colW = MAX(10.0, _w - 20.0);
+    CGFloat zhCap = two ? (_h * 0.54) : _h;
+    CGFloat srcCap = two ? (_h * 0.42) : _h;
+    UIFont *zf = [self zhFont];
+    UIFont *sf = [self srcFont];
+    UIColor *main = ZKMainColor();
+
+    // label 一定跟句子一一对应：多出来的先清掉（重建、刷新样式时会出现这种错位）
+    while (_zhLabels.count > _items.count) {
+        [_zhLabels.lastObject removeFromSuperview];
+        [_zhLabels removeLastObject];
+    }
+    while (_srcLabels.count > _items.count) {
+        [_srcLabels.lastObject removeFromSuperview];
+        [_srcLabels removeLastObject];
+    }
+
+    // 从最新一句往前累高，装不下就停
+    CGFloat zhSum = 0, srcSum = 0;
+    NSInteger keep = 0;
+    for (NSInteger i = (NSInteger)_items.count - 1; i >= 0; i--) {
+        NSString *z = showTrans ? (_items[i][@"zh"] ?: @"") : @"";
+        NSString *e = showSource ? (_items[i][@"en"] ?: @"") : @"";
+        CGFloat hz = [self heightFor:z font:zf width:colW];
+        CGFloat he = [self heightFor:e font:sf width:colW];
+        if (keep > 0 && ((showTrans && zhSum + hz > zhCap) || (showSource && srcSum + he > srcCap))) break;
+        zhSum += hz;
+        srcSum += he;
+        keep++;
+    }
+
+    // 多出来的整句从最老的开始扔，label 跟着一起扔
+    while ((NSInteger)_items.count > keep && _items.count > 0) {
+        [_items removeObjectAtIndex:0];
+        if (_zhLabels.count) {
+            [_zhLabels.firstObject removeFromSuperview];
+            [_zhLabels removeObjectAtIndex:0];
+        }
+        if (_srcLabels.count) {
+            [_srcLabels.firstObject removeFromSuperview];
+            [_srcLabels removeObjectAtIndex:0];
+        }
+    }
+
+    BOOL created = NO;
+    while (_zhLabels.count < _items.count) {
+        UILabel *l = [self makeLineLabel];
+        l.alpha = 0.0;
+        [self addSubview:l];
+        [_zhLabels addObject:l];
+        created = YES;
+    }
+    while (_srcLabels.count < _items.count) {
+        UILabel *l = [self makeLineLabel];
+        l.alpha = 0.0;
+        [self addSubview:l];
+        [_srcLabels addObject:l];
+        created = YES;
+    }
+
+    _divider.hidden = !two;
+    _divider.backgroundColor = [main colorWithAlphaComponent:0.16];
+    CGFloat midY = two ? (zhCap + (_h - zhCap) / 2.0) : _h;
+    _divider.frame = two ? CGRectMake(10, midY, _w - 20, 0.5) : CGRectZero;
+
+    // 上栏：译文，贴着中缝往上排
+    CGFloat y = two ? (midY - 4.0) : (_h - 4.0);
+    NSMutableArray<NSValue *> *zhFrames = [NSMutableArray array];
+    for (NSInteger i = (NSInteger)_items.count - 1; i >= 0; i--) {
+        NSString *z = showTrans ? (_items[i][@"zh"] ?: @"") : @"";
+        CGFloat hz = [self heightFor:z font:zf width:colW];
+        y -= hz;
+        [zhFrames insertObject:[NSValue valueWithCGRect:CGRectMake(10, y, colW, hz)] atIndex:0];
+        y -= 2.0;
+    }
+
+    // 下栏：原文，贴着底边往上排
+    CGFloat ys = _h - 2.0;
+    NSMutableArray<NSValue *> *srcFrames = [NSMutableArray array];
+    for (NSInteger i = (NSInteger)_items.count - 1; i >= 0; i--) {
+        NSString *e = showSource ? (_items[i][@"en"] ?: @"") : @"";
+        CGFloat he = [self heightFor:e font:sf width:colW];
+        ys -= he;
+        [srcFrames insertObject:[NSValue valueWithCGRect:CGRectMake(10, ys, colW, he)] atIndex:0];
+        ys -= 1.0;
+    }
+
+    void (^apply)(void) = ^{
+        for (NSUInteger i = 0; i < self->_items.count; i++) {
+            UILabel *zl = self->_zhLabels[i];
+            zl.text = showTrans ? (self->_items[i][@"zh"] ?: @"") : @"";
+            zl.font = zf;
+            zl.textColor = main;
+            zl.alpha = 1.0;
+            zl.frame = [zhFrames[i] CGRectValue];
+
+            UILabel *sl = self->_srcLabels[i];
+            sl.text = showSource ? (self->_items[i][@"en"] ?: @"") : @"";
+            sl.font = sf;
+            sl.textColor = [main colorWithAlphaComponent:0.62];
+            sl.alpha = 1.0;
+            sl.frame = [srcFrames[i] CGRectValue];
+        }
+    };
+
+    if (!animated || !created) {
+        apply();
+        return;
+    }
+    // 新进来的那一句：从下方 12 点淡入；老句子同时上移一格——就是"逐句加载"的观感
+    [UIView animateWithDuration:0.22
+                          delay:0
+                        options:(UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionBeginFromCurrentState)
+                     animations:apply
+                     completion:nil];
+}
+
+@end
+
 @implementation ZKSubtitleVC {
     CGFloat _lastLayoutW;
     CGFloat _lastLayoutH;
@@ -1132,6 +1706,7 @@ static NSUInteger ZKVisibleLen(NSString *text) {
     BOOL _snapNext;
     CGFloat _vel;          // 当前滚动速度（pt/s），弹簧的第二个状态量
     ZKWideView *_wide;     // W 全宽档：原文一行 + 译文一行
+    ZKSegmentView *_segment;   // 中/大窗的「分段式」：上半译文、下半原文
 }
 
 - (void)viewDidLoad {
@@ -1182,6 +1757,18 @@ static NSUInteger ZKVisibleLen(NSString *text) {
         [_wide.leadingAnchor constraintEqualToAnchor:v.leadingAnchor constant:14],
         [_wide.trailingAnchor constraintEqualToAnchor:v.trailingAnchor constant:-14],
         [_wide.bottomAnchor constraintEqualToAnchor:v.bottomAnchor constant:-8],
+    ]];
+
+    // 中窗/大窗的「分段式」：上半译文、下半原文，跟竖排流互斥
+    _segment = [ZKSegmentView new];
+    _segment.translatesAutoresizingMaskIntoConstraints = NO;
+    _segment.hidden = YES;
+    [self.view addSubview:_segment];
+    [NSLayoutConstraint activateConstraints:@[
+        [_segment.topAnchor constraintEqualToAnchor:v.topAnchor constant:8],
+        [_segment.leadingAnchor constraintEqualToAnchor:v.leadingAnchor constant:14],
+        [_segment.trailingAnchor constraintEqualToAnchor:v.trailingAnchor constant:-14],
+        [_segment.bottomAnchor constraintEqualToAnchor:v.bottomAnchor constant:-8],
     ]];
 
     // 逐帧插值：文字是"一行一行"长出来的，直接把 offset 设到目标位置，
@@ -1379,6 +1966,11 @@ static NSUInteger ZKVisibleLen(NSString *text) {
     return [gPipStyle isEqualToString:@"X"];
 }
 
+/// 中窗/大窗选了「分段」才走分段视图；小窗没有这个选项
+- (BOOL)isSegmentMode {
+    return ![self isWideMode] && [gScroll isEqualToString:@"segment"];
+}
+
 // 窗口尺寸变了就重算字号。
 // 唯一规则：字号只跟窗口走，跟「这一句有多长」完全无关。
 // 旧版遇到长句会把字缩一档、下一句短了又弹回来——窗口一动没动、字却一句一跳，
@@ -1390,11 +1982,20 @@ static NSUInteger ZKVisibleLen(NSString *text) {
         // 小档不用这套：它按两行高度和窗宽自己算字号（见 ZKWideView）
         self.scroll.hidden = YES;
         _wide.hidden = NO;
+        if (_segment) _segment.hidden = YES;
         [_wide setBoxWidth:w height:h force:NO];
+        return;
+    }
+    if ([self isSegmentMode] && _segment) {
+        self.scroll.hidden = YES;
+        _wide.hidden = YES;
+        _segment.hidden = NO;
+        [_segment setBoxWidth:w height:h force:NO];
         return;
     }
     self.scroll.hidden = NO;
     _wide.hidden = YES;
+    if (_segment) _segment.hidden = YES;
 
     // 以 480×360 为基准窗，按面积比（开方）缩放。只跟窗口大小有关。
     CGFloat areaRatio = (w * h) / (480.0 * 360.0);
@@ -1433,13 +2034,22 @@ static NSUInteger ZKVisibleLen(NSString *text) {
         // 全宽档：竖排那条流整个不用，只喂两行视图
         self.scroll.hidden = YES;
         _wide.hidden = NO;
+        if (_segment) _segment.hidden = YES;
         [_wide setBoxWidth:w height:h force:NO];
+        return;
+    }
+    if ([self isSegmentMode] && _segment) {
+        self.scroll.hidden = YES;
+        if (_wide) _wide.hidden = YES;
+        _segment.hidden = NO;
+        [_segment setBoxWidth:w height:h force:NO];
         return;
     }
     if (_wide) {
         _wide.hidden = YES;
         self.scroll.hidden = NO;
     }
+    if (_segment) _segment.hidden = YES;
 
     // 布局这一步全部关掉隐式动画：内容位置必须"当帧就准"，
     // 否则系统给 stream.frame 补一个 0.25s 的过渡，和滚动弹簧叠在一起就是二次抖动。
@@ -1465,7 +2075,7 @@ static NSUInteger ZKVisibleLen(NSString *text) {
         CABasicAnimation *rise = [CABasicAnimation animationWithKeyPath:@"position.y"];
         rise.fromValue = @(CGRectGetMidY(from));
         rise.toValue = @(CGRectGetMidY(f));
-        rise.duration = 0.22;
+        rise.duration = 0.16;
         rise.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
         [self.stream.layer addAnimation:rise forKey:@"streamRise"];
         _lastTickAt = CACurrentMediaTime();
@@ -1520,6 +2130,7 @@ static NSUInteger ZKVisibleLen(NSString *text) {
     [self.scroll setContentOffset:CGPointZero animated:NO];
     [self.stream rebuildWithLines:lines];
     if (_wide) [_wide resetWithLines:lines];
+    if (_segment) [_segment resetWithLines:lines];
     _lastLayoutW = 0;   // 强制重排一次
     [self.view setNeedsLayout];
     [self.view layoutIfNeeded];
@@ -1545,6 +2156,7 @@ static NSUInteger ZKVisibleLen(NSString *text) {
     // 用户改字号/颜色时文字内容没变，走缓存就不生效 → 这里必须强制重排
     [self.stream relayoutAllForce:YES];
     if (_wide) [_wide refreshStyle];
+    if (_segment) [_segment refreshStyle];
     [self applyGeometry];
 }
 
@@ -1575,6 +2187,8 @@ static NSUInteger ZKVisibleLen(NSString *text) {
         [self applyGeometry];
         return;
     }
+
+    if (_segment) [_segment addEn:e zh:z];
 
     if (self.scroll.bounds.size.width < 1) {
         [self.view layoutIfNeeded];
@@ -1613,6 +2227,7 @@ static NSUInteger ZKVisibleLen(NSString *text) {
         [_wide patchLastZh:zh];
         return;
     }
+    if (_segment) [_segment patchZh:zh forEn:@""];
     [self.stream patchLastZh:zh];
     [self applyGeometry];
 }
@@ -1624,6 +2239,7 @@ static NSUInteger ZKVisibleLen(NSString *text) {
         [_wide patchZh:zh forEn:en];
         return;
     }
+    if (_segment) [_segment patchZh:zh forEn:en];
     [self.stream patchZh:zh forEn:en];
     [self applyGeometry];
 }
@@ -1668,6 +2284,9 @@ static __weak id gActiveSub = nil;
     if ([bg isKindOfClass:[NSString class]]) gBackground = bg;
     NSString *mode = p[@"mode"];
     if ([mode isKindOfClass:[NSString class]]) gMode = mode;
+
+    NSString *scroll = p[@"scroll"];
+    if ([scroll isKindOfClass:[NSString class]] && scroll.length) gScroll = scroll;
 
     NSString *pip = p[@"pip"];
     if ([pip isKindOfClass:[NSString class]]) {
