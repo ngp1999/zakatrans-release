@@ -26,7 +26,23 @@ final class Speaker: NSObject, ObservableObject {
     /// 用户看到的就是「开了朗读，翻译开始延迟、卡顿、整段不翻译」。
     var usesExternalSession = false
 
+    /// 麦克风收音（同传、以及首页选了麦克风收音）。
+    /// 这一路没有「系统声音」那一路可以让位，也就不能靠静音自己来防回声，
+    /// 只能靠「只在别人说完的空隙里念 + 真有人开口就让路」。
+    var micCapture = false
+
     private let synth = AVSpeechSynthesizer()
+
+    /// 最近一次听到人说话（半句也算）的时间：朗读只在它之后安静够久了才开口。
+    /// 这是「开了朗读就漏读、漏翻」的解法——不再一边念一边抢着听，
+    /// 也不再整段整段地把原声静音掉。
+    private var lastVoiceAt = Date.distantPast
+    /// 原声停下多久之后才念一句译文。太短会和说话叠在一起，太长就落后。
+    /// 等多久才开口。系统声音那一路可以等到对方彻底安静；麦克风这一路
+    /// 一旦要求「完全安静」就永远轮不到自己（对话是连续的），于是开了音频输出
+    /// 反而一句都不念——所以这边只让很小的一个空隙。
+    private var quietGap: TimeInterval { micCapture ? 0.3 : 0.8 }
+    private var flushTimer: Timer?
 
     /// 待念队列（不含正在念的那句）：文本 + 语言（同声传译要按语言换嗓子）
     private var queue: [(text: String, lang: String)] = []
@@ -38,6 +54,8 @@ final class Speaker: NSObject, ObservableObject {
     private var current: String?
     /// 用户已经停止：之后进来的迟到回调一律丢掉，避免"暂停了还在念"
     private var paused = false
+    /// 这一句是什么时候开始念的（刚开口的半秒不理会上游的杂音）
+    private var speechStartedAt: Date?
 
     private var gateTimer: Timer?
     private var gateOpenedAt: Date?
@@ -100,6 +118,10 @@ final class Speaker: NSObject, ObservableObject {
     /// 用户重新开始一场：解除暂停，清掉上一场残留
     func resume() {
         paused = false
+        lastVoiceAt = Date.distantPast
+        speechStartedAt = nil
+        flushTimer?.invalidate()
+        flushTimer = nil
         queue.removeAll()
         recentKeys.removeAll()
         current = nil
@@ -133,8 +155,80 @@ final class Speaker: NSObject, ObservableObject {
             queue.append((text: t, lang: lang))
             if queue.count > maxQueue { queue.removeFirst(queue.count - maxQueue) }
         } else {
-            play(t, lang: lang)
+            pump()
         }
+    }
+
+    /// 出下一句：只在对方说完的空隙里开口。
+    ///
+    /// 以前是「一有译文就念，念到下一句来」。一路念下去，系统声音那一路就得
+    /// 一直把我们对外的静音门挂着——门挂着的时候人家说的话也一起被丢掉，
+    /// 于是开了朗读就开始漏读、漏翻、译文对不上。现在译文先攒着，
+    /// 等原声安静下来才念：门只开在本来就没人说话的缝隙里，一个字都丢不了。
+    private func pump() {
+        guard enabled, !paused else { return }
+        guard current == nil, !synth.isSpeaking else { return }
+        guard !queue.isEmpty else {
+            closeEchoGate()
+            return
+        }
+        if Date().timeIntervalSince(lastVoiceAt) < quietGap {
+            scheduleFlush()
+            return
+        }
+        let item = queue.removeFirst()
+        play(item.text, lang: item.lang)
+    }
+
+    /// 有人在说话，暂时轮不到我们：过一会儿再来看看安静下来没有。
+    private func scheduleFlush() {
+        guard flushTimer == nil else { return }
+        flushTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                guard !self.paused, self.enabled else {
+                    self.flushTimer?.invalidate()
+                    self.flushTimer = nil
+                    return
+                }
+                let idle = !self.synth.isSpeaking && self.current == nil
+                    && Date().timeIntervalSince(self.lastVoiceAt) >= self.quietGap
+                if self.queue.isEmpty || idle {
+                    self.flushTimer?.invalidate()
+                    self.flushTimer = nil
+                    self.pump()
+                }
+            }
+        }
+    }
+
+    /// 上游听到声音了（半句也算）。两个用处：
+    /// 1) 决定什么时候才轮到我们开口（只在空隙里念）；
+    /// 2) 麦克风收音时，真有人在说话就立刻闭嘴让路——
+    ///    这一路没有静音门可挂，不闭嘴就等于用朗读盖住了人家的话。
+    func noteInput(_ text: String?) {
+        let t = Self.clean(text ?? "")
+        guard t.count >= 2 else { return }
+        // 自己念出去的声音又被录回来：不算「有人在说话」，否则会自己把自己打断
+        if t.count >= 3, isEcho([t], within: 8) { return }
+        lastVoiceAt = Date()
+        guard micCapture, enabled, !paused else { return }
+        // 刚开始念的这半秒不动它：那多半是我们自己的尾音，掐了就等于白念
+        if let started = speechStartedAt, Date().timeIntervalSince(started) < 0.6 { return }
+        if synth.isSpeaking || current != nil {
+            bargeIn()
+        }
+    }
+
+    /// 让路：立刻停，把还没念的译文一起丢掉。
+    /// 宁可少念一句，也不压着人说话——听漏的那一句没法补，读漏的这句字幕还在。
+    private func bargeIn() {
+        // 只停当前这句，不动后面排着的：以前这里把整队清空，
+        // 对方一开口就把还没念的译文全扔掉，用户看到的就是「有时不读」。
+        current = nil
+        if synth.isSpeaking { synth.stopSpeaking(at: .immediate) }
+        speaking = false
+        closeEchoGate()
     }
 
     private func play(_ t: String) { play(t, lang: "zh") }
@@ -142,6 +236,7 @@ final class Speaker: NSObject, ObservableObject {
     private func play(_ t: String, lang: String) {
         configureSession()
         current = t
+        speechStartedAt = Date()
         let u = AVSpeechUtterance(string: t)
         u.voice = Self.voice(voiceId, lang: lang)
         u.rate = Float(max(0.40, min(0.80, rate)))
@@ -151,6 +246,9 @@ final class Speaker: NSObject, ObservableObject {
         u.postUtteranceDelay = 0
         u.preUtteranceDelay = 0
         synth.speak(u)
+        // 现在念的是哪种语言：同传那边据此只暂停「会被这句回声污染」的那一路收音，
+        // 另一路继续听人说话——这样开着音频输出也不会漏读、漏翻。
+        ZKStore.setSetting("tts_lang", v: lang)
         openEchoGate()
     }
 
@@ -176,6 +274,9 @@ final class Speaker: NSObject, ObservableObject {
     }
 
     private func refreshEchoGate() {
+        // 麦克风收音这一路不挂门：挂了就是把麦克风整段掐掉，
+        // 那是「一开朗读就漏读」的直接原因。这一路靠 noteInput 让路来避回声。
+        guard !micCapture else { return }
         guard let t = gateOpenedAt else { return }
         // 硬上限：SpeechSynthesizer 有时候不给 didFinish（语音包缺失、被系统掐），
         // 门不能就这么一直挂着，否则等于把整场音频都静音了。
@@ -195,6 +296,9 @@ final class Speaker: NSObject, ObservableObject {
         gateTimer?.invalidate()
         gateTimer = nil
         gateOpenedAt = nil
+        // 不念了：清掉「正在念的语言」，麦克风那边两条通道都恢复收音
+        ZKStore.setSetting("tts_lang", v: "")
+        guard !micCapture else { return }
         // 念完别立刻放行：扬声器到麦克风还有一点尾音在路上，
         // 立刻关会把最后几个字漏进识别里。多留 0.8 秒再关。
         let tail = Date().timeIntervalSince1970 + 0.8
@@ -225,6 +329,9 @@ final class Speaker: NSObject, ObservableObject {
     }
 
     private func stopSpeaking() {
+        flushTimer?.invalidate()
+        flushTimer = nil
+        speechStartedAt = nil
         queue.removeAll()
         spoken.removeAll { Date().timeIntervalSince($0.at) > 20 }
         current = nil
@@ -269,13 +376,14 @@ extension Speaker: AVSpeechSynthesizerDelegate {
     @MainActor
     private func next() {
         current = nil
+        speechStartedAt = nil
         if paused || queue.isEmpty {
             speaking = false
             closeEchoGate()
             return
         }
-        let item = queue.removeFirst()
-        play(item.text, lang: item.lang)
+        // 下一句也照样要等空隙：一句念完不代表对方说完了
+        pump()
     }
 }
 
