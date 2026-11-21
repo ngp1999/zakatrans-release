@@ -582,7 +582,10 @@ static NSUInteger ZKVisibleLen(NSString *text) {
 - (void)resetWithLines:(NSArray *)lines;
 - (void)addEn:(NSString *)en zh:(NSString *)zh;
 - (void)patchLastZh:(NSString *)zh;
+- (void)patchZh:(NSString *)zh forEn:(NSString *)en;
 - (void)refreshStyle;
+- (BOOL)needsZh:(NSDictionary *)it;
+- (BOOL)applyZh:(NSString *)zh forEn:(NSString *)en;
 @end
 
 @implementation ZKWideView {
@@ -595,6 +598,7 @@ static NSUInteger ZKVisibleLen(NSString *text) {
     NSMutableArray<NSDictionary *> *_queue;    // 还没上屏的整句
     NSDate *_shownAt;                          // 这一屏是什么时候上来的
     NSDate *_holdUntil;                        // 这一屏最少停到什么时候（按阅读速度算）
+    NSMutableArray<NSString *> *_pending;      // 已经上队、译文还没到的原文（先进先出，补译文时按顺序对号）
     NSTimer *_drain;
 }
 
@@ -605,6 +609,7 @@ static NSUInteger ZKVisibleLen(NSString *text) {
         self.userInteractionEnabled = NO;
         self.backgroundColor = [UIColor clearColor];
         _queue = [NSMutableArray array];
+        _pending = [NSMutableArray array];
         _font = 20;
         _zhLabel = [self makeRow];
         _srcLabel = [self makeRow];
@@ -661,10 +666,10 @@ static NSUInteger ZKVisibleLen(NSString *text) {
     if (_w < 1 || _h < 1) return;
     // 一句一行之后，横条上的留白变多了，字号可以再放大一档（45 → 48 左右）。
     // 仍然只跟窗口走，跟这一句多长无关：长句靠换行，绝不缩字。
-    CGFloat byWidth = _w / 20.4;       // 一行二十个汉字左右，横条上读起来最舒服
-    CGFloat byHeight = _h / 4.0;       // 两行译文 + 一行原文，各自留一点余量
+    CGFloat byWidth = _w / 17.2;       // 一行十七八个汉字，比上一版大一圈
+    CGFloat byHeight = _h / 3.7;       // 两行译文 + 一行原文，各自留一点余量
     CGFloat f = MIN(byWidth, byHeight);
-    _font = MAX(11.0, MIN(56.0, f));
+    _font = MAX(13.0, MIN(64.0, f));
 }
 
 #pragma mark 文本与测量
@@ -751,6 +756,15 @@ static NSUInteger ZKVisibleLen(NSString *text) {
 
 #pragma mark 出字
 
+/// 这一句是不是「有原文、但译文还没到」
+- (BOOL)needsZh:(NSDictionary *)it {
+    if (![it isKindOfClass:[NSDictionary class]]) return NO;
+    id z = it[@"zh"];
+    id e = it[@"en"];
+    if ([z isKindOfClass:[NSString class]] && [z length]) return NO;
+    return [e isKindOfClass:[NSString class]] && [e length] > 0;
+}
+
 - (void)scheduleAfter:(NSTimeInterval)delay {
     [_drain invalidate];
     _drain = nil;
@@ -779,6 +793,29 @@ static NSUInteger ZKVisibleLen(NSString *text) {
     }
 
     NSInteger pressure = (NSInteger)_queue.count;
+
+    // 译文还没到就先挂着等一等（最多 1.2 秒）。
+    // 横条一屏只停一两句、换得比中档大档快得多，以前"落定就上屏、译文后补"，
+    // 等译文（1~3 秒）到的时候那句早就下屏了，屏幕上就永远只有英文——
+    // 用户截图里「只有原文没有中文」就是这么来的。
+    // 等到就带着中文一起上屏；等超时也不死等，先把原文放出去，译文到了再按原文精确回填。
+    if ([self showTrans] && [self needsZh:_queue.firstObject]) {
+        NSDate *at = ((NSDictionary *)_queue.firstObject)[@"at"];
+        // 没有时间戳的老数据（历史行）不参与等待，直接放行，免得一直重排
+        NSTimeInterval waited = [at isKindOfClass:[NSDate class]] ? -[at timeIntervalSinceNow] : 999;
+        if (waited < 1.2) {
+            [self scheduleAfter:0.10];
+            return;
+        }
+    }
+
+    // 屏上这一句还只有原文：再多留一会儿等译文（最多 2.0 秒），
+    // 译文落在还在屏上的这句话头上才看得见——横条一换屏就再也补不回来了。
+    if ([self showTrans] && _shownAt && [self needsZh:_current.firstObject]
+        && -[_shownAt timeIntervalSinceNow] < 2.0) {
+        [self scheduleAfter:0.12];
+        return;
+    }
 
     // 一句一批：默认屏上只放「一整句」。
     // 只有真的积压（快速连说、句子又短）时，才把相邻两句并成一批：
@@ -951,6 +988,7 @@ static NSUInteger ZKVisibleLen(NSString *text) {
     [_drain invalidate];
     _drain = nil;
     [_queue removeAllObjects];
+    [_pending removeAllObjects];
     _current = nil;
     _zhLabel.attributedText = nil;
     _srcLabel.attributedText = nil;
@@ -966,7 +1004,8 @@ static NSUInteger ZKVisibleLen(NSString *text) {
         if (![e isKindOfClass:[NSString class]]) e = @"";
         if (![z isKindOfClass:[NSString class]]) z = @"";
         if (!e.length && !z.length) continue;
-        [_queue addObject:@{@"en": e, @"zh": z}];
+        // 历史行不参与「等译文」那套计时：它们本来就是落定过的句子
+        [_queue addObject:@{@"en": e, @"zh": z, @"at": [NSDate dateWithTimeIntervalSinceNow:-60]}];
     }
     [self pump];
 }
@@ -975,9 +1014,17 @@ static NSUInteger ZKVisibleLen(NSString *text) {
     NSString *e = [en isKindOfClass:[NSString class]] ? en : @"";
     NSString *z = [zh isKindOfClass:[NSString class]] ? zh : @"";
     if (!e.length && !z.length) return;
-    [_queue addObject:@{@"en": e, @"zh": z}];
+    [_queue addObject:@{@"en": e, @"zh": z, @"at": [NSDate date]}];
+    // 只有原文没有译文：记一笔，等译文到了按这个顺序对号补上
+    if (!z.length && e.length && [self showTrans]) [_pending addObject:e];
+    // 待补的最多留 8 句：留太多，译文晚到时反而容易对错号
+    while (_pending.count > 8) [_pending removeObjectAtIndex:0];
     // 越落越远时只保最后几句，宁可跳过也不让画面追不上嘴
-    while (_queue.count > 5) [_queue removeObjectAtIndex:0];
+    while (_queue.count > 5) {
+        NSString *dropped = ((NSDictionary *)_queue.firstObject)[@"en"];
+        if ([dropped isKindOfClass:[NSString class]] && dropped.length) [_pending removeObject:dropped];
+        [_queue removeObjectAtIndex:0];
+    }
     // 已经堆到五句以上：这一屏只要停够了最短时间（0.4 秒），就不再等它读满，
     // 立刻往下走——积压的时候宁可快一点，也不能把画面拖在嘴后面。
     if (_queue.count >= 5 && _shownAt && -[_shownAt timeIntervalSinceNow] >= 0.4) {
@@ -989,6 +1036,57 @@ static NSUInteger ZKVisibleLen(NSString *text) {
 - (void)refreshStyle {
     [self recalcFont];
     [self renderAnimated:NO];
+}
+
+// 译文迟到：先按原文精确找回那一句再补（屏上这批找一遍、队列里找一遍），
+// 对不上号就补「最早一句还没译文的」——绝不能像以前那样直接补屏上最后一句，
+// 那样补出来的中文和屏幕上的英文根本不是一句话。
+- (void)patchZh:(NSString *)zh forEn:(NSString *)en {
+    if (![zh isKindOfClass:[NSString class]] || !zh.length) return;
+    if (en.length && [self applyZh:zh forEn:en]) return;
+    // 上游把这条并进了别的句子：按先进先出，补最早那句还没译文的
+    for (NSString *pe in [_pending copy]) {
+        if ([self applyZh:zh forEn:pe]) return;
+    }
+    // 这一句已经下屏了：丢掉，不要硬补到屏上最后一句上——
+    // 那样补出来的中文和屏幕上的英文根本不是一句话。
+    if (en.length) return;
+    [self patchLastZh:zh];
+}
+
+/// 把译文写到指定原文那一句上。写成功返回 YES。
+- (BOOL)applyZh:(NSString *)zh forEn:(NSString *)en {
+    if (!zh.length) return NO;
+    for (NSInteger i = 0; i < (NSInteger)_current.count; i++) {
+        NSDictionary *it = _current[i];
+        if (![it isKindOfClass:[NSDictionary class]]) continue;
+        NSString *e = it[@"en"];
+        if (![e isKindOfClass:[NSString class]] || ![e isEqualToString:en]) continue;
+        NSString *old = it[@"zh"];
+        if ([old isKindOfClass:[NSString class]] && old.length) return NO;
+        NSMutableArray *arr = [_current mutableCopy];
+        NSMutableDictionary *m = [it mutableCopy];
+        m[@"zh"] = zh;
+        arr[i] = m;
+        _current = arr;
+        [_pending removeObject:en];
+        [self renderAnimated:NO];
+        return YES;
+    }
+    for (NSInteger i = 0; i < (NSInteger)_queue.count; i++) {
+        NSDictionary *it = _queue[i];
+        if (![it isKindOfClass:[NSDictionary class]]) continue;
+        NSString *e = it[@"en"];
+        if (![e isKindOfClass:[NSString class]] || ![e isEqualToString:en]) continue;
+        NSString *old = it[@"zh"];
+        if ([old isKindOfClass:[NSString class]] && old.length) return NO;
+        NSMutableDictionary *m = [it mutableCopy];
+        m[@"zh"] = zh;
+        _queue[i] = m;
+        [_pending removeObject:en];
+        return YES;
+    }
+    return NO;
 }
 
 // 译文迟到：屏上这一批的最后一句补上译文，整屏重排一次（字号跟着内容重算，不跳位）
@@ -1303,8 +1401,8 @@ static NSUInteger ZKVisibleLen(NSString *text) {
     CGFloat scale = sqrt(MAX(0.04, areaRatio));
     scale = MAX(0.45, MIN(2.10, scale));
 
-    CGFloat zh = MAX(9.5, MIN(58.0, gZhBase * scale));
-    CGFloat en = MAX(8.0, zh * 0.66);
+    CGFloat zh = MAX(12.0, MIN(74.0, gZhBase * scale * 1.35));
+    CGFloat en = MAX(9.5, zh * 0.66);
     NSInteger enLines = 0;         // 原文不限行：跟着换行，不截断
 
     NSInteger mask = (NSInteger)lround(zh * 10.0);
@@ -1523,7 +1621,7 @@ static NSUInteger ZKVisibleLen(NSString *text) {
 - (void)patchZh:(NSString *)zh forEn:(NSString *)en {
     if (!zh.length) return;
     if ([self isWideMode] && _wide) {
-        [_wide patchLastZh:zh];
+        [_wide patchZh:zh forEn:en];
         return;
     }
     [self.stream patchZh:zh forEn:en];
