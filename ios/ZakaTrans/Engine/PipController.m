@@ -788,8 +788,8 @@ static NSUInteger ZKVisibleLen(NSString *text) {
     CGFloat need = [self readSeconds:items];
     CGFloat factor = 1.0;
     if (pressure >= 2) factor = 0.85;
-    if (pressure >= 4) factor = 0.65;
-    if (pressure >= 6) factor = 0.50;
+    if (pressure >= 3) factor = 0.65;
+    if (pressure >= 5) factor = 0.50;
     CGFloat hold = need * factor;
     return MIN(2.6, MAX(0.55, hold));
 }
@@ -929,10 +929,10 @@ static NSUInteger ZKVisibleLen(NSString *text) {
     if (!e.length && !z.length) return;
     [_queue addObject:@{@"en": e, @"zh": z}];
     // 越落越远时只保最后几句，宁可跳过也不让画面追不上嘴
-    while (_queue.count > 6) [_queue removeObjectAtIndex:0];
-    // 已经堆到六句以上：这一屏只要停够了最短时间（0.45 秒），就不再等它读满，
+    while (_queue.count > 5) [_queue removeObjectAtIndex:0];
+    // 已经堆到五句以上：这一屏只要停够了最短时间（0.4 秒），就不再等它读满，
     // 立刻往下走——积压的时候宁可快一点，也不能把画面拖在嘴后面。
-    if (_queue.count >= 6 && _shownAt && -[_shownAt timeIntervalSinceNow] >= 0.45) {
+    if (_queue.count >= 5 && _shownAt && -[_shownAt timeIntervalSinceNow] >= 0.4) {
         _holdUntil = nil;
     }
     [self pump];
