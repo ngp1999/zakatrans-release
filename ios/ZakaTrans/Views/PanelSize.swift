@@ -28,9 +28,10 @@ struct FitScroll<Content: View>: View {
                 )
         }
         .frame(height: height)
-        // 第一次量出来的高度比上限矮时，面板跟着收一下；带一点动画，
-        // 不然「先按满高弹出来、再瞬间缩一刀」，看着像闪了一下。
-        .animation(.easeInOut(duration: 0.22), value: height)
+        // 第一帧还没量出内容高度时整块先藏起来：
+        // 以前是先按上限铺满、量完再收回真实高度，中间那一下就是用户看到的
+        // 「突然多出一大块空白，然后又缩回去」。藏一帧比闪一下强。
+        .opacity(contentH < 1 ? 0 : 1)
         .onPreferenceChange(PanelContentHeight.self) { v in
             if abs(v - contentH) > 0.5 { contentH = v }
         }
