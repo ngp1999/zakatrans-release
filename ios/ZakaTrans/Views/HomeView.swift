@@ -12,6 +12,8 @@ struct HomeView: View {
     /// 面板是否已经滑到位置。整块面板用 offset 驱动，从屏幕底部整体滑上来，
     /// 不依赖 SwiftUI 的 transition（那个在 overlay 里有时候只有内容在动、面板底不跟着走）。
     @State private var panelUp = false
+    /// 下拉关闭时跟手的位移
+    @State private var dragY: CGFloat = 0
     /// 麦克风权限被拒时给的提示
     @State private var micDenied = false
 
@@ -75,6 +77,17 @@ struct HomeView: View {
                         .onTapGesture { closePanel() }
 
                     VStack(spacing: 0) {
+                        // 顶部小横条：两个面板共用一条，位置和样子完全一致。
+                        // 它不只是个装饰——按住面板任意位置往下拖，拖过 90 点或甩一下就能关掉，
+                        // 不必再去找空白处点。跟「我的」页面那套手势是同一个习惯。
+                        Capsule()
+                            .fill(Theme.faint.opacity(0.45))
+                            .frame(width: 36, height: 4.5)
+                            .padding(.top, 8)
+                            .padding(.bottom, 2)
+                            .frame(maxWidth: .infinity)
+                            .contentShape(Rectangle())
+
                         switch kind {
                         case .audio:
                             AudioOutputView(onClose: { closePanel() })
@@ -96,7 +109,33 @@ struct HomeView: View {
                             .allowsHitTesting(false)
                     }
                     .shadow(color: .black.opacity(0.16), radius: 22, y: -8)
-                    .offset(y: panelUp ? 0 : UIScreen.main.bounds.height)
+                    .offset(y: panelUp ? dragY : UIScreen.main.bounds.height)
+                    // 顶部一条 56 点的拖拽区（正好是小横条加标题那一块）：
+                    // 按住往下拖，过了阈值就关；没过就弹回去。下面内容区照常滚动，不抢手势。
+                    .overlay(alignment: .top) {
+                        Color.clear
+                            .frame(height: 56)
+                            .contentShape(Rectangle())
+                            .gesture(
+                                DragGesture(minimumDistance: 6)
+                                    .onChanged { v in
+                                        let dy = v.translation.height
+                                        dragY = dy > 0 ? dy : dy / 5
+                                    }
+                                    .onEnded { v in
+                                        let far = v.translation.height > 90
+                                        let flick = v.predictedEndTranslation.height > 200
+                                        if far || flick {
+                                            dragY = 0
+                                            closePanel()
+                                        } else {
+                                            withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
+                                                dragY = 0
+                                            }
+                                        }
+                                    }
+                            )
+                    }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 .ignoresSafeArea()
@@ -123,7 +162,10 @@ struct HomeView: View {
     }
 
     private func closePanel() {
-        withAnimation(.easeIn(duration: 0.22)) { panelUp = false }
+        withAnimation(.easeIn(duration: 0.22)) {
+            dragY = 0
+            panelUp = false
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.26) {
             if !panelUp { panel = nil }
         }
