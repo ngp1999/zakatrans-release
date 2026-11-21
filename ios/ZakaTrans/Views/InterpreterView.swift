@@ -34,6 +34,12 @@ struct InterpreterView: View {
     /// 这一场的开始时刻和已经过去的秒数（界面上按 时:分:秒 走）
     /// 刚点开始的头两秒：界面明说「在连」，别让人以为已经在听、对着手机说半天
     @State private var warming = false
+    /// 长按说话：按住才收音，松手才出译文，上滑取消
+    @State private var holding = false
+    @State private var canceling = false
+    @State private var pendingSpeak = false
+    /// 这一次按住期间冒出来的那些行（取消时要把它们撤掉）
+    @State private var holdIDs: Set<String> = []
     @State private var began: Date?
     @State private var elapsed: TimeInterval = 0
     @State private var ticker: Timer?
@@ -220,7 +226,7 @@ struct InterpreterView: View {
             Image(systemName: "waveform")
                 .font(.system(size: 38, weight: .ultraLight))
                 .foregroundStyle(Theme.accent)
-            Text(running ? (warming ? "正在连接识别服务…" : "正在听，直接说话") : "点开始，直接说话")
+            Text(guideText)
                 .font(.system(size: 15))
                 .foregroundStyle(Theme.sub)
         }
@@ -305,30 +311,71 @@ struct InterpreterView: View {
 
     // MARK: - 底部
 
+    private var guideText: String {
+        if !running { return "按住下面对话，松手出译文" }
+        if warming { return "正在连接识别服务…" }
+        return holding ? (canceling ? "松开手指取消这一句" : "在听，松手翻译") : "按住说话，松手翻译"
+    }
+
     private var bottomBar: some View {
-        HStack(spacing: 10) {
-            Button {
-                haptic.impactOccurred(intensity: 0.8)
-                if running { stop() } else { start() }
-            } label: {
-                HStack(spacing: 9) {
-                    if running {
-                        LevelBars(level: level)
-                    } else {
-                        Image(systemName: "mic.fill")
-                            .font(.system(size: 15, weight: .bold))
-                    }
-                    Text(running ? "结束同声传译" : "开始同声传译")
-                        .font(.system(size: 17, weight: .semibold))
+        VStack(spacing: 8) {
+            // 长按说话：按住这段时间才算一句。松手结束、再翻译，
+            // 不会再出现「环境音被认进来」「半句话被切成两段」那些问题。
+            holdButton
+            if running {
+                Button {
+                    haptic.impactOccurred(intensity: 0.6)
+                    stop()
+                } label: {
+                    Text("结束")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(Theme.sub)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 30)
+                        .contentShape(Rectangle())
                 }
-                .frame(maxWidth: .infinity)
+                .buttonStyle(.plain)
             }
-            .buttonStyle(PrimaryButtonStyle(tint: running ? Theme.warn : Theme.accent))
         }
         .padding(.horizontal, 20)
         .padding(.top, 10)
         .padding(.bottom, 8)
         .background(Theme.bg)
+    }
+
+    private var holdButton: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .fill(canceling ? Theme.warn : Theme.accent)
+            HStack(spacing: 9) {
+                if holding {
+                    LevelBars(level: level)
+                } else {
+                    Image(systemName: "mic.fill")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+                Text(holding ? (canceling ? "松开取消" : "松手翻译") : "按住说话")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+        }
+        .frame(height: 54)
+        .scaleEffect(holding ? 1.015 : 1)
+        .animation(.easeOut(duration: 0.12), value: holding)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { v in
+                    if !holding { pressDown() }
+                    let now = v.translation.height < -60
+                    if now != canceling {
+                        canceling = now
+                        haptic.impactOccurred(intensity: 0.45)
+                    }
+                }
+                .onEnded { _ in release() }
+        )
     }
 
     // MARK: - 启停
@@ -337,12 +384,14 @@ struct InterpreterView: View {
         guard !running else { return }
         if cloud.balanceCredits < Cloud.shared.minStartCredits {
             error = "积分不足，先去充值。"
+            pendingSpeak = false
             return
         }
         // 麦克风权限得真拿到再开：没有权限时直接去碰 AVAudioEngine 的输入节点，系统会当场把进程带走
         ensureMic { ok in
             guard ok else {
                 error = "需要麦克风权限才能同声传译，请在系统设置里允许后再试"
+                pendingSpeak = false
                 return
             }
             begin()
@@ -414,14 +463,19 @@ struct InterpreterView: View {
             error = "同传引擎没启动起来，重开一次试试"
             running = false
             warming = false
+            pendingSpeak = false
             Speaker.shared.usesExternalSession = false
             return
         }
+        // 这一版只走长按说话：没按住的时候麦克风的声音不进上游。
+        itp.pushToTalk = true
         itp.onLine = { lid, side, src, trans, kind in
             DispatchQueue.main.async {
                 guard running else { return }
                 let isFinal = (kind == 2)   // ZKLineKindFinal
                 let lineID = lid ?? UUID().uuidString
+                // 这一次按住期间冒出来的行都记着：上滑取消时一起撤掉
+                if holding { holdIDs.insert(lineID) }
                 // 有人开口了（半句也算）：朗读据此避让，只在对方说完的空隙里念
                 Speaker.shared.noteInput(src, final: isFinal)
                 upsert(id: lineID, side: side ?? "a", source: src ?? "", trans: trans ?? "",
@@ -439,6 +493,49 @@ struct InterpreterView: View {
             }
         }
         itp.start(with: mine, other: other)
+        // 按下去的那一刻会话还在建：手还按着就立刻开始这一段（音频会在引擎里排队，
+        // 连上之后补发，头几个字不会丢）；手已经松开了就什么都不做。
+        if pendingSpeak {
+            pendingSpeak = false
+            if holding { itp.beginUtterance() }
+        }
+    }
+
+    // MARK: - 长按
+
+    private func pressDown() {
+        guard !holding else { return }
+        holding = true
+        canceling = false
+        holdIDs.removeAll()
+        haptic.impactOccurred()
+        if running {
+            ZKInterpreter.shared()?.beginUtterance()
+        } else {
+            pendingSpeak = true
+            start()
+        }
+    }
+
+    private func release() {
+        guard holding else { return }
+        holding = false
+        if canceling {
+            canceling = false
+            cancelSpeak()
+        } else {
+            ZKInterpreter.shared()?.endUtterance()
+        }
+    }
+
+    /// 上滑取消：这一句不要了，把已经冒出来的半句也撤掉
+    private func cancelSpeak() {
+        pendingSpeak = false
+        ZKInterpreter.shared()?.cancelUtterance()
+        if !holdIDs.isEmpty {
+            lines.removeAll { holdIDs.contains($0.id) }
+        }
+        holdIDs.removeAll()
     }
 
     /// 同一条消息原地更新：Draft 边听边出字，Final 落定，Update 补译文
@@ -484,6 +581,9 @@ struct InterpreterView: View {
     private func stop() {
         running = false
         warming = false
+        holding = false
+        canceling = false
+        pendingSpeak = false
         stopClock()
         ZKInterpreter.shared()?.stop()
         Speaker.shared.stop()
