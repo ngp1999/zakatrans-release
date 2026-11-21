@@ -853,6 +853,9 @@ static double ZKSim(NSString *a, NSString *b) {
     if (segRaw > 0 && segRaw != seg) {
         NSMutableDictionary *alias = a ? _aliasA : _aliasB;
         alias[@(segRaw)] = @(seg);
+        // 它刚才边听边出字时已经推过一条草稿气泡：现在被接回上一句了，把它撤掉，
+        // 否则屏幕上会永远挂着半句没头没尾的字。
+        [self emit:[self lineIdFor:side seg:segRaw] side:side src:@"" dst:@"" kind:ZKLineKindDraft];
     }
 
     // 不立刻上屏：先压一小会儿，等这一句的后半段、以及迟到的译文到齐。
@@ -901,6 +904,7 @@ static const NSTimeInterval ZKHoldCap = 0.0;
             // 这一段的号以后再有译文，也挂到并进去的那条上
             [(a ? _aliasA : _aliasB) setObject:@(prev) forKey:@(seg)];
             [(a ? _segA : _segB) removeObjectForKey:@(seg)];
+            [self emit:[self lineIdFor:side seg:seg] side:side src:@"" dst:@"" kind:ZKLineKindDraft];
             if (a) { _tailSegA = prev; _tailAtA = now; _tailClosedA = ZKEndsSentence(pe[@"src"]); }
             else   { _tailSegB = prev; _tailAtB = now; _tailClosedB = ZKEndsSentence(pe[@"src"]); }
             [self armHold:side seg:prev];   // 重新计时，等这句真正说完再上屏
@@ -1048,6 +1052,7 @@ static const NSTimeInterval ZKHoldCap = 0.0;
         alias[@(seg)] = @(pSeg);
         NSMutableDictionary *m = a ? _segA : _segB;
         [m removeObjectForKey:@(seg)];
+        [self emit:[self lineIdFor:side seg:seg] side:side src:@"" dst:@"" kind:ZKLineKindDraft];
     }
     [self emit:[self lineIdFor:side seg:pSeg] side:side src:newSrc dst:newDst kind:ZKLineKindFinal];
     [self rememberFinal:side src:newSrc dst:newDst];
