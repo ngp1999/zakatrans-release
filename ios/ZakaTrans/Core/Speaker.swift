@@ -60,6 +60,9 @@ final class Speaker: NSObject, ObservableObject {
     private var paused = false
     /// 这一句是什么时候开始念的（刚开口的半秒不理会上游的杂音）
     private var speechStartedAt: Date?
+    /// 手动点播的保护窗口：在这之前，别人说话也不让路。
+    /// 不设的话，点播放刚念出两个字，下一句落定就把它掐了——听着就是「没声音」。
+    private var manualUntil = Date.distantPast
 
     private var gateTimer: Timer?
     private var gateOpenedAt: Date?
@@ -223,6 +226,8 @@ final class Speaker: NSObject, ObservableObject {
         if t.count >= 3, isEcho([t], within: 8) { return }
         lastVoiceAt = Date()
         guard micCapture, enabled, !paused, final else { return }
+        // 手动点播的这一句优先：念完之前不让路，否则只能听到半句
+        if Date() < manualUntil { return }
         // 刚开始念的这半秒不动它：那多半是我们自己的尾音，掐了就等于白念
         if let started = speechStartedAt, Date().timeIntervalSince(started) < 0.6 { return }
         // 整句落定了：让路。只停当前这句，排着的译文留着接着念。
@@ -327,9 +332,42 @@ final class Speaker: NSObject, ObservableObject {
         play(text)
     }
 
+    /// 手动点播（同传气泡旁边那颗播放键）：点了就必须出声。
+    ///
+    /// 自动朗读那套门控（文本去重、等安静空隙、有人说话就绪让路）是为「边说边念」设计的，
+    /// 手动点一下还按它走，就会出现三种「点了没声音」：
+    ///   · 同一句点第二次被去重直接丢掉；
+    ///   · 前面刚有人说话，排队等空隙，等两秒才响；
+    ///   · 刚开口，下一句整句落定就把它让路掐掉。
+    /// 所以这条通道绕开全部三条，另外两件事也要做：
+    ///   · 同传的会话是 PlayAndRecord，不主动切扬声器的话声音走听筒，等于没声音；
+    ///   · 给一个保护窗口，念完之前不让路。
+    func playNow(_ text: String, lang: String) {
+        let t = Self.clean(text)
+        guard !t.isEmpty else { return }
+        paused = false
+        // 正在念的、排着队的一起清掉：用户点的是这一句
+        stopSpeaking()
+        configuredKey = ""
+        if usesExternalSession {
+            let s = AVAudioSession.sharedInstance()
+            try? s.setActive(true)
+            try? s.overrideOutputAudioPort(.speaker)
+        } else {
+            configureSession()
+        }
+        // 保护窗口：按字数估一个时长，念完之前别人开口也不掐
+        manualUntil = Date().addingTimeInterval(min(14.0, Double(t.count) * 0.24 + 1.8))
+        let key = Self.key(t)
+        spoken.append((key: key, at: Date()))
+        if spoken.count > 30 { spoken.removeFirst(spoken.count - 30) }
+        play(t, lang: lang)
+    }
+
     /// 界面上关掉开关 / 停止翻译：立刻闭嘴，并把别人的音量放回去
     func stop() {
         paused = true
+        manualUntil = Date.distantPast
         stopSpeaking()
         configuredKey = ""
         // 同传还占着麦克风的时候，绝对不能把会话改成 .playback —— 那等于把录音掐了
@@ -378,6 +416,9 @@ extension Speaker: AVSpeechSynthesizerDelegate {
 
     nonisolated func speechSynthesizer(_ s: AVSpeechSynthesizer, didCancel u: AVSpeechUtterance) {
         Task { @MainActor in
+            // 手动点播刚起头时会把上一句停掉，那一次取消不能当成"念完了"处理，
+            // 否则会把刚设好的 current 清掉，听着就是点了没声。
+            if Date() < self.manualUntil { return }
             // 系统取消（来电、路由切换）：接着念下一条，别把队列卡死。
             // 但如果是用户点了停止就不动——那时 paused 已经是 true。
             if !self.paused && self.current != nil { self.next() }
