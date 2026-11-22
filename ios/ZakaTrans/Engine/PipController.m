@@ -46,6 +46,21 @@ static const CGFloat ZK_MAX_BLOCKS = 120.0;   // 历史句上限（正常一场�
 static const CGFloat ZK_SPRING_W = 27.0;
 static const CGFloat ZK_SPRING_W_BIG = 13.0;
 
+// 中窗（21:9 宽条）的字号补偿系数。
+// 中窗只站 3 格，格高比大窗宽松得多；按面积比算出来的字号在中窗上偏小，
+// 上下都留着空、字挤在中间。统一按这个系数抬一档，大窗/小窗不动。
+static const CGFloat ZK_MEDIUM_FONT_BOOST = 1.16;
+
+static CGFloat ZKFontBoost(void) {
+    return [gPipStyle isEqualToString:@"M"] ? ZK_MEDIUM_FONT_BOOST : 1.0;
+}
+
+// 一格内「译文一行 + 原文一行」之间的空隙。中窗字号抬上去之后两行贴太近会糊成一块，
+// 所以按格高给一点呼吸（2~8 之间），大窗跟着同一套公式走，不会再出现行距两档不一致。
+static CGFloat ZKPairGap(CGFloat slotH) {
+    return MAX(2.0, MIN(8.0, slotH * 0.05));
+}
+
 #pragma mark 一块（一句）
 
 @interface ZKBlockView : UIView
@@ -782,7 +797,7 @@ static CGFloat ZKFitSize(NSString *text, UIFont *font, CGFloat width, CGFloat fl
     CGFloat area = (_w * _h) / (480.0 * 360.0);
     CGFloat scale = sqrt(MAX(0.04, area));
     scale = MAX(0.45, MIN(2.10, scale));
-    _font = MAX(12.0, MIN(74.0, gZhBase * scale * 1.35));
+    _font = MAX(12.0, MIN(74.0, gZhBase * scale * 1.35 * ZKFontBoost()));
 
     _inset = MAX(4.0, _h * 0.03);
     _gap = MAX(2.0, _h * 0.012);
@@ -801,7 +816,7 @@ static CGFloat ZKFitSize(NSString *text, UIFont *font, CGFloat width, CGFloat fl
     // 双语一格要站「一行译文 + 一行原文」：格高不够时先把字号压下来，
     // 不然原文那行会溢出到下一格里（大窗站 5 行时最容易撞上）。
     if ([self twoRows]) {
-        CGFloat maxFont = MAX(12.0, (_slotH - 6.0) / 2.0);
+        CGFloat maxFont = MAX(12.0, (_slotH - ZKPairGap(_slotH) - 2.0) / 2.0);
         if (_font > maxFont) _font = maxFont;
     }
     _content.frame = CGRectMake(0, 0, _w, _h);
@@ -856,7 +871,7 @@ static CGFloat ZKFitSize(NSString *text, UIFont *font, CGFloat width, CGFloat fl
     if (!showTrans) { zhH = 0; r.zhLabel.hidden = YES; r.zhLabel.frame = CGRectZero; }
     if (!showSource) { srcH = 0; r.srcLabel.hidden = YES; r.srcLabel.frame = CGRectZero; }
 
-    CGFloat gap = (zhH > 0 && srcH > 0) ? 2.0 : 0;
+    CGFloat gap = (zhH > 0 && srcH > 0) ? ZKPairGap(_slotH) : 0;
     CGFloat total = zhH + gap + srcH;
     CGFloat y = MAX(0, (_slotH - total) / 2.0);
     r.zhLabel.hidden = (zhH <= 0);
@@ -1208,7 +1223,7 @@ static void ZKSegAppend(NSMutableString *buf, NSString *s) {
     CGFloat area = (_w * _h) / (480.0 * 360.0);
     CGFloat scale = sqrt(MAX(0.04, area));
     scale = MAX(0.45, MIN(2.10, scale));
-    _font = MAX(12.0, MIN(74.0, gZhBase * scale * 1.35));
+    _font = MAX(12.0, MIN(74.0, gZhBase * scale * 1.35 * ZKFontBoost()));
 
     BOOL two = [self twoBlocks];
     _inset = MAX(4.0, _h * 0.03);
@@ -2634,7 +2649,7 @@ static void ZKSegAppend(NSMutableString *buf, NSString *s) {
     CGFloat scale = sqrt(MAX(0.04, areaRatio));
     scale = MAX(0.45, MIN(2.10, scale));
 
-    CGFloat zh = MAX(12.0, MIN(74.0, gZhBase * scale * 1.35));
+    CGFloat zh = MAX(12.0, MIN(74.0, gZhBase * scale * 1.35 * ZKFontBoost()));
     CGFloat en = MAX(9.5, zh * 0.66);
     NSInteger enLines = 0;         // 原文不限行：跟着换行，不截断
 
