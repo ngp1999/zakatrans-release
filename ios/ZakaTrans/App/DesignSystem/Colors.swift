@@ -37,11 +37,13 @@ enum DSColor {
     // MARK: 强调色
 
     /// 品牌强调色：只用于选中态、链接、主操作填充，不做大面积背景。
-    static let accent = Color(red: 0.04, green: 0.58, blue: 0.53)
+    /// 这一版把饱和度压下来、明度调暗了一档：之前的 #0A9487 在浅色底上太跳，
+    /// 一屏里出现两三处就发飘。色相还是青绿，只是更沉稳，白字对比度仍然达标。
+    static let accent = Color(red: 0.16, green: 0.46, blue: 0.42)
     /// 主操作填充用的品牌色（比 accent 略深，保证白字对比度达标）
-    static let accentFill = Color(red: 0.03, green: 0.52, blue: 0.48)
+    static let accentFill = Color(red: 0.14, green: 0.40, blue: 0.37)
     /// 强调色的浅底（选中行、标签底）
-    static let accentSoft = Color(red: 0.04, green: 0.58, blue: 0.53).opacity(0.12)
+    static let accentSoft = Color(red: 0.16, green: 0.46, blue: 0.42).opacity(0.10)
 
     // MARK: 语义状态色
 
