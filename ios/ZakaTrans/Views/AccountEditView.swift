@@ -44,12 +44,7 @@ struct AccountEditView: View {
                             .submitLabel(.done)
                             .padding(.horizontal, 14)
                             .frame(height: 50)
-                            .background(Theme.card)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .strokeBorder(Theme.hairline, lineWidth: 0.8)
-                            )
+                            .glassSurface(radius: 12, material: .thinMaterial, elevated: false)
                     }
                     .padding(.horizontal, 20)
 
@@ -79,7 +74,8 @@ struct AccountEditView: View {
             .padding(.horizontal, 20)
             .padding(.bottom, 18)
         }
-        .background(Theme.bg)
+        .screenBackground()
+        .glassNavigationBar()
         .navigationTitle("修改资料")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
