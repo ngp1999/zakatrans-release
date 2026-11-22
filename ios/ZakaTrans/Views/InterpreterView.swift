@@ -76,12 +76,13 @@ struct InterpreterView: View {
             transcript
             bottomBar
         }
-        .background(Theme.bg)
+        .screenBackground()
         .sheet(isPresented: $showLang) {
             LangPicker(mine: $mine, other: $other) { a, b in
                 mine = a; other = b
                 ZKInterpreter.shared()?.setMine(a, other: b)
             }
+            .sheetChrome(radius: 30)
         }
         // 用自绘提示框，跟 App 其他地方的卡片是同一套语言（系统 alert 一弹出来就出戏）
         .notice($error)
@@ -265,12 +266,13 @@ struct InterpreterView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(Theme.surface)
+                    .fill(.ultraThinMaterial)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .strokeBorder(Theme.hairline, lineWidth: 0.8)
+                    .strokeBorder(Color.white.opacity(0.35), lineWidth: 0.8)
             )
+            .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 4)
             .opacity(l.done ? 1 : 0.82)
 
             playButton(l)
@@ -332,7 +334,10 @@ struct InterpreterView: View {
         .padding(.horizontal, 20)
         .padding(.top, 10)
         .padding(.bottom, 8)
-        .background(Theme.bg)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .top) {
+            Rectangle().fill(Theme.hairline).frame(height: 0.5)
+        }
     }
 
     /// 按住时浮在按钮上方的那条提示：一眼告诉用户「上滑可以取消」，
@@ -350,7 +355,7 @@ struct InterpreterView: View {
         .frame(height: 28)
         .background(
             Capsule(style: .continuous)
-                .fill(canceling ? Theme.warn : Theme.surface)
+                .fill(canceling ? AnyShapeStyle(Theme.warn) : AnyShapeStyle(Material.regularMaterial))
         )
         .overlay(
             Capsule(style: .continuous)
@@ -368,6 +373,11 @@ struct InterpreterView: View {
         ZStack {
             RoundedRectangle(cornerRadius: 26, style: .continuous)
                 .fill(canceling ? Theme.warn : Theme.accent)
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .fill(
+                    LinearGradient(colors: [Color.white.opacity(0.24), Color.white.opacity(0.02)],
+                                   startPoint: .top, endPoint: .bottom)
+                )
             HStack(spacing: 9) {
                 if holding {
                     LevelBars(level: level)
@@ -382,6 +392,12 @@ struct InterpreterView: View {
             }
         }
         .frame(height: 54)
+        .overlay(
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.28), lineWidth: 1)
+        )
+        .shadow(color: (canceling ? Theme.warn : Theme.accent).opacity(holding ? 0.16 : 0.32),
+                radius: holding ? 8 : 18, x: 0, y: holding ? 4 : 9)
         .scaleEffect(holding ? 1.015 : 1)
         .animation(.easeOut(duration: 0.12), value: holding)
         .contentShape(Rectangle())
@@ -735,7 +751,8 @@ private struct LangPicker: View {
                 .padding(.top, 8)
                 .padding(.bottom, 24)
             }
-            .background(Theme.bg)
+            .screenBackground()
+            .glassNavigationBar()
             .navigationTitle("选择语言")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -787,8 +804,7 @@ private struct LangPicker: View {
                     }
                 }
             }
-            .background(Theme.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .glassSurface(radius: 16, material: .thinMaterial)
         }
     }
 }
