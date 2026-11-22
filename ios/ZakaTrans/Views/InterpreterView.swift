@@ -31,8 +31,9 @@ struct InterpreterView: View {
     @State private var level: CGFloat = 0
     @State private var showLang = false
     @State private var error: String?
-    /// 刚点开始的头两秒：界面明说「在连」，别让人以为已经在听、对着手机说半天
-    @State private var warming = false
+    /// 进页面就静默把识别通道握好（不碰麦克风）。按下直接说，界面不出现「正在连接」这种提示；
+    /// 一直没人用就把通道放掉，不白占着服务端会话。
+    @State private var idlePrewarm: Timer?
     /// 长按说话：按住才收音，松手才出译文，上滑取消
     @State private var holding = false
     @State private var canceling = false
@@ -70,7 +71,6 @@ struct InterpreterView: View {
     var body: some View {
         VStack(spacing: 0) {
             languageRow
-            clockRow
             transcript
             bottomBar
         }
@@ -85,11 +85,12 @@ struct InterpreterView: View {
         // 用自绘提示框，跟 App 其他地方的卡片是同一套语言（系统 alert 一弹出来就出戏）
         .notice($error)
         .onAppear {
-            // 进页面就把通道握上（不碰麦克风）。按下开始时直接说话，不再等握手。
-            ZKInterpreter.shared()?.prewarm(with: mine, other: other)
+            // 进页面就把两条通道握上（不碰麦克风、橙点不亮），按下就能直接说。
+            prewarmAndScheduleRelease()
         }
         .onDisappear {
             // 不管引擎是不是已经自动关过，离开这个页面一律收干净
+            idlePrewarm?.invalidate(); idlePrewarm = nil
             stop()
         }
     }
@@ -159,26 +160,6 @@ struct InterpreterView: View {
         .padding(.top, 6)
         .padding(.bottom, 14)
         .opacity(running ? 0.45 : 1)
-    }
-
-    /// 顶部状态行：只报连接状态，不再走 时:分:秒。
-    /// 一上来那几秒最容易被误以为「已经在听了」，所以这时候明说在连；
-    /// 连上之后就留白——时间读数对使用者没有信息量，反而占视线。
-    /// 高度始终占着，开始前后下面的对话区不会跳一下。
-    private var clockRow: some View {
-        Text(statusLine)
-            .font(.subheadline)
-            .foregroundStyle(DSColor.secondaryLabel)
-            .frame(height: 20)
-            .frame(maxWidth: .infinity)
-            .padding(.bottom, 10)
-            .animation(DSMotion.quick, value: statusLine)
-    }
-
-    private var statusLine: String {
-        if warming { return "正在连接识别服务" }
-        if holding { return "" }
-        return running ? "" : " "
     }
 
     // MARK: - 对话
@@ -447,12 +428,7 @@ struct InterpreterView: View {
     private func beginInterp() {
         guard !running else { return }
         running = true
-        warming = true
         // 会话是每句按一次重建的，历史气泡要留着——这里绝不清空上一句
-        // 兜底：通道没回报状态也照样在两秒后放开提示，别一直挂着「正在连接」
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [self] in
-            if running { warming = false }
-        }
         // 同传自己管着 PlayAndRecord 会话，朗读这边不许再去改会话类别
         Speaker.shared.usesExternalSession = true
         // 这一路是麦克风在听：没有系统声音可以让位，朗读只能靠"等空隙 + 让路"
@@ -467,8 +443,7 @@ struct InterpreterView: View {
         guard let itp = ZKInterpreter.shared() else {
             error = "同传引擎没启动起来，重开一次试试"
             running = false
-            warming = false
-            pendingSpeak = false
+                pendingSpeak = false
             Speaker.shared.usesExternalSession = false
             return
         }
@@ -480,7 +455,6 @@ struct InterpreterView: View {
                 // 松手之后还在回结果：每来一条就把收尾计时往后顺延，
                 // 等它真没动静了再关会话——不能把最后一句的译文关在门外。
                 failCount = 0
-                warming = false
                 if waitingFinal && !holding { scheduleIdleStop() }
                 let isFinal = (kind == 2)   // ZKLineKindFinal
                 let lineID = lid ?? UUID().uuidString
@@ -516,7 +490,6 @@ struct InterpreterView: View {
                     waitingFinal = false
                     idleStop?.invalidate(); idleStop = nil
                     hardStop?.invalidate(); hardStop = nil
-                    warming = true
                     ZKInterpreter.shared()?.stop()
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
                         guard running else { return }
@@ -524,9 +497,6 @@ struct InterpreterView: View {
                         again?.pushToTalk = true
                         again?.start(with: mine, other: other)
                         if keepHolding { again?.beginUtterance() }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                            if running { warming = false }
-                        }
                     }
                 } else {
                     failCount = 0
@@ -544,12 +514,34 @@ struct InterpreterView: View {
         }
     }
 
+    // MARK: - 静默预热
+
+    /// 进页面（以及每句收尾之后）把通道握好，让下一次按住是秒开。
+    /// 一直没人按住就在 30 秒后放掉：预热是为了快，不是为了常驻占着服务端会话。
+    private func prewarmAndScheduleRelease() {
+        guard !running else { return }
+        ZKInterpreter.shared()?.prewarm(with: mine, other: other)
+        idlePrewarm?.invalidate()
+        let t = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: false) { _ in
+            releasePrewarm()
+        }
+        RunLoop.main.add(t, forMode: .common)
+        idlePrewarm = t
+    }
+
+    private func releasePrewarm() {
+        idlePrewarm?.invalidate(); idlePrewarm = nil
+        guard !running, !holding else { return }
+        ZKInterpreter.shared()?.stop()
+    }
+
     // MARK: - 长按
 
     private func pressDown() {
         guard !holding else { return }
-        // 上一句的收尾计时先撤掉：这一句还没结束，别把会话关了
+        // 上一句的收尾计时、闲置预热计时都撤掉：这一句还没结束，别把会话关了
         idleStop?.invalidate(); idleStop = nil
+        idlePrewarm?.invalidate(); idlePrewarm = nil
         hardStop?.invalidate(); hardStop = nil
         waitingFinal = false
         holding = true
@@ -609,7 +601,6 @@ struct InterpreterView: View {
         waitingFinal = false
         guard running else { return }
         running = false
-        warming = false
         holding = false
         canceling = false
         pendingSpeak = false
@@ -625,6 +616,8 @@ struct InterpreterView: View {
             itp.onState = nil
             itp.onFail = nil
         }
+        // 这一句完了：通道重新握好备用，下次按住不用等建连；一直不用就自动放掉
+        prewarmAndScheduleRelease()
     }
 
     /// 上滑取消：这一句不要了，把已经冒出来的半句也撤掉
@@ -682,7 +675,6 @@ struct InterpreterView: View {
         hardStop?.invalidate(); hardStop = nil
         waitingFinal = false
         running = false
-        warming = false
         holding = false
         canceling = false
         pendingSpeak = false
