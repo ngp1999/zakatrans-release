@@ -104,11 +104,11 @@ struct InterpreterView: View {
             } label: {
                 HStack(spacing: 6) {
                     Text(name(mine))
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(Theme.ink)
+                        .font(DSFont.headline)
+                        .foregroundStyle(DSColor.label)
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(Theme.faint)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(DSColor.tertiaryLabel)
                 }
                 .contentShape(Rectangle())
             }
@@ -124,8 +124,8 @@ struct InterpreterView: View {
                 ZKInterpreter.shared()?.setMine(mine, other: other)
             } label: {
                 Image(systemName: "arrow.left.arrow.right")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(DSColor.accent)
                     .frame(width: 34, height: 34)
                     .background(Theme.accentSoft)
                     .clipShape(Circle())
@@ -140,11 +140,11 @@ struct InterpreterView: View {
             } label: {
                 HStack(spacing: 6) {
                     Text(name(other))
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(Theme.ink)
+                        .font(DSFont.headline)
+                        .foregroundStyle(DSColor.label)
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(Theme.faint)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(DSColor.tertiaryLabel)
                 }
                 .contentShape(Rectangle())
             }
@@ -163,8 +163,8 @@ struct InterpreterView: View {
     /// 高度始终占着，开始前后下面的对话区不会跳一下。
     private var clockRow: some View {
         Text(Self.clockText(elapsed))
-            .font(.system(size: 15, weight: .medium).monospacedDigit())
-            .foregroundStyle(running ? Theme.ink : Theme.faint)
+            .font(.subheadline.weight(.medium).monospacedDigit())
+            .foregroundStyle(running ? DSColor.label : DSColor.tertiaryLabel)
             .frame(height: 20)
             .frame(maxWidth: .infinity)
             .padding(.bottom, 10)
@@ -230,10 +230,10 @@ struct InterpreterView: View {
         VStack(spacing: 16) {
             Image(systemName: "waveform")
                 .font(.system(size: 38, weight: .ultraLight))
-                .foregroundStyle(Theme.accent)
+                .foregroundStyle(DSColor.accent)
             Text(guideText)
-                .font(.system(size: 15))
-                .foregroundStyle(Theme.sub)
+                .font(.subheadline)
+                .foregroundStyle(DSColor.secondaryLabel)
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 80)
@@ -248,15 +248,15 @@ struct InterpreterView: View {
             VStack(alignment: .leading, spacing: 5) {
                 if !l.trans.isEmpty {
                     Text(l.trans)
-                        .font(.system(size: 19, weight: l.done ? .semibold : .regular))
-                        .foregroundStyle(Theme.ink)
+                        .font(.body.weight(l.done ? .semibold : .regular))
+                        .foregroundStyle(DSColor.label)
                         .multilineTextAlignment(.leading)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if !l.source.isEmpty, l.source != l.trans {
                     Text(l.source)
-                        .font(.system(size: 15))
-                        .foregroundStyle(Theme.sub)
+                        .font(.subheadline)
+                        .foregroundStyle(DSColor.secondaryLabel)
                         .multilineTextAlignment(.leading)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -265,14 +265,9 @@ struct InterpreterView: View {
             .padding(.vertical, 11)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(.ultraThinMaterial)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(DSColor.cell)
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.35), lineWidth: 0.8)
-            )
-            .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 4)
             .opacity(l.done ? 1 : 0.82)
 
             playButton(l)
@@ -292,7 +287,7 @@ struct InterpreterView: View {
             } label: {
                 Image(systemName: "play.circle.fill")
                     .font(.system(size: 25, weight: .light))
-                    .foregroundStyle(Theme.faint)
+                    .foregroundStyle(DSColor.tertiaryLabel)
                     .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
             }
@@ -331,12 +326,12 @@ struct InterpreterView: View {
             holdButton
                 .overlay(alignment: .top) { slideHint }
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 10)
-        .padding(.bottom, 8)
-        .background(.ultraThinMaterial)
+        .padding(.horizontal, DSSpace.l)
+        .padding(.top, DSSpace.s)
+        .padding(.bottom, DSSpace.xs)
+        .background(DSColor.background)
         .overlay(alignment: .top) {
-            Rectangle().fill(Theme.hairline).frame(height: 0.5)
+            Rectangle().fill(DSColor.separator).frame(height: 0.5)
         }
     }
 
@@ -350,16 +345,12 @@ struct InterpreterView: View {
             Text(canceling ? "松开手指，取消这一句" : "上滑取消")
                 .font(.system(size: 13, weight: .medium))
         }
-        .foregroundStyle(canceling ? Color.white : Theme.sub)
-        .padding(.horizontal, 12)
+        .foregroundStyle(canceling ? Color.white : DSColor.secondaryLabel)
+        .padding(.horizontal, DSSpace.s)
         .frame(height: 28)
         .background(
             Capsule(style: .continuous)
-                .fill(canceling ? AnyShapeStyle(Theme.warn) : AnyShapeStyle(Material.regularMaterial))
-        )
-        .overlay(
-            Capsule(style: .continuous)
-                .strokeBorder(canceling ? Color.clear : Theme.hairline, lineWidth: 0.8)
+                .fill(canceling ? AnyShapeStyle(DSColor.destructive) : AnyShapeStyle(Material.thinMaterial))
         )
         .offset(y: -36)
         .opacity(holding ? 1 : 0)
@@ -371,35 +362,22 @@ struct InterpreterView: View {
 
     private var holdButton: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .fill(canceling ? Theme.warn : Theme.accent)
-            RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .fill(
-                    LinearGradient(colors: [Color.white.opacity(0.24), Color.white.opacity(0.02)],
-                                   startPoint: .top, endPoint: .bottom)
-                )
-            HStack(spacing: 9) {
+            RoundedRectangle(cornerRadius: DSRadius.button, style: .continuous)
+                .fill(canceling ? DSColor.destructive : DSColor.accentFill)
+            HStack(spacing: DSSpace.xs) {
                 if holding {
                     LevelBars(level: level)
                 } else {
                     Image(systemName: "mic.fill")
-                        .font(.system(size: 15, weight: .bold))
+                        .font(.footnote.weight(.bold))
                         .foregroundStyle(.white)
                 }
                 Text(holding ? (canceling ? "松开取消" : "松手翻译") : "按住说话")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(DSFont.headline)
                     .foregroundStyle(.white)
             }
         }
         .frame(height: 54)
-        .overlay(
-            RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.28), lineWidth: 1)
-        )
-        .shadow(color: (canceling ? Theme.warn : Theme.accent).opacity(holding ? 0.16 : 0.32),
-                radius: holding ? 8 : 18, x: 0, y: holding ? 4 : 9)
-        .scaleEffect(holding ? 1.015 : 1)
-        .animation(.easeOut(duration: 0.12), value: holding)
         .contentShape(Rectangle())
         .gesture(
             DragGesture(minimumDistance: 0)
@@ -764,7 +742,7 @@ private struct LangPicker: View {
                         dismiss()
                     }
                     .fontWeight(.semibold)
-                    .foregroundStyle(Theme.accent)
+                    .foregroundStyle(DSColor.accent)
                 }
             }
         }
@@ -774,7 +752,7 @@ private struct LangPicker: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(Theme.sub)
+                .foregroundStyle(DSColor.secondaryLabel)
                 .padding(.leading, 4)
             VStack(spacing: 0) {
                 ForEach(Array(InterpreterView.langs.enumerated()), id: \.offset) { _, item in
@@ -784,13 +762,13 @@ private struct LangPicker: View {
                         } label: {
                             HStack {
                                 Text(item.1)
-                                    .font(.system(size: 16))
-                                    .foregroundStyle(Theme.ink)
+                                    .font(.body)
+                                    .foregroundStyle(DSColor.label)
                                 Spacer()
                                 if current.wrappedValue == item.0 {
                                     Image(systemName: "checkmark")
                                         .font(.system(size: 13, weight: .bold))
-                                        .foregroundStyle(Theme.accent)
+                                        .foregroundStyle(DSColor.accent)
                                 }
                             }
                             .padding(.horizontal, 16)
@@ -799,12 +777,12 @@ private struct LangPicker: View {
                         }
                         .buttonStyle(RowButtonStyle())
                         if item.0 != InterpreterView.langs.filter({ $0.0 != exclude }).last?.0 {
-                            Rectangle().fill(Theme.hairline).frame(height: 0.5).padding(.leading, 16)
+                            Rectangle().fill(DSColor.separator).frame(height: 0.5).padding(.leading, 16)
                         }
                     }
                 }
             }
-            .glassSurface(radius: 16, material: .thinMaterial)
+            .background(DSColor.cell, in: RoundedRectangle(cornerRadius: DSRadius.card, style: .continuous))
         }
     }
 }
