@@ -7,23 +7,28 @@ struct RootView: View {
 
     var body: some View {
         ZStack {
-            if cloud.loggedIn {
-                MainView()
-                    .transition(.opacity)
-            } else {
-                LoginView()
-                    .transition(.opacity)
+            // 登录态没核完之前谁都不放进去：启动页挡在最上面。
+            // 核完之后只有两条路——已登录进主界面，没登录（或 token 失效）留在登录页。
+            if cloud.ready {
+                if cloud.loggedIn {
+                    MainView()
+                        .transition(.opacity)
+                } else {
+                    LoginView()
+                        .transition(.opacity)
+                }
             }
 
-            if splash {
+            if !cloud.ready || splash {
                 SplashView()
                     .transition(.opacity)
                     .zIndex(10)
             }
         }
         .animation(.easeInOut(duration: 0.25), value: cloud.loggedIn)
+        .animation(.easeInOut(duration: 0.2), value: cloud.ready)
         .task {
-            // 冷启动：本地有登录态就立刻放行，不等网络。
+            // 冷启动：先向服务端核一次登录态（最多 5 秒），核完才决定进哪一边。
             await cloud.bootstrap()
             // 启动图只做一次很短的过渡，不做长时间停留
             try? await Task.sleep(nanoseconds: 120_000_000)
@@ -63,6 +68,7 @@ struct MainView: View {
     @State private var mode: Mode = .subtitle
     @State private var showProfile = false
     @Namespace private var segAnim
+    @Environment(\.horizontalSizeClass) private var hSize
 
     var body: some View {
         ZStack {
@@ -74,8 +80,19 @@ struct MainView: View {
                 content
             }
         }
-        .sheet(isPresented: $showProfile) {
+        // 「我的」的呈现方式按设备分：
+        //   iPhone 用 sheet（下拉收起，最自然）；
+        //   iPad 用全屏覆盖——iPad 上 sheet 是一个浮起来的表单页，
+        //   在里面再做导航推入会把布局顶进死循环（点「我的积分」「对话记录」直接卡死，
+        //   点什么都没反应）。全屏覆盖里配 NavigationStack 是稳的。
+        .sheet(isPresented: Binding(get: { showProfile && hSize != .regular },
+                                    set: { showProfile = $0 })) {
             NavigationStack { ProfileView() }
+        }
+        .fullScreenCover(isPresented: Binding(get: { showProfile && hSize == .regular },
+                                              set: { showProfile = $0 })) {
+            NavigationStack { ProfileView() }
+                .background(Theme.bg)
         }
         // 画中画的锚点必须挂在整个 App 的最外层，而不是某个页面里：
         // 锚点一离开窗口，系统就会把画中画收掉——切模式、进后台都属于这种情况。
