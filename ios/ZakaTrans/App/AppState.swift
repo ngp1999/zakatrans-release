@@ -60,9 +60,9 @@ final class AppState: ObservableObject {
 
     struct SubtitleLine: Identifiable, Equatable {
         let id = UUID()
-        let source: String
+        var source: String
         var trans: String
-        let at = Date()
+        var at = Date()
     }
 
     /// 画中画需要一个真实的 UIView 当锚点。
@@ -165,6 +165,22 @@ final class AppState: ObservableObject {
         guard !src.isEmpty || !zh.isEmpty else { return }
         let key = Speaker.key(src) + "\u{1}" + Speaker.key(zh)
         if recentFinalKeys.contains(key) { return }
+
+        // 碎片兜底：上游偶尔把句尾两三个词单独切一句吐出来（英文里 "than here" 这种），
+        // 时间又刚好错过了 1.8 秒的粘连窗口，落下来就是记录里孤零零一行乱码。
+        // 上一条还在 3 秒内、又没以句末标点收掉，就把它并回去，不再单独占一行。
+        if !src.isEmpty, hanCount(src) == 0, wordCount(src) <= 2, !endsSentence(src),
+           let last = lines.last, !last.source.isEmpty, last.source.count < 140,
+           Date().timeIntervalSince(last.at) < 3.0 {
+            let mergedSrc = AppState.trimEndPunct(AppState.join(last.source, src))
+            let mergedZh = zh.isEmpty ? last.trans : AppState.trimEndPunct(AppState.join(last.trans, zh))
+            let idx = lines.count - 1
+            lines[idx].source = mergedSrc
+            lines[idx].trans = mergedZh
+            lines[idx].at = Date()
+            ZKPip.shared()!.patchZh(mergedZh, forEn: last.source)
+            return
+        }
         recentFinalKeys.append(key)
         if recentFinalKeys.count > 40 {
             recentFinalKeys.removeFirst(recentFinalKeys.count - 40)
@@ -174,6 +190,12 @@ final class AppState: ObservableObject {
         lastLineAt = Date()
         if lines.count > 200 { lines.removeFirst(lines.count - 200) }
         ZKPip.shared()!.appendLineEn(src, zh: zh)
+        // 这句已经进记录区了，「正在说」那一行必须马上撤掉：
+        // 以前只 append 不清理，同一句会在记录末尾再挂一遍，看着就是「最后一行重复了」。
+        if !src.isEmpty, !liveSource.isEmpty, Speaker.key(liveSource) == Speaker.key(src) {
+            liveSource = ""
+            liveTrans = ""
+        }
     }
 
     // MARK: - 引擎回调
