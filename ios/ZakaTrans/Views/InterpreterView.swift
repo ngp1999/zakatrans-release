@@ -31,7 +31,6 @@ struct InterpreterView: View {
     @State private var level: CGFloat = 0
     @State private var showLang = false
     @State private var error: String?
-    /// 这一场的开始时刻和已经过去的秒数（界面上按 时:分:秒 走）
     /// 刚点开始的头两秒：界面明说「在连」，别让人以为已经在听、对着手机说半天
     @State private var warming = false
     /// 长按说话：按住才收音，松手才出译文，上滑取消
@@ -42,11 +41,10 @@ struct InterpreterView: View {
     @State private var holdIDs: Set<String> = []
     /// 松手之后的收尾：等最后一句译文回来就把会话关掉，不再常驻占麦克风
     @State private var idleStop: Timer?
+    /// 连续断流的次数：偶发断开自己重连，连着三次都接不上才提示用户
+    @State private var failCount = 0
     @State private var hardStop: Timer?
     @State private var waitingFinal = false
-    @State private var began: Date?
-    @State private var elapsed: TimeInterval = 0
-    @State private var ticker: Timer?
 
     /// 语言名称一律用中文显示：选语言这一步是给自己看的，
     /// 看到「日本語 / 한국어」还得先在心里翻译一遍，没必要。
@@ -86,6 +84,10 @@ struct InterpreterView: View {
         }
         // 用自绘提示框，跟 App 其他地方的卡片是同一套语言（系统 alert 一弹出来就出戏）
         .notice($error)
+        .onAppear {
+            // 进页面就把通道握上（不碰麦克风）。按下开始时直接说话，不再等握手。
+            ZKInterpreter.shared()?.prewarm(with: mine, other: other)
+        }
         .onDisappear {
             // 不管引擎是不是已经自动关过，离开这个页面一律收干净
             stop()
@@ -159,39 +161,24 @@ struct InterpreterView: View {
         .opacity(running ? 0.45 : 1)
     }
 
-    /// 计时器：开始之后一直走，时:分:秒，居中摆在语言下面。
+    /// 顶部状态行：只报连接状态，不再走 时:分:秒。
+    /// 一上来那几秒最容易被误以为「已经在听了」，所以这时候明说在连；
+    /// 连上之后就留白——时间读数对使用者没有信息量，反而占视线。
     /// 高度始终占着，开始前后下面的对话区不会跳一下。
     private var clockRow: some View {
-        Text(Self.clockText(elapsed))
-            .font(.subheadline.weight(.medium).monospacedDigit())
-            .foregroundStyle(running ? DSColor.label : DSColor.tertiaryLabel)
+        Text(statusLine)
+            .font(.subheadline)
+            .foregroundStyle(DSColor.secondaryLabel)
             .frame(height: 20)
             .frame(maxWidth: .infinity)
             .padding(.bottom, 10)
+            .animation(DSMotion.quick, value: statusLine)
     }
 
-    static func clockText(_ t: TimeInterval) -> String {
-        let total = max(0, Int(t))
-        return String(format: "%02d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60)
-    }
-
-    private func startClock() {
-        stopClock()
-        elapsed = 0
-        began = Date()
-        let t = Timer(timeInterval: 0.5, repeats: true) { _ in
-            guard let b = began else { return }
-            elapsed = Date().timeIntervalSince(b)
-        }
-        RunLoop.main.add(t, forMode: .common)
-        ticker = t
-    }
-
-    private func stopClock() {
-        ticker?.invalidate()
-        ticker = nil
-        began = nil
-        elapsed = 0
+    private var statusLine: String {
+        if warming { return "正在连接识别服务" }
+        if holding { return "" }
+        return running ? "" : " "
     }
 
     // MARK: - 对话
@@ -313,7 +300,6 @@ struct InterpreterView: View {
     // MARK: - 底部
 
     private var guideText: String {
-        if warming { return "正在连接识别服务…" }
         if holding { return canceling ? "松开手指取消这一句" : "正在听，上滑可取消" }
         return lines.isEmpty ? "按住下面对话，松手出译文" : "按住说话，松手翻译"
     }
@@ -463,7 +449,6 @@ struct InterpreterView: View {
         running = true
         warming = true
         // 会话是每句按一次重建的，历史气泡要留着——这里绝不清空上一句
-        if ticker == nil { startClock() }
         // 兜底：通道没回报状态也照样在两秒后放开提示，别一直挂着「正在连接」
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [self] in
             if running { warming = false }
@@ -494,6 +479,8 @@ struct InterpreterView: View {
                 guard running else { return }
                 // 松手之后还在回结果：每来一条就把收尾计时往后顺延，
                 // 等它真没动静了再关会话——不能把最后一句的译文关在门外。
+                failCount = 0
+                warming = false
                 if waitingFinal && !holding { scheduleIdleStop() }
                 let isFinal = (kind == 2)   // ZKLineKindFinal
                 let lineID = lid ?? UUID().uuidString
@@ -509,10 +496,43 @@ struct InterpreterView: View {
             withAnimation(.linear(duration: 0.08)) { level = CGFloat(v) }
         }
         itp.onState = { _ in }
+        // 上游断流（弱网、切网、代理抖动）太常见了，断一次就把通道原文
+        // （OSStatus、waiting next packet 这类）糊到用户脸上，既看不懂也没用。
+        // 现在先静默重开这一句：连着三次都接不上，才用一句人话提示。
         itp.onFail = { why in
             DispatchQueue.main.async {
-                error = why ?? ""
-                stop()
+                guard running else { return }
+                let w = why ?? ""
+                // 引擎自己写的中文说明（权限类）是给人看的，照说；
+                // 其余都是通道层的原文，不外露。
+                if w.contains("权限") || w.contains("麦克风") {
+                    error = w
+                    stop()
+                    return
+                }
+                failCount += 1
+                if failCount <= 2 {
+                    let keepHolding = holding
+                    waitingFinal = false
+                    idleStop?.invalidate(); idleStop = nil
+                    hardStop?.invalidate(); hardStop = nil
+                    warming = true
+                    ZKInterpreter.shared()?.stop()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        guard running else { return }
+                        let again = ZKInterpreter.shared()
+                        again?.pushToTalk = true
+                        again?.start(with: mine, other: other)
+                        if keepHolding { again?.beginUtterance() }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                            if running { warming = false }
+                        }
+                    }
+                } else {
+                    failCount = 0
+                    error = "识别服务连接不稳定，请检查网络后重试。"
+                    stop()
+                }
             }
         }
         itp.start(with: mine, other: other)
@@ -594,10 +614,7 @@ struct InterpreterView: View {
         canceling = false
         pendingSpeak = false
         level = 0
-        // 时钟停在这一场的读数上，不清零：再按住会接着走
-        ticker?.invalidate()
-        ticker = nil
-        began = nil
+        failCount = 0
         ZKInterpreter.shared()?.stop()
         Speaker.shared.stop()
         Speaker.shared.usesExternalSession = false
@@ -669,7 +686,7 @@ struct InterpreterView: View {
         holding = false
         canceling = false
         pendingSpeak = false
-        stopClock()
+        failCount = 0
         ZKInterpreter.shared()?.stop()
         Speaker.shared.stop()
         // 会话归位：离开同传页之后朗读恢复成自己配会话
