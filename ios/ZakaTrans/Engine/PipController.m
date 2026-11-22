@@ -1142,6 +1142,8 @@ static CGFloat ZKFitSize(NSString *text, UIFont *font, CGFloat width, CGFloat fl
     CADisplayLink *_link;
     CFTimeInterval _lastTick;
     CGFloat _w, _h, _font, _inset, _midGap, _zhBoxH, _srcBoxH;
+    NSInteger _linesZh, _linesSrc;     // 两块各站几行：中窗 3、大窗 5（跟「上推」档一致）
+    CGFloat _groupTop;                 // 上下两块整组在窗口里的上沿（整组居中）
     BOOL _built;
 }
 
@@ -1212,8 +1214,37 @@ static void ZKSegAppend(NSMutableString *buf, NSString *s) {
     _inset = MAX(4.0, _h * 0.03);
     _midGap = two ? MAX(3.0, _font * 0.30) : 0;
     CGFloat avail = MAX(10.0, _h - _inset * 2 - _midGap);
-    _zhBoxH = two ? floor(avail / 2.0) : avail;
-    _srcBoxH = _zhBoxH;
+
+    if (two) {
+        // 两块各站固定行数：中窗 3 行译文 + 3 行原文、大窗 5 + 5。
+        // 块高取「行数 × 行高」（行高不取整），所以头一行永远是完整的一行，
+        // 上推那一下正好切在行边界上——不会出现「最上面一行被切掉半个字」。
+        // 放不下就压字号，不拿少一行顶上（压字号才叫真适配）。
+        _linesZh = _linesSrc = ([gPipStyle isEqualToString:@"M"] ? 3 : 5);
+        CGFloat f = _font;
+        for (NSInteger i = 0; i < 120; i++) {
+            CGFloat lz = [UIFont boldSystemFontOfSize:f].lineHeight;
+            CGFloat ls = [UIFont systemFontOfSize:f * 0.66].lineHeight;
+            if ((CGFloat)_linesZh * (lz + ls) <= avail) break;
+            f -= 0.5;
+            if (f <= 8.0) { f = 8.0; break; }
+        }
+        _font = f;
+        _midGap = MAX(3.0, f * 0.30);
+        CGFloat lz = MAX(1.0, [UIFont boldSystemFontOfSize:f].lineHeight);
+        CGFloat ls = MAX(1.0, [UIFont systemFontOfSize:f * 0.66].lineHeight);
+        _zhBoxH = (CGFloat)_linesZh * lz;
+        _srcBoxH = (CGFloat)_linesSrc * ls;
+    } else {
+        // 只显一种语言：整块铺满，能站几行算几行
+        _zhBoxH = _srcBoxH = avail;
+        CGFloat lh = MAX(1.0, [UIFont boldSystemFontOfSize:_font].lineHeight);
+        _linesZh = _linesSrc = MAX(1, (NSInteger)floor((avail + 0.5) / lh));
+    }
+
+    // 上下两块紧挨着成一组，在窗口里垂直居中（顶部/底部空白平均分）
+    CGFloat groupH = two ? (_zhBoxH + _midGap + _srcBoxH) : _zhBoxH;
+    _groupTop = _inset + MAX(0.0, (avail - groupH) / 2.0);
 }
 
 - (void)layoutBlocks {
@@ -1227,12 +1258,12 @@ static void ZKSegAppend(NSMutableString *buf, NSString *s) {
     _zhBox.hidden = !(showTrans);
     _srcBox.hidden = !(showSource);
     if (two) {
-        _zhBox.frame = CGRectMake(padX, _inset, bw, _zhBoxH);
-        _srcBox.frame = CGRectMake(padX, _inset + _zhBoxH + _midGap, bw, _srcBoxH);
+        _zhBox.frame = CGRectMake(padX, _groupTop, bw, _zhBoxH);
+        _srcBox.frame = CGRectMake(padX, _groupTop + _zhBoxH + _midGap, bw, _srcBoxH);
     } else if (showTrans) {
-        _zhBox.frame = CGRectMake(padX, _inset, bw, _zhBoxH);
+        _zhBox.frame = CGRectMake(padX, _groupTop, bw, _zhBoxH);
     } else {
-        _srcBox.frame = CGRectMake(padX, _inset, bw, _srcBoxH);
+        _srcBox.frame = CGRectMake(padX, _groupTop, bw, _srcBoxH);
     }
 
     CGFloat zhF = _font;
@@ -1291,8 +1322,10 @@ static void ZKSegAppend(NSMutableString *buf, NSString *s) {
         CGFloat bw = CGRectGetWidth(_zhBox.bounds);
         CGFloat bh = CGRectGetHeight(_zhBox.bounds);
         CGFloat h = [self heightOf:vis font:_zhLabel.font width:bw];
-        CGFloat lineH = MAX(1.0, ceil(_zhLabel.font.lineHeight));
-        NSInteger lines = MAX(1, (NSInteger)floor((bh + 0.5) / lineH));
+        // 行高不取整：块高是「行数 × 行高」，这样 offset 走一行就正好切在行边界上，
+        // 头顶那一行是完整消失的，不会露出半行。
+        CGFloat lineH = MAX(1.0, _zhLabel.font.lineHeight);
+        NSInteger lines = MAX(1, _linesZh);
         CGFloat nt = MAX(0.0, h - lines * lineH);
         [self aimZh:nt lineH:lineH snap:snap];
         if (![_zhLabel.text isEqualToString:vis]) _zhLabel.text = vis;
@@ -1307,8 +1340,8 @@ static void ZKSegAppend(NSMutableString *buf, NSString *s) {
         CGFloat bw = CGRectGetWidth(_srcBox.bounds);
         CGFloat bh = CGRectGetHeight(_srcBox.bounds);
         CGFloat h = [self heightOf:vis font:_srcLabel.font width:bw];
-        CGFloat lineH = MAX(1.0, ceil(_srcLabel.font.lineHeight));
-        NSInteger lines = MAX(1, (NSInteger)floor((bh + 0.5) / lineH));
+        CGFloat lineH = MAX(1.0, _srcLabel.font.lineHeight);
+        NSInteger lines = MAX(1, _linesSrc);
         CGFloat nt = MAX(0.0, h - lines * lineH);
         [self aimSrc:nt lineH:lineH snap:snap];
         if (![_srcLabel.text isEqualToString:vis]) _srcLabel.text = vis;
