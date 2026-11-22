@@ -3,8 +3,8 @@ import UIKit
 
 /// 我的积分：余额 + 充值。
 ///
-/// 档位、协议、下单全部交给 `CreditPurchaseSection`，和充值弹窗是同一份实现，
-/// 不会出现「这个页面点一下直接扣款、那个页面要先确认」这种两套逻辑。
+/// 页面上只留三样东西：余额、充值档位、下单按钮。说明性小字一律不放，
+/// 使用明细挪到导航栏右上角，需要的时候点进去看。
 struct CreditView: View {
     @ObservedObject private var cloud = Cloud.shared
     @ObservedObject private var purch = Purchases.shared
@@ -25,25 +25,6 @@ struct CreditView: View {
                         .minimumScaleFactor(0.6)
                 }
                 .padding(.vertical, DSSpace.xxs)
-
-                Button {
-                    Haptics.tap()
-                    showUsage = true
-                } label: {
-                    HStack {
-                        Text("使用明细")
-                            .font(DSFont.body)
-                            .foregroundStyle(DSColor.label)
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(DSColor.tertiaryLabel)
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            } footer: {
-                Text("积分用于实时字幕与同声传译。1 元 = 10 积分。")
             }
 
             CreditPurchaseSection()
@@ -51,6 +32,14 @@ struct CreditView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("我的积分")
         .navigationBarTitleDisplayMode(.large)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("使用明细") {
+                    Haptics.tap()
+                    showUsage = true
+                }
+            }
+        }
         .navigationDestination(isPresented: $showUsage) {
             UsageDetailView()
         }
