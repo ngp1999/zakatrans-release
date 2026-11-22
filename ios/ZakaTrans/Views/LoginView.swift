@@ -11,31 +11,40 @@ struct LoginView: View {
 
     var body: some View {
         ZStack {
-            Theme.bg.ignoresSafeArea()
+            AmbientBackground()
 
             VStack(spacing: 0) {
                 Spacer(minLength: 60)
 
-                VStack(spacing: 12) {
+                VStack(spacing: 14) {
                     Image("Logo")
                         .resizable()
                         .scaledToFit()
-                        .frame(width: 88, height: 88)
-                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .frame(width: 92, height: 92)
+                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                                .strokeBorder(Color.white.opacity(0.35), lineWidth: 1)
+                        )
+                        .shadow(color: Theme.accent.opacity(0.30), radius: 26, x: 0, y: 14)
 
-                    Text("语幕")
-                        .font(.system(size: 30, weight: .semibold))
-                        .foregroundStyle(Theme.ink)
-                    Text("实时字幕　同声传译")
-                        .font(.system(size: 15))
-                        .foregroundStyle(Theme.sub)
+                    VStack(spacing: 6) {
+                        Text("语幕")
+                            .font(.system(size: 30, weight: .semibold))
+                            .tracking(3)
+                            .foregroundStyle(Theme.ink)
+                        Text("实时字幕　同声传译")
+                            .font(.system(size: 15))
+                            .foregroundStyle(Theme.sub)
+                    }
+                    .padding(.top, 6)
                 }
 
                 Spacer(minLength: 40)
 
                 VStack(spacing: 14) {
                     AppleSignInButton(action: { apple.start() })
-                        .frame(height: 52)
+                        .frame(height: 54)
                         .disabled(working)
 
                     if let e = error ?? apple.error {
@@ -55,6 +64,10 @@ struct LoginView: View {
                     .foregroundStyle(Theme.faint)
                     .buttonStyle(.plain)
                 }
+                // 底部这一块单独浮成一张玻璃卡：登录按钮和协议是一个整体，跟上面的品牌区分开
+                .padding(.horizontal, 20)
+                .padding(.vertical, 18)
+                .glassSurface(radius: 26, material: .ultraThinMaterial)
                 .padding(.horizontal, 24)
                 .padding(.bottom, 28)
             }
@@ -68,6 +81,7 @@ struct LoginView: View {
                         }
                     }
             }
+            .sheetChrome()
         }
         .onAppear {
             apple.onSuccess = { token, name in
