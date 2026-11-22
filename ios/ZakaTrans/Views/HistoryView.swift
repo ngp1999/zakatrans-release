@@ -20,29 +20,13 @@ struct HistoryView: View {
                         NavigationLink(destination: SessionDetailView(session: s)) {
                             row(s)
                         }
-                        .listRowInsets(EdgeInsets(top: 10, leading: 18, bottom: 10, trailing: 18))
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(
-                            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                .fill(.thinMaterial)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                        .strokeBorder(Color.white.opacity(0.32), lineWidth: 0.8)
-                                )
-                                .padding(.vertical, 5)
-                                .padding(.horizontal, 2)
-                        )
                     }
                 }
-                .listStyle(.plain)
-                // 列表自己那层不透明底要关掉，否则底下的环境色和材质都透不上来
-                .scrollContentBackground(.hidden)
+                .listStyle(.insetGrouped)
             }
         }
-        .screenBackground()
-        .glassNavigationBar()
         .navigationTitle("对话记录")
-        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarTitleDisplayMode(.large)
         .refreshable { await load() }
         .task { if items.isEmpty { await load() } }
     }
@@ -89,8 +73,8 @@ struct HistoryView: View {
             // 左边两块：内容标题 + 什么时候、聊了多久
             VStack(alignment: .leading, spacing: 7) {
                 Text(title(s))
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Theme.ink)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(DSColor.label)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
@@ -102,7 +86,7 @@ struct HistoryView: View {
                     Spacer(minLength: 0)
                 }
                 .font(.system(size: 12).monospacedDigit())
-                .foregroundStyle(Theme.sub)
+                .foregroundStyle(DSColor.secondaryLabel)
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
             }
@@ -115,7 +99,7 @@ struct HistoryView: View {
     }
 
     private var dot: some View {
-        Text("·").font(.system(size: 12)).foregroundStyle(Theme.faint)
+        Text("·").font(.caption).foregroundStyle(DSColor.tertiaryLabel)
     }
 
     static func timeText(_ d: Date) -> String {
@@ -129,10 +113,10 @@ struct HistoryView: View {
         VStack(spacing: 12) {
             Image(systemName: "clock.arrow.circlepath")
                 .font(.system(size: 38, weight: .light))
-                .foregroundStyle(Theme.faint)
+                .foregroundStyle(DSColor.tertiaryLabel)
             Text("还没有记录")
                 .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(Theme.ink)
+                .foregroundStyle(DSColor.label)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -158,18 +142,18 @@ struct SessionDetailView: View {
     @State private var showExportSheet = false
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                metaCard
-                summaryCard
-                transcriptCard
+        List {
+            Section {
+                metaRows
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .padding(.bottom, 28)
+            Section("AI 总结") {
+                summarySection
+            }
+            Section("对话内容") {
+                transcriptSection
+            }
         }
-        .screenBackground()
-        .glassNavigationBar()
+        .listStyle(.insetGrouped)
         .navigationTitle("对话详情")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -181,7 +165,7 @@ struct SessionDetailView: View {
                     showExportSheet = true
                 } label: {
                     Image(systemName: "square.and.arrow.up")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.subheadline.weight(.semibold))
                 }
                 .disabled(detail == nil || (detail?.lines.isEmpty ?? true))
             }
@@ -194,12 +178,12 @@ struct SessionDetailView: View {
 
     /// 日期只在第一行出现一次，第二行只放时间 / 时长 / 句数——
     /// 以前两行各写一遍「11月20日 19:22」，同一页看到两个日期，纯属重复。
-    private var metaCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+    private var metaRows: some View {
+        VStack(alignment: .leading, spacing: DSSpace.xs) {
             HStack(alignment: .firstTextBaseline) {
                 Text(Self.dayText(session.startedAt))
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Theme.ink)
+                    .font(DSFont.headline)
+                    .foregroundStyle(DSColor.label)
                 Spacer()
             }
             HStack(spacing: 14) {
@@ -207,10 +191,10 @@ struct SessionDetailView: View {
                 Label(session.durationText, systemImage: "timer")
                 Label("\(detail?.lines.count ?? 0) 句", systemImage: "text.bubble")
             }
-            .font(.system(size: 12))
-            .foregroundStyle(Theme.sub)
+            .font(.caption)
+            .foregroundStyle(DSColor.secondaryLabel)
         }
-        .card()
+        .padding(.vertical, DSSpace.xxs)
     }
 
     /// 今天 / 昨天用口语写法，其它日子写全「yyyy年M月d日」
@@ -232,85 +216,79 @@ struct SessionDetailView: View {
         return f.string(from: d)
     }
 
-    private var summaryCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+    private var summarySection: some View {
+        VStack(alignment: .leading, spacing: DSSpace.s) {
             HStack {
                 Image(systemName: "sparkles")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
+                    .foregroundStyle(DSColor.accent)
                 Text("AI 总结")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Theme.ink)
+                    .font(DSFont.headline)
+                    .foregroundStyle(DSColor.label)
                 Spacer()
                 if summarizing {
-                    ProgressView().scaleEffect(0.8)
+                    ProgressView()
                 }
             }
+            .padding(.bottom, DSSpace.xxs)
 
             if !summary.isEmpty {
                 Text(summary)
-                    .font(.system(size: 14))
-                    .foregroundStyle(Theme.ink)
+                    .font(.subheadline)
+                    .foregroundStyle(DSColor.label)
                     .lineSpacing(4)
                     .fixedSize(horizontal: false, vertical: true)
             } else if summarizing {
                 Text("正在整理这一场的内容…")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Theme.sub)
+                    .font(.footnote)
+                    .foregroundStyle(DSColor.secondaryLabel)
             } else {
                 Text("将本场对话压缩为概要、要点、待办，数秒即可完成。")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Theme.sub)
-                Button {
+                    .font(.footnote)
+                    .foregroundStyle(DSColor.secondaryLabel)
+                Button("生成总结") {
                     Task { await makeSummary() }
-                } label: {
-                    Text("生成总结")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(Theme.accent)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 46)
-                        .background(Theme.accentSoft)
-                        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
                 }
-                .buttonStyle(TileButtonStyle())
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
                 .disabled((detail?.lines.count ?? 0) == 0)
             }
 
             if let e = error {
-                Text(e).font(.system(size: 12)).foregroundStyle(Theme.warn)
+                Text(e).font(.caption).foregroundStyle(DSColor.destructive)
             }
         }
-        .card()
     }
 
-    private var transcriptCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
+    private var transcriptSection: some View {
+        VStack(alignment: .leading, spacing: DSSpace.s) {
             HStack {
                 Text("对话内容")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Theme.ink)
+                    .font(DSFont.headline)
+                    .foregroundStyle(DSColor.label)
                 Spacer()
             }
+            .padding(.bottom, DSSpace.xxs)
 
             if loading {
                 ProgressView().frame(maxWidth: .infinity).padding(.vertical, 20)
             } else if let d = detail, d.lines.isEmpty {
                 Text("这一场没有识别到内容（可能没有声音）。")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Theme.sub)
+                    .font(.footnote)
+                    .foregroundStyle(DSColor.secondaryLabel)
             } else if let d = detail {
                 ForEach(d.lines) { line in
                     VStack(alignment: .leading, spacing: 4) {
                         if !line.trans.isEmpty {
                             Text(line.trans)
-                                .font(.system(size: 15))
-                                .foregroundStyle(Theme.ink)
+                                .font(.subheadline)
+                                .foregroundStyle(DSColor.label)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         if !line.source.isEmpty, line.source != line.trans {
                             Text(line.source)
-                                .font(.system(size: 12))
-                                .foregroundStyle(Theme.sub)
+                                .font(.caption)
+                                .foregroundStyle(DSColor.secondaryLabel)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
@@ -318,7 +296,6 @@ struct SessionDetailView: View {
                 }
             }
         }
-        .card()
     }
 
     private func load() async {
@@ -370,8 +347,8 @@ struct SubtitleExportView: View {
             VStack(spacing: 16) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("格式")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Theme.sub)
+                        .font(.footnote)
+                        .foregroundStyle(DSColor.secondaryLabel)
                     Picker("格式", selection: $format) {
                         ForEach(formats, id: \.0) { Text($0.1).tag($0.0) }
                     }
@@ -381,8 +358,8 @@ struct SubtitleExportView: View {
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text("内容")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Theme.sub)
+                        .font(.footnote)
+                        .foregroundStyle(DSColor.secondaryLabel)
                     Picker("内容", selection: $content) {
                         ForEach(contents, id: \.0) { Text($0.1).tag($0.0) }
                     }
@@ -391,24 +368,21 @@ struct SubtitleExportView: View {
                 .card(padding: 14)
 
                 Text("共 \(lines.count) 句 · 时长 \(session.durationText) · 文件名 \(fileName)")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.faint)
+                    .font(.caption)
+                    .foregroundStyle(DSColor.tertiaryLabel)
                     .multilineTextAlignment(.center)
 
                 if let url = fileURL {
                     ShareLink(item: url) {
-                        Text("保存 / 分享")
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(.white)
+                        Label("保存 / 分享", systemImage: "square.and.arrow.up")
                             .frame(maxWidth: .infinity)
-                            .frame(height: 54)
-                            .background(Theme.accent)
-                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
                 } else {
                     Text("没有可导出的内容")
-                        .font(.system(size: 14))
-                        .foregroundStyle(Theme.sub)
+                        .font(.subheadline)
+                        .foregroundStyle(DSColor.secondaryLabel)
                 }
             }
             .padding(.horizontal, 16)
@@ -422,7 +396,7 @@ struct SubtitleExportView: View {
 
             Spacer(minLength: 0)
         }
-        .background(.regularMaterial)
+        .background(DSColor.groupedBackground)
         .onPreferenceChange(ExportSheetHeight.self) { h in
             guard h > 40 else { return }
             // 内容 + 自己这条标题栏 + 底部安全区，就是面板该有的高度。
@@ -442,8 +416,8 @@ struct SubtitleExportView: View {
     /// 也不放「完成」按钮：面板高度就是内容高度，选完直接下滑走人。
     private var header: some View {
         Text("导出字幕")
-            .font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(Theme.ink)
+            .font(DSFont.headline)
+            .foregroundStyle(DSColor.label)
             .frame(maxWidth: .infinity)
             .frame(height: 40)
     }
