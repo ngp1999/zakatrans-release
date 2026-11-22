@@ -67,12 +67,11 @@ struct MainView: View {
 
     @State private var mode: Mode = .subtitle
     @State private var showProfile = false
-    @Namespace private var segAnim
     @Environment(\.horizontalSizeClass) private var hSize
 
     var body: some View {
         ZStack {
-            Theme.bg.ignoresSafeArea()
+            AmbientBackground()
 
             VStack(spacing: 0) {
                 header
@@ -88,11 +87,12 @@ struct MainView: View {
         .sheet(isPresented: Binding(get: { showProfile && hSize != .regular },
                                     set: { showProfile = $0 })) {
             NavigationStack { ProfileView() }
+                .sheetChrome(radius: 30)
         }
         .fullScreenCover(isPresented: Binding(get: { showProfile && hSize == .regular },
                                               set: { showProfile = $0 })) {
             NavigationStack { ProfileView() }
-                .background(Theme.bg)
+                .screenBackground()
         }
         // 画中画的锚点必须挂在整个 App 的最外层，而不是某个页面里：
         // 锚点一离开窗口，系统就会把画中画收掉——切模式、进后台都属于这种情况。
@@ -109,16 +109,19 @@ struct MainView: View {
 
     // MARK: - 顶部
 
+    /// 悬浮玻璃条：品牌在左、头像在右，整条浮在环境底上。
+    /// 以前是一行平铺在页面上，跟下面的内容贴在一起，没有「浮起来」的层次。
     private var header: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 11) {
             Image("Logo")
                 .resizable()
                 .scaledToFill()
-                .frame(width: 26, height: 26)
-                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .frame(width: 28, height: 28)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .shadow(color: Theme.accent.opacity(0.28), radius: 7, x: 0, y: 3)
 
             Text("语幕")
-                .font(.system(size: 19, weight: .bold))
+                .font(.system(size: 18, weight: .bold))
                 .tracking(2)
                 .foregroundStyle(Theme.ink)
 
@@ -126,57 +129,36 @@ struct MainView: View {
 
             // 右上角只留头像：点一下进「我的」，名字在「我的」页里看/改
             Button {
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                Haptics.tap()
                 showProfile = true
             } label: {
-                AvatarView(size: 32)
+                AvatarView(size: 34)
                     .overlay(
-                        Circle().strokeBorder(Theme.hairline, lineWidth: 0.8)
+                        Circle().strokeBorder(Color.white.opacity(0.55), lineWidth: 1)
                     )
+                    .shadow(color: Color.black.opacity(0.14), radius: 6, x: 0, y: 2)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 4)
-        .padding(.bottom, 14)
+        .padding(.horizontal, 14)
+        .frame(height: 56)
+        .glassSurface(radius: 28, material: .ultraThinMaterial)
+        .padding(.horizontal, 16)
+        .padding(.top, 2)
+        .padding(.bottom, 12)
     }
 
     // MARK: - 模式切换
 
-    /// 两个模式各占一半、居中：整行等分，切换时下划线跟着走。
+    /// 系统观感的分段控件：材质轨道上浮一块滑块，切换时滑过去。
+    /// 原来是「文字 + 下划线」，那是 Android 的 Tab 语言，不是 iOS 的。
     private var segment: some View {
-        HStack(spacing: 0) {
-            ForEach(Mode.allCases) { m in
-                Button {
-                    guard mode != m else { return }
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    withAnimation(.easeOut(duration: 0.22)) { mode = m }
-                } label: {
-                    VStack(spacing: 7) {
-                        Text(m.rawValue)
-                            .font(.system(size: 17, weight: mode == m ? .semibold : .regular))
-                            .foregroundStyle(mode == m ? Theme.ink : Theme.sub)
-                            .frame(maxWidth: .infinity)
-                        ZStack {
-                            Capsule().fill(Color.clear).frame(height: 2)
-                            if mode == m {
-                                Capsule()
-                                    .fill(Theme.accent)
-                                    .frame(height: 2)
-                                    .matchedGeometryEffect(id: "seg", in: segAnim)
-                            }
-                        }
-                        .frame(width: 56)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.horizontal, 20)
-        .padding(.bottom, 6)
+        GlassSegmented(items: Mode.allCases.map { ($0, $0.rawValue) },
+                       selection: $mode,
+                       height: 44)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 12)
     }
 
     // MARK: - 内容
