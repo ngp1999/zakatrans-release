@@ -11,6 +11,17 @@ final class Cloud: ObservableObject {
     static let shared = Cloud()
 
     private init() {
+        // 卸载重装：钥匙串里的东西还在、本机偏好被清空。
+        // 这种状态下不能拿旧 token 直接进主界面——那等于没登录就进去了，
+        // 所以在本地偏好没了的时候把账号态一起清掉，强制回登录页。
+        if (Keychain.get("zt_device_marker") ?? "").isEmpty {
+            Keychain.set("1", for: "zt_device_marker")
+            UserDefaults.standard.set(true, forKey: "zt_installed")
+        } else if !UserDefaults.standard.bool(forKey: "zt_installed") {
+            Keychain.set("", for: "account_token")
+            Keychain.set("", for: "account_id")
+            UserDefaults.standard.set(true, forKey: "zt_installed")
+        }
         // 冷启动第一帧就把登录态认下来：本地有 token 就直接进主界面，
         // 不再先显示一个转圈的检查页等异步结果。
         loggedIn = !(Keychain.get("account_token") ?? "").isEmpty
@@ -23,6 +34,8 @@ final class Cloud: ObservableObject {
     @Published private(set) var balanceCredits: Double = 0
     @Published private(set) var todayUsedCredits: Double = 0
     @Published private(set) var loggedIn = false
+    /// 登录态核验完成：没核完之前界面停在启动页，绝不先放人进主界面
+    @Published private(set) var ready = false
     @Published private(set) var lastError: String?
 
     @Published private(set) var profile: Profile?
@@ -54,22 +67,36 @@ final class Cloud: ObservableObject {
     }
 
     private(set) var accountID: String = Keychain.get("account_id") ?? ""
+    /// 本机头像补传只试一次：上传成功但服务端没存下来的话，
+    /// 这里不拦就会 refresh → upload → refresh 无限转，界面看起来就是卡死。
+    private var avatarUploadTried = false
 
     var hasAccount: Bool { !token.isEmpty }
 
     // MARK: - 启动
 
-    /// 已登录就直接刷新；没登录就停在登录页，不再偷偷用设备号建号。
+    /// 启动时核一次登录态：
+    ///   · 本地没有 token → 直接判定未登录，停在登录页；
+    ///   · 有 token → 先向服务端核一次。401 立刻掉线回登录页（token 被吊销、账号已删都能兜住）；
+    ///     只是网络不通就不算掉线，按已登录放行，不能把人挡在门外。
+    /// 核验最多等 5 秒，超时先放行，余额/资料在后面补。
     func bootstrap() async {
         guard !token.isEmpty else {
             loggedIn = false
+            ready = true
             return
         }
-        // 冷启动不等网络：本地有 token 就先认成已登录，界面立刻出来，
-        // 余额/资料在后面补。之前是等 /v1/me 回来才放行，弱网下要干等好几秒。
-        loggedIn = true
-        // 余额/资料在后面补，不挡界面
-        Task { _ = await self.refresh() }
+        do {
+            _ = try await request(path: "/v1/me", timeout: 5)
+            loggedIn = true
+        } catch Cloud.CloudError.unauthorized {
+            loggedIn = false
+        } catch {
+            // 弱网 / 服务端临时故障：本地有 token 就先进去，后续请求到了再判断
+            loggedIn = true
+        }
+        ready = true
+        if loggedIn { Task { _ = await self.refresh() } }
     }
 
     // MARK: - Sign in with Apple
@@ -142,11 +169,12 @@ final class Cloud: ObservableObject {
                     if let b64 = p["avatar"] as? String, !b64.isEmpty,
                        AvatarStore.save(base64: b64) {
                         DispatchQueue.main.async { AppState.shared.avatarImage = AvatarStore.load() }
-                    } else if let local = AvatarStore.base64(), !local.isEmpty {
+                    } else if !avatarUploadTried, let local = AvatarStore.base64(), !local.isEmpty {
                         // 本机有头像、服务端还是空的（换了账号、上次上传没成功、
                         // 或者是老版本只存在本机的头像）：补传一次，让账号上也有。
                         // 以前只做「服务端有就覆盖本机」，本机这张永远上不去，
                         // 换台设备登录就变回灰头像。
+                        avatarUploadTried = true
                         Task { [weak self] in
                             guard let self else { return }
                             if await self.uploadAvatar(local) {
@@ -421,27 +449,32 @@ final class Cloud: ObservableObject {
 
     enum CloudError: LocalizedError {
         case badResponse
+        /// 登录态失效（token 过期 / 被吊销 / 账号已删除）
+        case unauthorized
         case server(String)
         var errorDescription: String? {
             switch self {
             case .badResponse: return "服务返回异常"
+            case .unauthorized: return "登录已失效，请重新登录"
             case .server(let m): return m
             }
         }
     }
 
-    private func request(path: String, query: String? = nil, body: [String: Any]? = nil, method: String? = nil) async throws -> Any {
-        try await rawRequest(path: path, query: query, body: body, auth: true, method: method)
+    private func request(path: String, query: String? = nil, body: [String: Any]? = nil,
+                         method: String? = nil, timeout: TimeInterval = 20) async throws -> Any {
+        try await rawRequest(path: path, query: query, body: body, auth: true, method: method, timeout: timeout)
     }
 
-    private func rawRequest(path: String, query: String? = nil, body: [String: Any]?, auth: Bool, method: String? = nil) async throws -> Any {
+    private func rawRequest(path: String, query: String? = nil, body: [String: Any]?, auth: Bool,
+                            method: String? = nil, timeout: TimeInterval = 20) async throws -> Any {
         var full = Self.baseURL + path
         if let q = query, !q.isEmpty { full += "?" + q }
         guard let url = URL(string: full) else { throw CloudError.badResponse }
         var req = URLRequest(url: url)
         let httpMethod = method ?? (body == nil ? "GET" : "POST")
         req.httpMethod = httpMethod
-        req.timeoutInterval = 20
+        req.timeoutInterval = timeout
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         var payload = Data()
@@ -469,6 +502,11 @@ final class Cloud: ObservableObject {
         let (data, resp) = try await URLSession.shared.data(for: req)
         guard let http = resp as? HTTPURLResponse else { throw CloudError.badResponse }
         let json = (try? JSONSerialization.jsonObject(with: data)) ?? [:]
+        if http.statusCode == 401 {
+            // 登录态失效：本地 token 立刻作废，界面回登录页
+            if auth { logout() }
+            throw CloudError.unauthorized
+        }
         if http.statusCode >= 400 {
             let msg = (json as? [String: Any])?["message"] as? String ?? "请求失败（\(http.statusCode)）"
             throw CloudError.server(msg)
