@@ -798,15 +798,11 @@ static CGFloat ZKFitSize(NSString *text, UIFont *font, CGFloat width, CGFloat fl
     }
     _slots = MAX(1, n);
     _slotH = MAX(10.0, (_h - _inset * 2 - (_slots - 1) * _gap) / (CGFloat)_slots);
-    // 双语一格要站「一行译文 + 一行原文」。
-    // 格高不够就把字号压下来（不然原文那行会溢到下一格）；格高有富余就往上抬，
-    // 抬到刚好填满——以前只压不抬，中窗一格 110pt 里只用了 85pt，
-    // 每格上下各空一条，字看着又小、整块又挤。行距是随字号一起涨的。
+    // 双语一格要站「一行译文 + 一行原文」：格高不够时先把字号压下来，
+    // 不然原文那行会溢出到下一格里（大窗站 5 行时最容易撞上）。
     if ([self twoRows]) {
-        CGFloat avail = MAX(12.0, _slotH - 6.0);
-        CGFloat fit = avail / 2.5;   // 两行行高 + 一点余量，别顶到格子边
-        if (fit < _font) _font = MAX(12.0, fit);
-        else _font = MIN(74.0, fit);
+        CGFloat maxFont = MAX(12.0, (_slotH - 6.0) / 2.0);
+        if (_font > maxFont) _font = maxFont;
     }
     _content.frame = CGRectMake(0, 0, _w, _h);
 }
