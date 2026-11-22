@@ -49,8 +49,7 @@ struct UsageDetailView: View {
                                     }
                                 }
                             }
-                            .background(Theme.card)
-                            .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+                            .glassSurface(radius: Theme.radius, material: .thinMaterial, elevated: false)
                         }
                     }
                     .padding(.horizontal, 16)
@@ -59,7 +58,8 @@ struct UsageDetailView: View {
                 }
             }
         }
-        .background(Theme.bg)
+        .screenBackground()
+        .glassNavigationBar()
         .navigationTitle("使用明细")
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await load() }
