@@ -8,14 +8,11 @@ struct RootView: View {
     var body: some View {
         ZStack {
             // 登录态没核完之前谁都不放进去：启动页挡在最上面。
-            // 核完之后只有两条路——已登录进主界面，没登录（或 token 失效）留在登录页。
             if cloud.ready {
                 if cloud.loggedIn {
                     MainView()
-                        .transition(.opacity)
                 } else {
                     LoginView()
-                        .transition(.opacity)
                 }
             }
 
@@ -25,16 +22,13 @@ struct RootView: View {
                     .zIndex(10)
             }
         }
-        .animation(.easeInOut(duration: 0.25), value: cloud.loggedIn)
-        .animation(.easeInOut(duration: 0.2), value: cloud.ready)
+        .animation(DSMotion.standard, value: cloud.loggedIn)
+        .animation(DSMotion.standard, value: cloud.ready)
         .task {
-            // 冷启动：先向服务端核一次登录态（最多 5 秒），核完才决定进哪一边。
             await cloud.bootstrap()
-            // 启动图只做一次很短的过渡，不做长时间停留
             try? await Task.sleep(nanoseconds: 120_000_000)
-            withAnimation(.easeOut(duration: 0.22)) { splash = false }
+            withAnimation(DSMotion.standard) { splash = false }
 
-            // 下面这些都在界面出来之后才跑，谁也不挡启动
             Task {
                 if cloud.loggedIn {
                     await AppState.shared.syncPrefsFromCloud()
@@ -46,56 +40,48 @@ struct RootView: View {
     }
 }
 
-/// 主界面。
+/// 主界面：系统 TabView。
 ///
-/// 只有两个功能（字幕翻译、同声传译），再给它们套一个系统 TabBar 就太笨重了：
-/// 底部一整条黑/白栏，占掉几十 pt，还只放两个图标。
-/// 这一版改成「一个工作台」：
-///   · 顶部一行：品牌 + 头像（点头像进「我的」，不再占一个 Tab）
-///   · 下面两个模式用一条细下划线切换，切换时内容淡入淡出
-///   · 中间整块交给当前功能，底部只留一个主操作
-/// 三个入口变成两个模式 + 一个抽屉，屏效比原来高，也更像专业工具。
+/// 上一版是自绘的「悬浮玻璃头栏 + 分段控件」，那是把 Android / 网页的导航习惯搬到了 iOS 上。
+/// iOS 原生 App 的做法就是系统 TabBar：三个平级入口、系统图标、系统选中态、
+/// 系统自动处理安全区、动态字体、VoiceOver、深浅色。
+///
+/// 页面编号固定（.subtitle 是启动默认页），切到别的 Tab 再回来，状态由各页面自己保留。
 struct MainView: View {
-    @ObservedObject private var app = AppState.shared
-    @ObservedObject private var cloud = Cloud.shared
-
-    enum Mode: String, CaseIterable, Identifiable {
-        case subtitle = "实时字幕"
-        case interpreter = "同声传译"
-        var id: String { rawValue }
+    enum Tab: Hashable {
+        case subtitle
+        case interpreter
+        case me
     }
 
-    @State private var mode: Mode = .subtitle
-    @State private var showProfile = false
-    @Environment(\.horizontalSizeClass) private var hSize
+    @State private var tab: Tab = .subtitle
 
     var body: some View {
-        ZStack {
-            AmbientBackground()
-
-            VStack(spacing: 0) {
-                header
-                segment
-                content
+        TabView(selection: $tab) {
+            NavigationStack {
+                HomeView()
+                    .navigationTitle("实时字幕")
+                    .navigationBarTitleDisplayMode(.inline)
             }
-        }
-        // 「我的」的呈现方式按设备分：
-        //   iPhone 用 sheet（下拉收起，最自然）；
-        //   iPad 用全屏覆盖——iPad 上 sheet 是一个浮起来的表单页，
-        //   在里面再做导航推入会把布局顶进死循环（点「我的积分」「对话记录」直接卡死，
-        //   点什么都没反应）。全屏覆盖里配 NavigationStack 是稳的。
-        .sheet(isPresented: Binding(get: { showProfile && hSize != .regular },
-                                    set: { showProfile = $0 })) {
-            NavigationStack { ProfileView() }
-                .sheetChrome(radius: 30)
-        }
-        .fullScreenCover(isPresented: Binding(get: { showProfile && hSize == .regular },
-                                              set: { showProfile = $0 })) {
-            NavigationStack { ProfileView() }
-                .screenBackground()
+            .tabItem { Label("实时字幕", systemImage: "captions.bubble") }
+            .tag(Tab.subtitle)
+
+            NavigationStack {
+                InterpreterView()
+                    .navigationTitle("同声传译")
+                    .navigationBarTitleDisplayMode(.inline)
+            }
+            .tabItem { Label("同声传译", systemImage: "waveform") }
+            .tag(Tab.interpreter)
+
+            NavigationStack {
+                ProfileView()
+            }
+            .tabItem { Label("我的", systemImage: "person.crop.circle") }
+            .tag(Tab.me)
         }
         // 画中画的锚点必须挂在整个 App 的最外层，而不是某个页面里：
-        // 锚点一离开窗口，系统就会把画中画收掉——切模式、进后台都属于这种情况。
+        // 锚点一离开窗口，系统就会把画中画收掉——切 Tab、进后台都属于这种情况。
         // 系统录屏面板也放这里，首页的按钮只是"借"它的点击。
         .overlay(
             ZStack {
@@ -105,75 +91,5 @@ struct MainView: View {
             .opacity(0.01)
             .allowsHitTesting(false)
         )
-    }
-
-    // MARK: - 顶部
-
-    /// 悬浮玻璃条：品牌在左、头像在右，整条浮在环境底上。
-    /// 以前是一行平铺在页面上，跟下面的内容贴在一起，没有「浮起来」的层次。
-    private var header: some View {
-        HStack(spacing: 11) {
-            Image("Logo")
-                .resizable()
-                .scaledToFill()
-                .frame(width: 28, height: 28)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .shadow(color: Theme.accent.opacity(0.28), radius: 7, x: 0, y: 3)
-
-            Text("语幕")
-                .font(.system(size: 18, weight: .bold))
-                .tracking(2)
-                .foregroundStyle(Theme.ink)
-
-            Spacer(minLength: 8)
-
-            // 右上角只留头像：点一下进「我的」，名字在「我的」页里看/改
-            Button {
-                Haptics.tap()
-                showProfile = true
-            } label: {
-                AvatarView(size: 34)
-                    .overlay(
-                        Circle().strokeBorder(Color.white.opacity(0.55), lineWidth: 1)
-                    )
-                    .shadow(color: Color.black.opacity(0.14), radius: 6, x: 0, y: 2)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 14)
-        .frame(height: 56)
-        .glassSurface(radius: 28, material: .ultraThinMaterial)
-        .padding(.horizontal, 16)
-        .padding(.top, 2)
-        .padding(.bottom, 12)
-    }
-
-    // MARK: - 模式切换
-
-    /// 系统观感的分段控件：材质轨道上浮一块滑块，切换时滑过去。
-    /// 原来是「文字 + 下划线」，那是 Android 的 Tab 语言，不是 iOS 的。
-    private var segment: some View {
-        GlassSegmented(items: Mode.allCases.map { ($0, $0.rawValue) },
-                       selection: $mode,
-                       height: 44)
-            .padding(.horizontal, 20)
-            .padding(.bottom, 12)
-    }
-
-    // MARK: - 内容
-
-    @ViewBuilder
-    private var content: some View {
-        Group {
-            switch mode {
-            case .subtitle:
-                HomeView()
-            case .interpreter:
-                InterpreterView()
-            }
-        }
-        .transition(.opacity)
-        .animation(.easeOut(duration: 0.18), value: mode)
     }
 }
