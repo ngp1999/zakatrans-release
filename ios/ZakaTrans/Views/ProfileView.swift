@@ -32,7 +32,8 @@ struct ProfileView: View {
             .padding(.top, 10)
             .padding(.bottom, 24)
         }
-        .background(Theme.bg)
+        .screenBackground()
+        .glassNavigationBar()
         .navigationTitle("我的")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -52,6 +53,7 @@ struct ProfileView: View {
         .task { if cloud.profile == nil { await cloud.refresh() } }
         .sheet(isPresented: $showEdit) {
             NavigationStack { AccountEditView() }
+                .sheetChrome(radius: 30)
         }
         .alert("确认退出登录？", isPresented: $showLogout) {
             Button("取消", role: .cancel) {}
@@ -70,6 +72,14 @@ struct ProfileView: View {
         } label: {
             HStack(spacing: 14) {
                 AvatarView(size: 58)
+                    .overlay(
+                        Circle().strokeBorder(
+                            LinearGradient(colors: [Theme.accent.opacity(0.85), Theme.accent.opacity(0.25)],
+                                           startPoint: .topLeading, endPoint: .bottomTrailing),
+                            lineWidth: 1.5
+                        )
+                    )
+                    .shadow(color: Theme.accent.opacity(0.25), radius: 10, x: 0, y: 4)
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(cloud.profile?.displayName ?? "语幕用户")
@@ -122,8 +132,7 @@ struct ProfileView: View {
             }
             .padding(.horizontal, 16)
             .frame(height: 54)
-            .background(Theme.card)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+            .glassSurface(radius: Theme.radius)
         }
         .buttonStyle(RowButtonStyle())
     }
@@ -165,8 +174,7 @@ struct ProfileView: View {
             }
             .buttonStyle(RowButtonStyle())
         }
-        .background(Theme.card)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+        .glassSurface(radius: Theme.radius)
     }
 
     private var divider: some View {
