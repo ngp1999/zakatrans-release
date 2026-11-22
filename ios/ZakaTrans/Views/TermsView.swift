@@ -23,7 +23,7 @@ struct TermsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 Text(kind.title)
-                    .font(.system(size: 24, weight: .bold))
+                    .font(.title2.weight(.bold))
                     .foregroundStyle(DSColor.label)
                 Text("更新日期：2026 年 11 月 21 日")
                     .font(.caption)
@@ -47,7 +47,7 @@ struct TermsView: View {
             .padding(.top, 10)
             .padding(.bottom, 32)
         }
-        .screenBackground()
+        .background(DSColor.background)
         .navigationBarTitleDisplayMode(.inline)
     }
 
