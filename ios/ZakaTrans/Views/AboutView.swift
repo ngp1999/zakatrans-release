@@ -29,7 +29,8 @@ struct AboutView: View {
             .padding(.top, 12)
             .padding(.bottom, 28)
         }
-        .background(Theme.bg)
+        .screenBackground()
+        .glassNavigationBar()
         .navigationTitle("关于语幕")
         .navigationBarTitleDisplayMode(.inline)
         .alert("确认注销账号？", isPresented: $showDelete) {
@@ -90,8 +91,7 @@ struct AboutView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 24)
-        .background(Theme.card)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+        .glassSurface(radius: Theme.radius, material: .regularMaterial)
     }
 
     // MARK: - 协议
@@ -106,8 +106,7 @@ struct AboutView: View {
             divider
             row(title: "应用权限说明", kind: .permissions)
         }
-        .background(Theme.card)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+        .glassSurface(radius: Theme.radius)
     }
 
     private var supportCard: some View {
@@ -166,8 +165,7 @@ struct AboutView: View {
             }
             .buttonStyle(RowButtonStyle())
         }
-        .background(Theme.card)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+        .glassSurface(radius: Theme.radius)
     }
 
     private var footer: some View {
