@@ -2,7 +2,7 @@ import SwiftUI
 import PhotosUI
 import UIKit
 
-/// 修改资料：头像和昵称在同一个面板里改。
+/// 修改资料：系统 Form。
 /// 头像和昵称都是点了就直接弹这里，不再在昵称旁边单独放一颗铅笔图标。
 struct AccountEditView: View {
     @ObservedObject private var cloud = Cloud.shared
@@ -16,72 +16,58 @@ struct AccountEditView: View {
     @State private var loaded = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                VStack(spacing: 26) {
+        Form {
+            Section {
+                HStack {
+                    Spacer()
                     PhotosPicker(selection: $picked, matching: .images, photoLibrary: .shared()) {
                         ZStack(alignment: .bottomTrailing) {
                             AvatarView(size: 92)
                             Image(systemName: "camera.fill")
-                                .font(.system(size: 11, weight: .bold))
+                                .font(.caption.weight(.bold))
                                 .foregroundStyle(.white)
                                 .frame(width: 28, height: 28)
-                                .background(Theme.accent, in: Circle())
-                                .overlay(Circle().strokeBorder(Theme.bg, lineWidth: 2.5))
+                                .background(DSColor.accentFill, in: Circle())
+                                .overlay(Circle().strokeBorder(DSColor.cell, lineWidth: 2.5))
                         }
                     }
                     .buttonStyle(.plain)
-                    .padding(.top, 18)
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("昵称")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(Theme.sub)
-                        TextField("请输入昵称", text: $name)
-                            .font(.system(size: 17))
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .submitLabel(.done)
-                            .padding(.horizontal, 14)
-                            .frame(height: 50)
-                            .glassSurface(radius: 12, material: .thinMaterial, elevated: false)
-                    }
-                    .padding(.horizontal, 20)
-
-                    if !error.isEmpty {
-                        Text(error)
-                            .font(.system(size: 13))
-                            .foregroundStyle(Theme.warn)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 20)
-                    }
+                    Spacer()
                 }
-                .padding(.bottom, 20)
+                .padding(.vertical, DSSpace.xs)
+                .listRowBackground(Color.clear)
             }
 
-            Button {
-                save()
-            } label: {
-                HStack(spacing: 8) {
-                    if saving { ProgressView().tint(.white).scaleEffect(0.85) }
-                    Text(saving ? "正在保存" : "保存")
-                        .font(.system(size: 17, weight: .semibold))
-                }
-                .frame(maxWidth: .infinity)
+            Section {
+                TextField("请输入昵称", text: $name)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(.done)
+            } header: {
+                Text("昵称")
             }
-            .buttonStyle(PrimaryButtonStyle(tint: Theme.accent))
-            .disabled(saving || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .padding(.horizontal, 20)
-            .padding(.bottom, 18)
+
+            if !error.isEmpty {
+                Section {
+                    Text(error)
+                        .font(.footnote)
+                        .foregroundStyle(DSColor.destructive)
+                }
+            }
         }
-        .screenBackground()
-        .glassNavigationBar()
         .navigationTitle("修改资料")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("取消") { dismiss() }
-                    .foregroundStyle(Theme.sub)
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                if saving {
+                    ProgressView()
+                } else {
+                    Button("保存") { save() }
+                        .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
             }
         }
         .onAppear {
