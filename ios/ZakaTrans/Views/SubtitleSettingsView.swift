@@ -24,6 +24,8 @@ struct SubtitleSettingsView: View {
     @State private var wideIndex = 0
     /// sheet 的高度：量完内容再定，避免系统给一档固定高度、底下留一截空白
     @State private var sheetH: CGFloat = 620
+    /// 预览槽当前占的高度：只增不减（见 previewSlot）
+    @State private var slotH: CGFloat = 0
     /// 面板真实可用的宽度。iPad 上弹出来是一张居中的卡片（不是整屏宽），
     /// 预览要是按 UIScreen 的宽算，就会比卡片还宽——右边被裁掉、字号也跟着算错。
     /// 所以宽度一律量出来用，不读屏幕。
@@ -219,9 +221,21 @@ struct SubtitleSettingsView: View {
             let font = max(13.0, min(64.0, f)) * k
             return (font, font * 0.68)
         }
-        let scale = max(0.45, min(2.10, sqrt((dim.width * dim.height) / (480.0 * 360.0))))
-        let zh = max(12.0, min(74.0, app.prefs.size * scale * 1.35)) * k
+        let zh = Self.slotFont(dim: dim, rows: app.prefs.pip == "M" ? 3 : 5,
+                               zhBase: app.prefs.size) * k
         return (zh, zh * 0.66)
+    }
+
+    /// 双语字号：跟画中画里的 recalcMetrics 是同一套算法（那边改了这里必须一起改）。
+    /// 一格要站「一行译文 + 一行原文」：站得下就抬到刚好填满，站不下就压到刚好放下。
+    static func slotFont(dim: CGSize, rows: Int, zhBase: CGFloat) -> CGFloat {
+        let scale = max(0.45, min(2.10, sqrt((dim.width * dim.height) / (480.0 * 360.0))))
+        let base = max(12.0, min(74.0, zhBase * scale * 1.35))
+        let inset = max(4.0, dim.height * 0.03)
+        let gap = max(2.0, dim.height * 0.012)
+        let slotH = max(10.0, (dim.height - inset * 2 - CGFloat(rows - 1) * gap) / CGFloat(rows))
+        let avail = max(12.0, slotH - 6.0)
+        return max(12.0, min(74.0, avail / 2.5))
     }
 
     // MARK: - 预览
@@ -238,7 +252,11 @@ struct SubtitleSettingsView: View {
             previewCard
         }
         .frame(maxWidth: .infinity)
-        .frame(height: m.h, alignment: .bottom)
+        // 槽高只往上长、不往回缩：从小窗切到大窗，卡片往上长、下面的设置项原地不动；
+        // 再切回小窗时也不缩，宁可上面留一点空，也不把用户正在看的那几行往下推。
+        .frame(height: max(slotH, m.h), alignment: .bottom)
+        .onAppear { if m.h > slotH { slotH = m.h } }
+        .onChange(of: m.h) { v in if v > slotH { withAnimation(DSMotion.quick) { slotH = v } } }
         .animation(.easeInOut(duration: 0.22), value: m.h)
     }
 
@@ -578,15 +596,11 @@ struct SubtitleSettingsView: View {
         return s.substring(with: NSRange(location: 0, length: min(to, n)))
     }
 
-    /// 上推档的字号：双语时真窗口会按格高把主字号压下来（一格要站一行译文 + 一行原文），
-    /// 不然大窗站 5 行时原文那行会溢出到下一格。预览必须压得一模一样，否则两边看着就不一样。
+    /// 上推档的字号：跟其它档一样取「一格站得下的最大字号」，
+    /// 已经在 previewFonts 里按格高算过，这里不再另外压一遍——
+    /// 再压一次就是用户说的「设置里看到的比真窗口小一号」。
     private func rollingFonts(_ m: (w: CGFloat, h: CGFloat, k: CGFloat)) -> (zh: CGFloat, src: CGFloat) {
-        let f = previewFonts(k: m.k)
-        guard app.prefs.mode == "bilingual" else { return f }
-        let slot = slotHeight(m)
-        let maxFont = max(12, (slot - 6) / 2)
-        if f.zh > maxFont { return (maxFont, maxFont * 0.66) }
-        return f
+        previewFonts(k: m.k)
     }
 
     /// 中档 / 大档 · 上推：一行一句，新句从底下进来，整列被它顶着往上一格。
