@@ -169,7 +169,7 @@ final class AppState: ObservableObject {
         // 碎片兜底：上游偶尔把句尾两三个词单独切一句吐出来（英文里 "than here" 这种），
         // 时间又刚好错过了 1.8 秒的粘连窗口，落下来就是记录里孤零零一行乱码。
         // 上一条还在 3 秒内、又没以句末标点收掉，就把它并回去，不再单独占一行。
-        if !src.isEmpty, hanCount(src) == 0, wordCount(src) <= 2, !endsSentence(src),
+        if !src.isEmpty, AppState.hanCount(src) == 0, AppState.wordCount(src) <= 2, !AppState.endsSentence(src),
            let last = lines.last, !last.source.isEmpty, last.source.count < 140,
            Date().timeIntervalSince(last.at) < 3.0 {
             let mergedSrc = AppState.trimEndPunct(AppState.join(last.source, src))
