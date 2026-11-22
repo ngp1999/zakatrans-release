@@ -23,11 +23,6 @@ struct HomeView: View {
             controls
         }
         .background(DSColor.background)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                CreditPill(credits: cloud.balanceCredits) { showCredit = true }
-            }
-        }
         .sheet(isPresented: $showCredit) {
             NavigationStack { CreditView() }
         }
@@ -66,6 +61,18 @@ struct HomeView: View {
     // MARK: - 字幕区
 
     private var subtitleArea: some View {
+        Group {
+            if app.preparing {
+                preparingState
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                transcriptScroll
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var transcriptScroll: some View {
         ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: DSSpace.l) {
@@ -95,7 +102,26 @@ struct HomeView: View {
                 withAnimation(DSMotion.quick) { proxy.scrollTo("bottom", anchor: .bottom) }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// 开启时的准备态：转圈放在正文中央（按钮上原来那个太不显眼），
+    /// 顺带一句必须留在前台，避免用户点了就去锁屏、回来发现没有字幕。
+    private var preparingState: some View {
+        VStack(spacing: DSSpace.m) {
+            ProgressView()
+                .controlSize(.large)
+            VStack(spacing: DSSpace.xxs) {
+                Text("正在准备实时字幕")
+                    .font(DSFont.headline)
+                    .foregroundStyle(DSColor.label)
+                Text("请保持 App 在前台，不要退出或锁屏，字幕会显示在下方。")
+                    .font(DSFont.subheadline)
+                    .foregroundStyle(DSColor.secondaryLabel)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, DSSpace.l)
     }
 
     /// 没开始时的引导：系统设置页那种竖排说明，不用卡片包起来
@@ -217,15 +243,10 @@ struct HomeView: View {
                     }
                 } label: {
                     HStack(spacing: DSSpace.xs) {
-                        if app.preparing {
-                            ProgressView()
-                                .progressViewStyle(.circular)
-                                .tint(.white)
-                        } else {
-                            Image(systemName: (app.running && !app.preparing) ? "stop.fill" : "play.fill")
-                                .font(.footnote.weight(.bold))
-                        }
-                        Text(app.preparing ? "正在加载" : (app.running ? "停止" : "开启实时字幕"))
+                        // 转圈挪到正文中央去了，按钮上只留图标和字，避免同一屏两个转圈
+                        Image(systemName: (app.running && !app.preparing) ? "stop.fill" : "play.fill")
+                            .font(.footnote.weight(.bold))
+                        Text(app.preparing ? "准备中" : (app.running ? "停止" : "开启实时字幕"))
                             .lineLimit(1)
                             .minimumScaleFactor(0.8)
                     }
