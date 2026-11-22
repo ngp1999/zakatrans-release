@@ -32,6 +32,10 @@ final class Purchases: ObservableObject {
         ("com.zakatrans.credits.5980", 598, 5980),
     ]
 
+    /// 页面上展示的档位：五档，从 120 到 2980。5980 仍在商品表里（已购用户/服务端校验
+    /// 都还要认它），只是不再摆到台面上——一屏五档已经够选，第六档只会让人犹豫。
+    static let shown: [(id: String, cny: Int, credits: Int)] = Array(fallback.prefix(5))
+
     @Published var products: [Product] = []
     @Published var busy = false
     @Published var message: String?
