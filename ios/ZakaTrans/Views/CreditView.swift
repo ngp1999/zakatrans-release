@@ -38,7 +38,8 @@ struct CreditView: View {
             .padding(.top, 8)
             .padding(.bottom, 28)
         }
-        .background(Theme.bg)
+        .screenBackground()
+        .glassNavigationBar()
         .navigationTitle("我的积分")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -109,8 +110,7 @@ struct CreditView: View {
         .padding(.horizontal, 18)
         .padding(.vertical, 20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.card)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+        .glassSurface(radius: Theme.radius, material: .regularMaterial)
     }
 
     // MARK: - 充值档位
@@ -163,12 +163,7 @@ struct CreditView: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)
-            .background(Theme.card)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous)
-                    .strokeBorder(Theme.hairline, lineWidth: 0.7)
-            )
+            .glassSurface(radius: Theme.radiusSmall, material: .thinMaterial, elevated: false)
             .opacity(ready ? 1 : 0.55)
         }
         .buttonStyle(TileButtonStyle())
@@ -289,13 +284,8 @@ struct CreditView: View {
             }
             .padding(20)
             .frame(maxWidth: 330)
-            .background(Theme.bg)
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(Theme.hairline, lineWidth: 0.7)
-            )
-            .shadow(color: .black.opacity(0.18), radius: 26, y: 10)
+            .glassSurface(radius: 24, material: .regularMaterial)
+            .shadow(color: .black.opacity(0.22), radius: 30, x: 0, y: 14)
             .padding(.horizontal, 32)
         }
         .transition(.opacity)
