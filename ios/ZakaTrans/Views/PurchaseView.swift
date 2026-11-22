@@ -61,7 +61,8 @@ struct PurchaseView: View {
                 .padding(.top, 10)
                 .padding(.bottom, 24)
             }
-            .background(Theme.bg)
+            .screenBackground()
+            .glassNavigationBar()
             .alert("购买前请确认", isPresented: Binding(
                 get: { pendingId != nil },
                 set: { if !$0 { pendingId = nil } }
@@ -148,8 +149,7 @@ struct PurchaseView: View {
             }
             .frame(maxWidth: .infinity)
             .frame(height: 104)
-            .background(Theme.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .glassSurface(radius: 16, material: .thinMaterial, elevated: false)
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .strokeBorder(ok && agreed ? Theme.accent.opacity(0.35) : Theme.hairline, lineWidth: 0.8)
