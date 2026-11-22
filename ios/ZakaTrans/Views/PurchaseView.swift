@@ -22,12 +22,12 @@ struct PurchaseView: View {
                 VStack(spacing: 16) {
                     HStack {
                         Text("当前余额")
-                            .font(.system(size: 14))
-                            .foregroundStyle(Theme.sub)
+                            .font(.subheadline)
+                            .foregroundStyle(DSColor.secondaryLabel)
                         Spacer()
                         Text("\(Format.credits(cloud.balanceCredits)) 积分")
                             .font(.system(size: 15, weight: .semibold).monospacedDigit())
-                            .foregroundStyle(Theme.ink)
+                            .foregroundStyle(DSColor.label)
                     }
                     .card(padding: 16)
 
@@ -41,14 +41,14 @@ struct PurchaseView: View {
 
                     if let hint {
                         Text(hint)
-                            .font(.system(size: 13))
-                            .foregroundStyle(Theme.warn)
+                            .font(.footnote)
+                            .foregroundStyle(DSColor.destructive)
                             .multilineTextAlignment(.center)
                     }
 
                     if let m = purch.message {
                         Text(m)
-                            .font(.system(size: 13))
+                            .font(.footnote)
                             .foregroundStyle(m.contains("失败") || m.contains("未通过") ? Theme.warn : Theme.accent)
                             .multilineTextAlignment(.center)
                     }
@@ -103,16 +103,16 @@ struct PurchaseView: View {
 
             HStack(spacing: 0) {
                 Text("我已阅读并同意")
-                    .font(.system(size: 14))
-                    .foregroundStyle(Theme.sub)
+                    .font(.subheadline)
+                    .foregroundStyle(DSColor.secondaryLabel)
                     .onTapGesture { agreed.toggle() }
 
                 NavigationLink {
                     TermsView(kind: .payment)
                 } label: {
                     Text("《语幕付费协议》")
-                        .font(.system(size: 14))
-                        .foregroundStyle(Theme.accent)
+                        .font(.subheadline)
+                        .foregroundStyle(DSColor.accent)
                 }
                 .buttonStyle(.plain)
             }
@@ -140,10 +140,10 @@ struct PurchaseView: View {
                     .font(.system(size: 23, weight: .bold).monospacedDigit())
                     .foregroundStyle(ok ? Theme.ink : Theme.sub)
                 Text("积分")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.sub)
+                    .font(.caption)
+                    .foregroundStyle(DSColor.secondaryLabel)
                 Text(purch.priceText(for: id))
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(ok ? Theme.accent : Theme.faint)
                     .padding(.top, 1)
             }
