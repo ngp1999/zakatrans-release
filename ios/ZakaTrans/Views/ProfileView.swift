@@ -2,6 +2,15 @@ import SwiftUI
 import PhotosUI
 import UIKit
 
+/// 「我的」页面里的几个去处。
+/// 用 value 型 NavigationLink + 一处 navigationDestination：目的页是按需创建的，
+/// 不会在列表 body 里给每一行都先造一个页面（旧写法在 iPad 上点开就卡死）。
+enum ProfileRoute: Hashable {
+    case credit
+    case history
+    case about
+}
+
 /// 「我的」：账号、积分、对话记录、关于。
 /// 翻译相关的设置都在首页按钮里，这一页只管和"我"有关的东西。
 struct ProfileView: View {
@@ -33,7 +42,14 @@ struct ProfileView: View {
                     .foregroundStyle(Theme.accent)
             }
         }
-        .task { await cloud.refresh() }
+        .navigationDestination(for: ProfileRoute.self) { r in
+            switch r {
+            case .credit:  CreditView()
+            case .history: HistoryView()
+            case .about:   AboutView()
+            }
+        }
+        .task { if cloud.profile == nil { await cloud.refresh() } }
         .sheet(isPresented: $showEdit) {
             NavigationStack { AccountEditView() }
         }
@@ -85,9 +101,7 @@ struct ProfileView: View {
     // MARK: - 积分
 
     private var creditRow: some View {
-        NavigationLink {
-            CreditView()
-        } label: {
+        NavigationLink(value: ProfileRoute.credit) {
             HStack(spacing: 10) {
                 // 积分图标：星形套圆环，上白下主题色——跟积分页那个是同一颗
                 Image(systemName: "star.circle.fill")
@@ -118,9 +132,7 @@ struct ProfileView: View {
 
     private var mainGroup: some View {
         VStack(spacing: 0) {
-            NavigationLink {
-                HistoryView()
-            } label: {
+            NavigationLink(value: ProfileRoute.history) {
                 rowContent(icon: "clock.arrow.circlepath", title: "对话记录",
                            tint: .orange, detail: "", chevron: true)
             }
@@ -128,9 +140,7 @@ struct ProfileView: View {
 
             divider
 
-            NavigationLink {
-                AboutView()
-            } label: {
+            NavigationLink(value: ProfileRoute.about) {
                 rowContent(icon: "info.circle.fill", title: "关于语幕",
                            tint: .gray, detail: "", chevron: true)
             }
