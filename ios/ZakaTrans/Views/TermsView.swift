@@ -24,19 +24,19 @@ struct TermsView: View {
             VStack(alignment: .leading, spacing: 14) {
                 Text(kind.title)
                     .font(.system(size: 24, weight: .bold))
-                    .foregroundStyle(Theme.ink)
+                    .foregroundStyle(DSColor.label)
                 Text("更新日期：2026 年 11 月 21 日")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.faint)
+                    .font(.caption)
+                    .foregroundStyle(DSColor.tertiaryLabel)
 
                 ForEach(Array(sections.enumerated()), id: \.offset) { _, s in
                     VStack(alignment: .leading, spacing: 6) {
                         Text(s.0)
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(Theme.ink)
+                            .font(DSFont.headline)
+                            .foregroundStyle(DSColor.label)
                         Text(s.1)
-                            .font(.system(size: 14))
-                            .foregroundStyle(Theme.sub)
+                            .font(.subheadline)
+                            .foregroundStyle(DSColor.secondaryLabel)
                             .lineSpacing(4)
                             .fixedSize(horizontal: false, vertical: true)
                     }
