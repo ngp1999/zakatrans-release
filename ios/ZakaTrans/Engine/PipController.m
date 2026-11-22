@@ -788,9 +788,9 @@ static CGFloat ZKFitSize(NSString *text, UIFont *font, CGFloat width, CGFloat fl
     _gap = MAX(2.0, _h * 0.012);
     NSInteger n;
     if ([self twoRows]) {
-        // 双语：行数跟预览一致（中窗 3 行、大窗 4 行），格子高多少由窗口分，
-        // 这样整列刚好铺满——以前按内容算行数，最后一行下面空、上面也空。
-        n = [gPipStyle isEqualToString:@"M"] ? 3 : 4;
+        // 双语：行数跟预览一致（中窗 3 行原文 + 3 行译文、大窗 5 行原文 + 5 行译文），
+        // 格子高多少由窗口分，这样整列刚好铺满——以前按内容算行数，最后一行下面空、上面也空。
+        n = [gPipStyle isEqualToString:@"M"] ? 3 : 5;
     } else {
         // 只显一种语言：字大，行数按高度放宽
         n = (NSInteger)floor((_h - _inset * 2) / MAX(1.0, _font * 1.5));
@@ -798,6 +798,12 @@ static CGFloat ZKFitSize(NSString *text, UIFont *font, CGFloat width, CGFloat fl
     }
     _slots = MAX(1, n);
     _slotH = MAX(10.0, (_h - _inset * 2 - (_slots - 1) * _gap) / (CGFloat)_slots);
+    // 双语一格要站「一行译文 + 一行原文」：格高不够时先把字号压下来，
+    // 不然原文那行会溢出到下一格里（大窗站 5 行时最容易撞上）。
+    if ([self twoRows]) {
+        CGFloat maxFont = MAX(12.0, (_slotH - 6.0) / 2.0);
+        if (_font > maxFont) _font = maxFont;
+    }
     _content.frame = CGRectMake(0, 0, _w, _h);
 }
 
@@ -1113,6 +1119,8 @@ static CGFloat ZKFitSize(NSString *text, UIFont *font, CGFloat width, CGFloat fl
 - (void)step:(CADisplayLink *)link;
 - (CGFloat)heightOf:(NSString *)t font:(UIFont *)f width:(CGFloat)w;
 - (NSString *)visibleOf:(NSMutableString *)buf pending:(CGFloat)pending;
+- (void)aimZh:(CGFloat)nt lineH:(CGFloat)lineH snap:(BOOL)snap;
+- (void)aimSrc:(CGFloat)nt lineH:(CGFloat)lineH snap:(BOOL)snap;
 - (void)dropHiddenPending;
 @end
 
@@ -1125,6 +1133,12 @@ static CGFloat ZKFitSize(NSString *text, UIFont *font, CGFloat width, CGFloat fl
     CGFloat _srcAcc, _zhAcc;                         // 小数累计：60Hz 下一帧不足一个字也不卡住
     CGFloat _srcOffset, _zhOffset;                   // 已经往上滚了多少点（整条线，按行推进）
     CGFloat _srcTarget, _zhTarget;
+    // 整行上推：用一段有时长的缓动跑完，而不是每帧指数逼近。
+    // 以前那种逼近在打字过程中几乎看不出来——字一点点长、位置一点点挪，
+    // 用户说的是「满了之后要有一个往上移动的动画」，要的是看得见的那一下。
+    BOOL _zhRolling, _srcRolling;
+    CFTimeInterval _zhRollT0, _srcRollT0;
+    CGFloat _zhRollFrom, _srcRollFrom, _zhRollTo, _srcRollTo;
     CADisplayLink *_link;
     CFTimeInterval _lastTick;
     CGFloat _w, _h, _font, _inset, _midGap, _zhBoxH, _srcBoxH;
@@ -1133,6 +1147,7 @@ static CGFloat ZKFitSize(NSString *text, UIFont *font, CGFloat width, CGFloat fl
 
 static const CGFloat kZKZhTypeRate  = 22.0;   // 译文：22 字/秒
 static const CGFloat kZKSrcTypeRate = 52.0;   // 原文：52 字符/秒
+static const CFTimeInterval kZKRowRollDuration = 0.42;   // 逐字档满一行后整块上推一行的时长
 
 /// 句子往整段后面接：英文之间留一个空格，中文直接接上，同一句重复推到就不再加一遍。
 static void ZKSegAppend(NSMutableString *buf, NSString *s) {
@@ -1278,12 +1293,13 @@ static void ZKSegAppend(NSMutableString *buf, NSString *s) {
         CGFloat h = [self heightOf:vis font:_zhLabel.font width:bw];
         CGFloat lineH = MAX(1.0, ceil(_zhLabel.font.lineHeight));
         NSInteger lines = MAX(1, (NSInteger)floor((bh + 0.5) / lineH));
-        _zhTarget = MAX(0.0, h - lines * lineH);
-        if (snap || fabs(_zhOffset - _zhTarget) > lineH * 6) _zhOffset = _zhTarget;
+        CGFloat nt = MAX(0.0, h - lines * lineH);
+        [self aimZh:nt lineH:lineH snap:snap];
         if (![_zhLabel.text isEqualToString:vis]) _zhLabel.text = vis;
-        // 块高一般不是行高的整数倍：滚起来之后把这点余量补在底下，
-        // 最新那一行正好贴着块底，中间不会留一条缝。
-        CGFloat pad = (_zhOffset > 0.5) ? MAX(0.0, bh - lines * lineH) : 0;
+        // 块高一般不是行高的整数倍：这点余量固定补在底下，最新那一行正好贴着块底。
+        // 注意必须**恒定**——以前是「滚起来之后才补」，那一补让整块先往下一沉，
+        // 上推那一下正好被抵消，看着就像没动。
+        CGFloat pad = MAX(0.0, bh - lines * lineH);
         _zhLabel.frame = CGRectMake(0, -_zhOffset + pad, bw, MAX(h, lineH));
     }
     if (!_srcBox.hidden) {
@@ -1293,18 +1309,64 @@ static void ZKSegAppend(NSMutableString *buf, NSString *s) {
         CGFloat h = [self heightOf:vis font:_srcLabel.font width:bw];
         CGFloat lineH = MAX(1.0, ceil(_srcLabel.font.lineHeight));
         NSInteger lines = MAX(1, (NSInteger)floor((bh + 0.5) / lineH));
-        _srcTarget = MAX(0.0, h - lines * lineH);
-        if (snap || fabs(_srcOffset - _srcTarget) > lineH * 6) _srcOffset = _srcTarget;
+        CGFloat nt = MAX(0.0, h - lines * lineH);
+        [self aimSrc:nt lineH:lineH snap:snap];
         if (![_srcLabel.text isEqualToString:vis]) _srcLabel.text = vis;
-        CGFloat padS = (_srcOffset > 0.5) ? MAX(0.0, bh - lines * lineH) : 0;
+        CGFloat padS = MAX(0.0, bh - lines * lineH);
         _srcLabel.frame = CGRectMake(0, -_srcOffset + padS, bw, MAX(h, lineH));
     }
+}
+
+/// 目标位置变了就开一段「整行上推」：时长固定 0.42 秒、ease-out，
+/// 走完正好一行，顶上那一行被裁出画面。
+/// snap（换档、补译文这种内容整体变了的场合）或一次跨太多行时直接对位，不要滑。
+- (void)aimZh:(CGFloat)nt lineH:(CGFloat)lineH snap:(BOOL)snap {
+    if (snap) {
+        _zhTarget = nt;
+        _zhOffset = nt;
+        _zhRolling = NO;
+        return;
+    }
+    if (fabs(nt - _zhTarget) < 0.5) return;          // 还在这几行里，位置不用动
+    _zhTarget = nt;
+    if (fabs(nt - _zhOffset) > lineH * 6.0) {        // 跨太多行：直接对位
+        _zhOffset = nt;
+        _zhRolling = NO;
+        return;
+    }
+    if (_zhRolling) return;                          // 正在滚：滚到目标再接着算
+    _zhRolling = YES;
+    _zhRollFrom = _zhOffset;
+    _zhRollTo = nt;
+    _zhRollT0 = CACurrentMediaTime();
+}
+
+- (void)aimSrc:(CGFloat)nt lineH:(CGFloat)lineH snap:(BOOL)snap {
+    if (snap) {
+        _srcTarget = nt;
+        _srcOffset = nt;
+        _srcRolling = NO;
+        return;
+    }
+    if (fabs(nt - _srcTarget) < 0.5) return;
+    _srcTarget = nt;
+    if (fabs(nt - _srcOffset) > lineH * 6.0) {
+        _srcOffset = nt;
+        _srcRolling = NO;
+        return;
+    }
+    if (_srcRolling) return;
+    _srcRolling = YES;
+    _srcRollFrom = _srcOffset;
+    _srcRollTo = nt;
+    _srcRollT0 = CACurrentMediaTime();
 }
 
 - (void)ensureTyping {
     if (_link) return;
     BOOL pending = (_zhPending > 0.5 && !_zhBox.hidden) || (_srcPending > 0.5 && !_srcBox.hidden);
-    BOOL moving = fabs(_zhOffset - _zhTarget) > 0.4 || fabs(_srcOffset - _srcTarget) > 0.4;
+    BOOL moving = _zhRolling || _srcRolling
+               || fabs(_zhOffset - _zhTarget) > 0.4 || fabs(_srcOffset - _srcTarget) > 0.4;
     if (!pending && !moving) return;
     _lastTick = CACurrentMediaTime();
     _link = [CADisplayLink displayLinkWithTarget:self selector:@selector(step:)];
@@ -1354,14 +1416,26 @@ static void ZKSegAppend(NSMutableString *buf, NSString *s) {
     // 满行之后整块往上推一行：目标位置是按行算好的，这里每帧追一点，
     // 追的过程就是「由下往上滚」那一行。帧率掉了也只是步子变大，不会跳。
     CGFloat k = MIN(1.0, dt * 18.0);
-    if (fabs(_zhOffset - _zhTarget) > 0.4) {
+    if (_zhRolling) {
+        CGFloat p = MIN(1.0, (CGFloat)(now - _zhRollT0) / kZKRowRollDuration);
+        CGFloat e = 1.0 - pow(1.0 - p, 3.0);        // ease-out：起步快、落位轻
+        _zhOffset = _zhRollFrom + (_zhRollTo - _zhRollFrom) * e;
+        if (p >= 1.0) { _zhOffset = _zhRollTo; _zhRolling = NO; }
+        changed = YES;
+    } else if (fabs(_zhOffset - _zhTarget) > 0.4) {
         _zhOffset += (_zhTarget - _zhOffset) * k;
         changed = YES;
     } else if (_zhOffset != _zhTarget) {
         _zhOffset = _zhTarget;
         changed = YES;
     }
-    if (fabs(_srcOffset - _srcTarget) > 0.4) {
+    if (_srcRolling) {
+        CGFloat p = MIN(1.0, (CGFloat)(now - _srcRollT0) / kZKRowRollDuration);
+        CGFloat e = 1.0 - pow(1.0 - p, 3.0);
+        _srcOffset = _srcRollFrom + (_srcRollTo - _srcRollFrom) * e;
+        if (p >= 1.0) { _srcOffset = _srcRollTo; _srcRolling = NO; }
+        changed = YES;
+    } else if (fabs(_srcOffset - _srcTarget) > 0.4) {
         _srcOffset += (_srcTarget - _srcOffset) * k;
         changed = YES;
     } else if (_srcOffset != _srcTarget) {
@@ -1371,7 +1445,8 @@ static void ZKSegAppend(NSMutableString *buf, NSString *s) {
 
     if (changed) [self render];
     BOOL pending = (_zhPending > 0.5 && !_zhBox.hidden) || (_srcPending > 0.5 && !_srcBox.hidden);
-    BOOL moving = fabs(_zhOffset - _zhTarget) > 0.4 || fabs(_srcOffset - _srcTarget) > 0.4;
+    BOOL moving = _zhRolling || _srcRolling
+               || fabs(_zhOffset - _zhTarget) > 0.4 || fabs(_srcOffset - _srcTarget) > 0.4;
     if (!pending && !moving) {
         _zhPending = 0;
         _srcPending = 0;
