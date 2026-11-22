@@ -1,10 +1,14 @@
 import SwiftUI
+import QuartzCore
 
 /// 字幕样式：颜色、背景、字幕内容、悬浮窗大小、收音模式。
 /// 设置项一律「左边文字、右边控件」排在一行，行与行之间一条细线，好扫读。
 /// 上面是一块真预览：窗口比例、字号、行数、滚动方式都跟画中画里一模一样。
 struct SubtitleSettingsView: View {
     @ObservedObject private var app = AppState.shared
+    /// iPad（宽屏尺寸类）上这块面板是居中的大卡片，内容要按卡片宽居中收窄、高度也要多给，
+    /// 不然设置项贴着卡片左右边、底下一截被压着，看着就是「没适配平板」。
+    @Environment(\.horizontalSizeClass) private var hSize
 
     /// 预览里正在往上滚的那几行（中档 / 大档）
     @State private var feed: [PreviewLine] = []
@@ -24,6 +28,21 @@ struct SubtitleSettingsView: View {
     /// 预览要是按 UIScreen 的宽算，就会比卡片还宽——右边被裁掉、字号也跟着算错。
     /// 所以宽度一律量出来用，不读屏幕。
     @State private var boxW: CGFloat = 0
+    /// 逐字档两块文字已经往上滚了多少（点）。
+    /// 目标位置按行算，滚动用一段固定 0.42 秒的 ease-out 跑完——跟真窗口同一套。
+    /// 以前把位移交给 SwiftUI 的 .animation 去做，量出来的偏移是半点几，
+    /// 五行的量级根本看不出在动，所以手机上看是「没有动画」。
+    @State private var zhOff: CGFloat = 0
+    @State private var srcOff: CGFloat = 0
+    @State private var zhTo: CGFloat = 0
+    @State private var srcTo: CGFloat = 0
+    @State private var zhFrom: CGFloat = 0
+    @State private var srcFrom: CGFloat = 0
+    @State private var zhT0: CFTimeInterval = 0
+    @State private var srcT0: CFTimeInterval = 0
+    @State private var zhRolling = false
+    @State private var srcRolling = false
+    @State private var rollTimer: Timer?
 
     private struct PreviewLine: Identifiable, Equatable {
         let id = UUID()
@@ -84,7 +103,7 @@ struct SubtitleSettingsView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            FitScroll(cap: UIScreen.main.bounds.height * 0.70 - SafeArea.bottom) {
+            FitScroll(cap: scrollCap) {
                 VStack(spacing: 12) {
                     // 预览固定按最高那一档占位、下沿对齐：换档时字是往上缩的，
                     // 卡片底边不动，所以后面的设置项一行都不挪。
@@ -95,6 +114,9 @@ struct SubtitleSettingsView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 2)
                 .padding(.bottom, 10)
+                // iPad：内容按 620 收窄居中，别把一排控件拉成一整条屏宽
+                .frame(maxWidth: hSize == .regular ? 620 : .infinity)
+                .frame(maxWidth: .infinity)
                 .background(
                     GeometryReader { g in
                         Color.clear
@@ -104,7 +126,7 @@ struct SubtitleSettingsView: View {
                 )
             }
         }
-        .presentationDetents([.height(sheetH)])
+        .presentationDetents(hSize == .regular ? [.large] : [.height(sheetH)])
         .presentationDragIndicator(.visible)
         // 量一下真实可用宽度（iPhone = 屏宽，iPad = 卡片宽）。
         // 挂在 background 上，不参与布局，所以不会把高度量歪。
@@ -113,7 +135,10 @@ struct SubtitleSettingsView: View {
                 Color.clear
                     .onAppear { if abs(g.size.width - boxW) > 0.5 { boxW = g.size.width } }
                     .onChange(of: g.size.width) { w in
-                        if abs(w - boxW) > 0.5 { boxW = w }
+                        if abs(w - boxW) > 0.5 {
+                            boxW = w
+                            segSync(snap: true)
+                        }
                     }
             }
         )
@@ -123,21 +148,32 @@ struct SubtitleSettingsView: View {
             ticker = nil
             typer?.invalidate()
             typer = nil
+            rollTimer?.invalidate()
+            rollTimer = nil
         }
         // 换档只改「站几行」，不重建内容：以前这里重播一遍预览，
         // 一换档下面的字整批换掉，看着就是「字在跳」。
         .onChange(of: app.prefs.pip) { _ in
             withAnimation(.easeInOut(duration: 0.22)) { resizeFeed() }
             ensureSegSeed()
+            segSync(snap: true)
         }
         .onChange(of: app.prefs.mode) { _ in
             withAnimation(.easeInOut(duration: 0.22)) { resizeFeed() }
             ensureSegSeed()
+            segSync(snap: true)
         }
         .onChange(of: app.prefs.scroll) { _ in
             withAnimation(.easeInOut(duration: 0.22)) { resizeFeed() }
             ensureSegSeed()
+            segSync(snap: true)
         }
+    }
+
+    /// 面板内容最多能有多高：手机按 70% 屏高，平板给到 86%（平板弹的是大卡片，高一点才装得下）。
+    private var scrollCap: CGFloat {
+        let ratio: CGFloat = hSize == .regular ? 0.86 : 0.70
+        return UIScreen.main.bounds.height * ratio - SafeArea.bottom
     }
 
     private var header: some View {
@@ -305,60 +341,240 @@ struct SubtitleSettingsView: View {
 
     /// 中/大档 · 逐字：窗口分上下两块——上面一整段译文、下面一整段原文，各是一段连续文字。
     /// 字一个一个字长出来；一块写满之后，**整块向上推一行**，最上面那一行被切出画面。
-    /// 真窗口（ZKSegmentView）用的是同一套算法，两边看到的一样。
+    /// 跟真窗口（ZKSegmentView）是同一套算法：同样的行数（中 3 / 大 5）、同样的行高、
+    /// 同样的 0.42s 整行上推。绘制也交给 UILabel——以前量用 UIKit、画用 SwiftUI，
+    /// 两边行高差半点几，累到第五行就成了「顶上一行被切一半」加「看着没动」。
     private func segmentPreview(_ m: (w: CGFloat, h: CGFloat, k: CGFloat)) -> some View {
-        let f = previewFonts(k: m.k)
-        let two = app.prefs.mode == "bilingual"
-        let inset = max(4, m.h * 0.03)
-        let midGap = two ? max(3, f.zh * 0.30) : 0
-        let avail = max(10, m.h - inset * 2 - midGap)
-        let blockH = two ? (avail / 2).rounded(.down) : avail
-        let padX = max(3, m.w * 0.016)
-        let bw = max(8, m.w - padX * 2)
-        return VStack(alignment: .leading, spacing: 0) {
-            if app.prefs.mode != "source" {
-                segBlock(segZh,
-                         font: .system(size: f.zh, weight: .bold),
-                         uiFont: .systemFont(ofSize: f.zh, weight: .bold),
-                         color: Color(uiColor: app.prefs.effectiveColor),
-                         width: bw, height: blockH)
+        let g = segGeom(m)
+        let showT = app.prefs.mode != "source"
+        let showS = app.prefs.mode != "zh"
+        return ZStack(alignment: .topLeading) {
+            Color.clear
+            if showT {
+                segBlock(segVisible(segZh), geo: g, zh: true)
+                    .offset(x: g.padX, y: g.zhY)
             }
-            if two { Color.clear.frame(height: midGap) }
-            if app.prefs.mode != "zh" {
-                segBlock(segSrc,
-                         font: .system(size: two ? f.src : f.zh, weight: two ? .regular : .bold),
-                         uiFont: two ? .systemFont(ofSize: f.src) : .systemFont(ofSize: f.zh, weight: .bold),
-                         color: Color(uiColor: app.prefs.secondaryColor),
-                         width: bw, height: blockH)
+            if showS {
+                segBlock(segVisible(segSrc), geo: g, zh: false)
+                    .offset(x: g.padX, y: g.srcY)
             }
-            Spacer(minLength: 0)
         }
-        .padding(.top, inset)
-        .padding(.horizontal, padX)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onAppear { segSync(snap: true) }
     }
 
-    /// 一块连续文本：整段排出来，写满就把整块往上挪一行。
-    /// 挪多少 = 内容高度 - 能站几行 × 行高，按行高取整，所以每次正好是一行。
-    private func segBlock(_ b: TypeBlock, font: Font, uiFont: UIFont,
-                          color: Color, width: CGFloat, height: CGFloat) -> some View {
-        let text = segVisible(b)
-        let h = SegType.height(text as NSString, font: uiFont, width: width)
-        let lineH = ceil(uiFont.lineHeight)
-        let lines = max(1, Int(floor((height + 0.5) / lineH)))
-        let target = max(0, h - CGFloat(lines) * lineH)
-        // 块高不是行高整数倍时，这一点余量补在底下，最新一行贴着块底
-        let pad = target > 0.5 ? max(0, height - CGFloat(lines) * lineH) : 0
-        return Text(text)
-            .font(font)
-            .foregroundStyle(color)
-            .lineSpacing(0)
-            .frame(width: width, height: max(h, lineH), alignment: .topLeading)
-            .offset(y: -target + pad)
-            .frame(width: width, height: height, alignment: .topLeading)
-            .clipped()
-            // 0.42s ease-out：跟真窗口那条 kZKRowRollDuration 的整行上推是同一个时长和曲线
-            .animation(.easeOut(duration: 0.42), value: target)
+    /// 逐字档的几何：跟真窗口 recalcMetrics 同一套。
+    /// 两块各站固定行数，块高 = 行数 × 行高；放不下就压字号（不拿少一行顶上）。
+    private struct SegGeom {
+        var two = true
+        var padX: CGFloat = 0
+        var bw: CGFloat = 0
+        var inset: CGFloat = 0
+        var midGap: CGFloat = 0
+        var zhFont = UIFont.systemFont(ofSize: 17, weight: .bold)
+        var srcFont = UIFont.systemFont(ofSize: 12)
+        var zhLineH: CGFloat = 1
+        var srcLineH: CGFloat = 1
+        var zhRows = 1
+        var srcRows = 1
+        var zhH: CGFloat = 0
+        var srcH: CGFloat = 0
+        var zhY: CGFloat = 0
+        var srcY: CGFloat = 0
+    }
+
+    private func segGeom(_ m: (w: CGFloat, h: CGFloat, k: CGFloat)) -> SegGeom {
+        let f = previewFonts(k: m.k)
+        var g = SegGeom()
+        g.two = app.prefs.mode == "bilingual"
+        g.padX = max(3, m.w * 0.016)
+        g.bw = max(8, m.w - g.padX * 2)
+        g.inset = max(4, m.h * 0.03)
+        let showT = app.prefs.mode != "source"
+        let showS = app.prefs.mode != "zh"
+        if g.two {
+            g.midGap = max(3, f.zh * 0.30)
+            let avail = max(10, m.h - g.inset * 2 - g.midGap)
+            let rows = app.prefs.pip == "M" ? 3 : 5
+            var zh = f.zh
+            var i = 0
+            while i < 120 {
+                let lz = UIFont.systemFont(ofSize: zh, weight: .bold).lineHeight
+                let ls = UIFont.systemFont(ofSize: zh * 0.66).lineHeight
+                if CGFloat(rows) * (lz + ls) <= avail { break }
+                zh -= 0.5
+                if zh <= 8 { zh = 8; break }
+                i += 1
+            }
+            g.midGap = max(3, zh * 0.30)
+            g.zhFont = .systemFont(ofSize: zh, weight: .bold)
+            g.srcFont = .systemFont(ofSize: zh * 0.66)
+            g.zhRows = rows
+            g.srcRows = rows
+            g.zhLineH = max(1, g.zhFont.lineHeight)
+            g.srcLineH = max(1, g.srcFont.lineHeight)
+            g.zhH = CGFloat(rows) * g.zhLineH
+            g.srcH = CGFloat(rows) * g.srcLineH
+        } else {
+            let avail = max(10, m.h - g.inset * 2)
+            g.zhFont = .systemFont(ofSize: f.zh, weight: .bold)
+            g.srcFont = g.zhFont
+            g.zhLineH = max(1, g.zhFont.lineHeight)
+            g.srcLineH = g.zhLineH
+            let rows = max(1, Int((avail + 0.5) / g.zhLineH))
+            g.zhRows = rows
+            g.srcRows = rows
+            g.zhH = avail
+            g.srcH = avail
+        }
+        // 两块紧挨着成一组，垂直居中——顶部/底部空白平均分，跟真窗口一样
+        let availAll = max(10, m.h - g.inset * 2 - (g.two ? g.midGap : 0))
+        let groupH = (showT ? g.zhH : 0) + (showS ? g.srcH : 0) + ((showT && showS) ? g.midGap : 0)
+        let top = g.inset + max(0, (availAll - groupH) / 2)
+        g.zhY = top
+        g.srcY = top + (showT ? g.zhH + (showS ? g.midGap : 0) : 0)
+        return g
+    }
+
+    /// 一块连续文本：交给 UILabel 画，量高度和画出来的是同一个对象，一个点都不差。
+    /// 整块往上挪多少由外面的逐帧滚动给（off），每次正好一行。
+    private func segBlock(_ text: String, geo: SegGeom, zh: Bool) -> some View {
+        SegBlockLabel(
+            text: text,
+            font: zh ? geo.zhFont : geo.srcFont,
+            color: zh ? app.prefs.effectiveColor : app.prefs.secondaryColor,
+            boxW: geo.bw,
+            boxH: zh ? geo.zhH : geo.srcH,
+            rows: zh ? geo.zhRows : geo.srcRows,
+            lineH: zh ? geo.zhLineH : geo.srcLineH,
+            off: zh ? zhOff : srcOff
+        )
+        .frame(width: geo.bw, height: zh ? geo.zhH : geo.srcH, alignment: .topLeading)
+    }
+
+    // MARK: - 逐字档：量、画、滚动都跟真窗口对齐
+
+    /// 一块文字。画和量都是这一个 UILabel，所以「能站几行」「切在第几行」两边完全一致。
+    private struct SegBlockLabel: UIViewRepresentable {
+        var text: String
+        var font: UIFont
+        var color: UIColor
+        var boxW: CGFloat
+        var boxH: CGFloat
+        var rows: Int
+        var lineH: CGFloat
+        var off: CGFloat
+
+        func makeUIView(context: Context) -> UIView {
+            let v = UIView()
+            v.clipsToBounds = true
+            v.backgroundColor = .clear
+            v.isUserInteractionEnabled = false
+            let l = UILabel()
+            l.tag = 21
+            l.numberOfLines = 0
+            l.lineBreakMode = .byWordWrapping
+            l.textAlignment = .left
+            l.adjustsFontSizeToFitWidth = false
+            l.backgroundColor = .clear
+            l.opaque = false
+            l.isUserInteractionEnabled = false
+            v.addSubview(l)
+            return v
+        }
+
+        func updateUIView(_ v: UIView, context: Context) {
+            guard let l = v.viewWithTag(21) as? UILabel else { return }
+            if l.font.pointSize != font.pointSize || l.font.fontDescriptor.symbolicTraits != font.fontDescriptor.symbolicTraits {
+                l.font = font
+            }
+            l.textColor = color
+            if l.text != text { l.text = text }
+            let w = max(1, boxW)
+            let h = l.sizeThatFits(CGSize(width: w, height: .greatestFiniteMagnitude)).height
+            // 块高是「行数 × 行高」，余量恒定；整块往上挪 off，正好是一整行
+            let pad = max(0, boxH - CGFloat(max(1, rows)) * lineH)
+            l.frame = CGRect(x: 0, y: -off + pad, width: w, height: max(h, lineH))
+        }
+    }
+
+    /// 目标位置 = 内容高 - 站的行数 × 行高。内容多一行，目标就多一个行高，
+    /// 所以每次正好往上走一行、头顶那一行被裁掉。
+    private func segTarget(_ text: String, font: UIFont, width: CGFloat,
+                           rows: Int, lineH: CGFloat) -> CGFloat {
+        let h = SegType.height(text as NSString, font: font, width: width)
+        return max(0, h - CGFloat(max(1, rows)) * lineH)
+    }
+
+    /// 内容变了之后对一次位：在逐字档才动，其它档位不用管。
+    private func segSync(snap: Bool = false) {
+        guard app.prefs.scroll == "segment", app.prefs.pip != "X" else { return }
+        let g = segGeom(metrics)
+        if app.prefs.mode != "source" {
+            let t = segTarget(segVisible(segZh), font: g.zhFont, width: g.bw,
+                              rows: g.zhRows, lineH: g.zhLineH)
+            aimZh(t, lineH: g.zhLineH, snap: snap)
+        }
+        if app.prefs.mode != "zh" {
+            let t = segTarget(segVisible(segSrc), font: g.srcFont, width: g.bw,
+                              rows: g.srcRows, lineH: g.srcLineH)
+            aimSrc(t, lineH: g.srcLineH, snap: snap)
+        }
+    }
+
+    private func aimZh(_ t: CGFloat, lineH: CGFloat, snap: Bool) {
+        if snap { zhTo = t; zhOff = t; zhRolling = false; return }
+        if abs(t - zhTo) < 0.5 { return }
+        zhTo = t
+        if abs(t - zhOff) > lineH * 6 { zhOff = t; zhRolling = false; return }
+        if zhRolling { return }
+        zhRolling = true
+        zhFrom = zhOff
+        zhT0 = CACurrentMediaTime()
+        ensureRollTimer()
+    }
+
+    private func aimSrc(_ t: CGFloat, lineH: CGFloat, snap: Bool) {
+        if snap { srcTo = t; srcOff = t; srcRolling = false; return }
+        if abs(t - srcTo) < 0.5 { return }
+        srcTo = t
+        if abs(t - srcOff) > lineH * 6 { srcOff = t; srcRolling = false; return }
+        if srcRolling { return }
+        srcRolling = true
+        srcFrom = srcOff
+        srcT0 = CACurrentMediaTime()
+        ensureRollTimer()
+    }
+
+    private func ensureRollTimer() {
+        guard rollTimer == nil else { return }
+        let t = Timer(timeInterval: 1.0 / 60.0, repeats: true) { _ in rollTick() }
+        RunLoop.main.add(t, forMode: .common)
+        rollTimer = t
+    }
+
+    /// 逐帧推一行：0.42 秒、ease-out，跟真窗口那条 kZKRowRollDuration 一致。
+    private func rollTick() {
+        let now = CACurrentMediaTime()
+        var moving = false
+        if zhRolling {
+            let p = min(1, max(0, (now - zhT0) / 0.42))
+            let e = 1 - pow(1 - p, 3)
+            zhOff = zhFrom + (zhTo - zhFrom) * e
+            if p >= 1 { zhOff = zhTo; zhRolling = false }
+            moving = true
+        }
+        if srcRolling {
+            let p = min(1, max(0, (now - srcT0) / 0.42))
+            let e = 1 - pow(1 - p, 3)
+            srcOff = srcFrom + (srcTo - srcFrom) * e
+            if p >= 1 { srcOff = srcTo; srcRolling = false }
+            moving = true
+        }
+        if !moving {
+            rollTimer?.invalidate()
+            rollTimer = nil
+        }
     }
 
     /// 屏幕上该显示的那一段：整段里扣掉尾巴还没长出来的。
@@ -471,8 +687,17 @@ struct SubtitleSettingsView: View {
         segZh = TypeBlock()
         segSrc = TypeBlock()
         segIndex = 0
+        zhOff = 0
+        srcOff = 0
+        zhTo = 0
+        srcTo = 0
+        zhRolling = false
+        srcRolling = false
+        rollTimer?.invalidate()
+        rollTimer = nil
         seedSeg()
         seedSeg()
+        segSync(snap: true)
         let t = Timer.scheduledTimer(withTimeInterval: 2.7, repeats: true) { _ in
             advance()
         }
@@ -534,6 +759,7 @@ struct SubtitleSettingsView: View {
             segSrc.pending += CGFloat((s.src as NSString).length)
         }
         startTyping()
+        segSync()
     }
 
     /// 逐字档打字机：译文 22 字/秒、原文 52 字符/秒，落后了会自动快一点（是变速，不是跳字）。
@@ -563,6 +789,7 @@ struct SubtitleSettingsView: View {
             if changed {
                 segZh = z
                 segSrc = r
+                segSync()
             }
             if z.pending <= 0 && r.pending <= 0 {
                 timer.invalidate()
