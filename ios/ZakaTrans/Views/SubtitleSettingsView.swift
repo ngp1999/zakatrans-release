@@ -220,7 +220,10 @@ struct SubtitleSettingsView: View {
             return (font, font * 0.68)
         }
         let scale = max(0.45, min(2.10, sqrt((dim.width * dim.height) / (480.0 * 360.0))))
-        let zh = max(12.0, min(74.0, app.prefs.size * scale * 1.35)) * k
+        // 中窗跟真窗口（PipController 的 ZKFontBoost）抬同一档，两边不同步的话
+        // 设置里看到的中窗会比真窗口小一圈。
+        let boost: CGFloat = app.prefs.pip == "M" ? 1.16 : 1.0
+        let zh = max(12.0, min(74.0, app.prefs.size * scale * 1.35 * boost)) * k
         return (zh, zh * 0.66)
     }
 
@@ -578,13 +581,18 @@ struct SubtitleSettingsView: View {
         return s.substring(with: NSRange(location: 0, length: min(to, n)))
     }
 
+    /// 一格内「译文 + 原文」之间的空隙，跟真窗口 ZKPairGap 是同一个公式。
+    private func pairGap(_ slot: CGFloat) -> CGFloat {
+        max(2, min(8, slot * 0.05))
+    }
+
     /// 上推档的字号：双语时真窗口会按格高把主字号压下来（一格要站一行译文 + 一行原文），
     /// 不然大窗站 5 行时原文那行会溢出到下一格。预览必须压得一模一样，否则两边看着就不一样。
     private func rollingFonts(_ m: (w: CGFloat, h: CGFloat, k: CGFloat)) -> (zh: CGFloat, src: CGFloat) {
         let f = previewFonts(k: m.k)
         guard app.prefs.mode == "bilingual" else { return f }
         let slot = slotHeight(m)
-        let maxFont = max(12, (slot - 6) / 2)
+        let maxFont = max(12, (slot - pairGap(slot) - 2) / 2)
         if f.zh > maxFont { return (maxFont, maxFont * 0.66) }
         return f
     }
@@ -600,7 +608,7 @@ struct SubtitleSettingsView: View {
         let rows = Array(feed.suffix(visibleRows))
         return VStack(alignment: .leading, spacing: gap) {
             ForEach(rows) { it in
-                VStack(alignment: .leading, spacing: max(0.5, m.h * 0.004)) {
+                VStack(alignment: .leading, spacing: single ? max(0.5, m.h * 0.004) : pairGap(slot)) {
                     if app.prefs.mode != "source" {
                         Text(it.zh)
                             .font(.system(size: f.zh, weight: .bold))
