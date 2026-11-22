@@ -13,20 +13,15 @@ struct SplashView: View {
                     .scaledToFit()
                     .frame(width: 96, height: 96)
                     .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 22, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.35), lineWidth: 1)
-                    )
-                    .shadow(color: Theme.accent.opacity(0.30), radius: 28, x: 0, y: 16)
 
                 Text("语幕")
-                    .font(.system(size: 30, weight: .semibold))
+                    .font(.largeTitle.weight(.semibold))
                     .tracking(3)
-                    .foregroundStyle(Theme.ink)
+                    .foregroundStyle(DSColor.label)
 
                 Text("实时字幕　同声传译")
-                    .font(.system(size: 15))
-                    .foregroundStyle(Theme.sub)
+                    .font(.subheadline)
+                    .foregroundStyle(DSColor.secondaryLabel)
             }
             .offset(y: -30)
         }
