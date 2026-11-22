@@ -40,6 +40,10 @@ struct InterpreterView: View {
     @State private var pendingSpeak = false
     /// 这一次按住期间冒出来的那些行（取消时要把它们撤掉）
     @State private var holdIDs: Set<String> = []
+    /// 松手之后的收尾：等最后一句译文回来就把会话关掉，不再常驻占麦克风
+    @State private var idleStop: Timer?
+    @State private var hardStop: Timer?
+    @State private var waitingFinal = false
     @State private var began: Date?
     @State private var elapsed: TimeInterval = 0
     @State private var ticker: Timer?
@@ -82,8 +86,8 @@ struct InterpreterView: View {
         // 用自绘提示框，跟 App 其他地方的卡片是同一套语言（系统 alert 一弹出来就出戏）
         .notice($error)
         .onDisappear {
-            if running { stop() }
-            stopClock()
+            // 不管引擎是不是已经自动关过，离开这个页面一律收干净
+            stop()
         }
     }
 
@@ -312,35 +316,52 @@ struct InterpreterView: View {
     // MARK: - 底部
 
     private var guideText: String {
-        if !running { return "按住下面对话，松手出译文" }
         if warming { return "正在连接识别服务…" }
-        return holding ? (canceling ? "松开手指取消这一句" : "在听，松手翻译") : "按住说话，松手翻译"
+        if holding { return canceling ? "松开手指取消这一句" : "正在听，上滑可取消" }
+        return lines.isEmpty ? "按住下面对话，松手出译文" : "按住说话，松手翻译"
     }
 
     private var bottomBar: some View {
         VStack(spacing: 8) {
-            // 长按说话：按住这段时间才算一句。松手结束、再翻译，
-            // 不会再出现「环境音被认进来」「半句话被切成两段」那些问题。
+            // 长按说话：按住这段时间才算一句。松手结束、再翻译。
+            // 松手后最后一句译文一落定就把会话关掉（见 beginAutoStop），
+            // 不再常驻占着麦克风，也不需要再点一次「结束」。
             holdButton
-            if running {
-                Button {
-                    haptic.impactOccurred(intensity: 0.6)
-                    stop()
-                } label: {
-                    Text("结束")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(Theme.sub)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 30)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
+                .overlay(alignment: .top) { slideHint }
         }
         .padding(.horizontal, 20)
         .padding(.top, 10)
         .padding(.bottom, 8)
         .background(Theme.bg)
+    }
+
+    /// 按住时浮在按钮上方的那条提示：一眼告诉用户「上滑可以取消」，
+    /// 真滑过阈值之后变成红色的「松开手指，取消这一句」。
+    /// 用 overlay 浮在上面，不占布局——出现和消失都不会把按钮顶得动一下。
+    private var slideHint: some View {
+        HStack(spacing: 5) {
+            Image(systemName: canceling ? "xmark.circle.fill" : "arrow.up")
+                .font(.system(size: 11, weight: .bold))
+            Text(canceling ? "松开手指，取消这一句" : "上滑取消")
+                .font(.system(size: 13, weight: .medium))
+        }
+        .foregroundStyle(canceling ? Color.white : Theme.sub)
+        .padding(.horizontal, 12)
+        .frame(height: 28)
+        .background(
+            Capsule(style: .continuous)
+                .fill(canceling ? Theme.warn : Theme.surface)
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .strokeBorder(canceling ? Color.clear : Theme.hairline, lineWidth: 0.8)
+        )
+        .offset(y: -36)
+        .opacity(holding ? 1 : 0)
+        .scaleEffect(holding ? 1 : 0.92, anchor: .bottom)
+        .animation(.easeOut(duration: 0.16), value: holding)
+        .animation(.easeOut(duration: 0.12), value: canceling)
+        .allowsHitTesting(false)
     }
 
     private var holdButton: some View {
@@ -440,10 +461,10 @@ struct InterpreterView: View {
 
     private func beginInterp() {
         guard !running else { return }
-        lines.removeAll()
         running = true
         warming = true
-        startClock()
+        // 会话是每句按一次重建的，历史气泡要留着——这里绝不清空上一句
+        if ticker == nil { startClock() }
         // 兜底：通道没回报状态也照样在两秒后放开提示，别一直挂着「正在连接」
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [self] in
             if running { warming = false }
@@ -472,6 +493,9 @@ struct InterpreterView: View {
         itp.onLine = { lid, side, src, trans, kind in
             DispatchQueue.main.async {
                 guard running else { return }
+                // 松手之后还在回结果：每来一条就把收尾计时往后顺延，
+                // 等它真没动静了再关会话——不能把最后一句的译文关在门外。
+                if waitingFinal && !holding { scheduleIdleStop() }
                 let isFinal = (kind == 2)   // ZKLineKindFinal
                 let lineID = lid ?? UUID().uuidString
                 // 这一次按住期间冒出来的行都记着：上滑取消时一起撤掉
@@ -505,6 +529,10 @@ struct InterpreterView: View {
 
     private func pressDown() {
         guard !holding else { return }
+        // 上一句的收尾计时先撤掉：这一句还没结束，别把会话关了
+        idleStop?.invalidate(); idleStop = nil
+        hardStop?.invalidate(); hardStop = nil
+        waitingFinal = false
         holding = true
         canceling = false
         holdIDs.removeAll()
@@ -525,6 +553,61 @@ struct InterpreterView: View {
             cancelSpeak()
         } else {
             ZKInterpreter.shared()?.endUtterance()
+            beginAutoStop()
+        }
+    }
+
+    // MARK: - 松手收尾
+
+    /// 松手之后：等最后一句的译文回来，然后把会话整个关掉。
+    /// 用户说的「松手这一个会话就结束了」——不用再点「结束」，也不常驻占麦克风。
+    /// 两个保险：最后一条结果之后 1.6 秒没新动静就关；最多等 6 秒必关。
+    private func beginAutoStop() {
+        waitingFinal = true
+        hardStop?.invalidate()
+        let t = Timer.scheduledTimer(withTimeInterval: 6.0, repeats: false) { _ in
+            if waitingFinal { finishAutoStop() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        hardStop = t
+        scheduleIdleStop()
+    }
+
+    private func scheduleIdleStop() {
+        guard waitingFinal else { return }
+        idleStop?.invalidate()
+        let t = Timer.scheduledTimer(withTimeInterval: 1.6, repeats: false) { _ in
+            finishAutoStop()
+        }
+        RunLoop.main.add(t, forMode: .common)
+        idleStop = t
+    }
+
+    private func finishAutoStop() {
+        idleStop?.invalidate(); idleStop = nil
+        hardStop?.invalidate(); hardStop = nil
+        guard waitingFinal else { return }
+        waitingFinal = false
+        guard running else { return }
+        running = false
+        warming = false
+        holding = false
+        canceling = false
+        pendingSpeak = false
+        level = 0
+        // 时钟停在这一场的读数上，不清零：再按住会接着走
+        ticker?.invalidate()
+        ticker = nil
+        began = nil
+        ZKInterpreter.shared()?.stop()
+        Speaker.shared.stop()
+        Speaker.shared.usesExternalSession = false
+        Speaker.shared.micCapture = false
+        if let itp = ZKInterpreter.shared() {
+            itp.onLine = nil
+            itp.onLevel = nil
+            itp.onState = nil
+            itp.onFail = nil
         }
     }
 
@@ -579,6 +662,9 @@ struct InterpreterView: View {
     }
 
     private func stop() {
+        idleStop?.invalidate(); idleStop = nil
+        hardStop?.invalidate(); hardStop = nil
+        waitingFinal = false
         running = false
         warming = false
         holding = false
