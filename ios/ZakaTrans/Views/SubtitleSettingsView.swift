@@ -102,7 +102,6 @@ struct SubtitleSettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
             FitScroll(cap: scrollCap) {
                 VStack(spacing: 12) {
                     // 预览固定按最高那一档占位、下沿对齐：换档时字是往上缩的，
@@ -126,6 +125,8 @@ struct SubtitleSettingsView: View {
                 )
             }
         }
+        .navigationTitle("字幕样式")
+        .navigationBarTitleDisplayMode(.inline)
         .presentationDetents(hSize == .regular ? [.large] : [.height(sheetH)])
         .presentationDragIndicator(.visible)
         // 量一下真实可用宽度（iPhone = 屏宽，iPad = 卡片宽）。
@@ -173,16 +174,8 @@ struct SubtitleSettingsView: View {
     /// 面板内容最多能有多高：手机按 70% 屏高，平板给到 86%（平板弹的是大卡片，高一点才装得下）。
     private var scrollCap: CGFloat {
         let ratio: CGFloat = hSize == .regular ? 0.86 : 0.70
-        return UIScreen.main.bounds.height * ratio - SafeArea.bottom
-    }
-
-    private var header: some View {
-        // 顶部小横条由首页面板统一提供（两个面板同一条、同一位置），这里只管标题。
-        Text("字幕样式")
-            .font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(Theme.ink)
-            .frame(maxWidth: .infinity)
-            .frame(height: 44)
+        // 减掉导航栏（44）和下拉指示条占的高度，别让最后一行被压到 card 底下
+        return UIScreen.main.bounds.height * ratio - SafeArea.bottom - 44
     }
 
     // MARK: - 预览窗口的尺寸
@@ -1001,19 +994,19 @@ struct SubtitleSettingsView: View {
     /// 统一的行：左边说明文字（固定宽，上下行对齐），右边控件撑满剩下的宽度
     private func settingRow<Content: View>(label: String,
                                           @ViewBuilder content: () -> Content) -> some View {
-        HStack(spacing: 12) {
+        HStack(spacing: DSSpace.s) {
             Text(label)
-                .font(.system(size: 14))
-                .foregroundStyle(Theme.ink)
+                .font(DSFont.subheadline)
+                .foregroundStyle(DSColor.label)
                 .frame(width: 68, alignment: .leading)
             content()
                 .frame(maxWidth: .infinity)
         }
-        .frame(minHeight: 42)
+        .frame(minHeight: DSSpace.rowMinHeight)
         .padding(.vertical, 2)
     }
 
     private var divider: some View {
-        Rectangle().fill(Theme.line).frame(height: 0.5)
+        Rectangle().fill(DSColor.separator).frame(height: 0.5)
     }
 }
