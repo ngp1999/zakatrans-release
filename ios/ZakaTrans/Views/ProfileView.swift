@@ -11,38 +11,74 @@ enum ProfileRoute: Hashable {
     case about
 }
 
-/// 「我的」：账号、积分、对话记录、关于。
-/// 翻译相关的设置都在首页按钮里，这一页只管和"我"有关的东西。
+/// 「我的」：系统分组列表。
+///
+/// 之前是 ScrollView + 一堆手写「玻璃行」，行高、图标块、chevron、分隔线全是手工对齐的。
+/// 现在交给 `List(.insetGrouped)`：分组圆角、行高、分隔线缩进、滑动高亮、
+/// 动态字体、VoiceOver、iPad 上的居中宽度，全部由系统负责，跟系统设置页一模一样。
 struct ProfileView: View {
     @ObservedObject private var cloud = Cloud.shared
     @ObservedObject private var app = AppState.shared
     @State private var showLogout = false
     @State private var showEdit = false
 
-    @Environment(\.dismiss) private var dismiss
-
     var body: some View {
-        ScrollView {
-            VStack(spacing: 14) {
-                accountCard
-                creditRow
-                mainGroup
+        List {
+            // 账号
+            Section {
+                Button {
+                    showEdit = true
+                } label: {
+                    accountRow
+                }
+                .buttonStyle(.plain)
+                .contextMenu {
+                    Button("使用默认头像", role: .destructive) { app.setAvatar(nil) }
+                }
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 10)
-            .padding(.bottom, 24)
+
+            // 积分
+            Section {
+                NavigationLink(value: ProfileRoute.credit) {
+                    LabeledContent {
+                        Text(Format.credits(cloud.balanceCredits))
+                            .font(DSFont.body.monospacedDigit())
+                            .foregroundStyle(DSColor.secondaryLabel)
+                    } label: {
+                        Label {
+                            Text("我的积分")
+                        } icon: {
+                            Image(systemName: "star.circle.fill")
+                                .symbolRenderingMode(.palette)
+                                .foregroundStyle(.white, DSColor.accent)
+                        }
+                    }
+                }
+            }
+
+            // 记录 / 关于
+            Section {
+                NavigationLink(value: ProfileRoute.history) {
+                    Label("对话记录", systemImage: "clock.arrow.circlepath")
+                }
+                NavigationLink(value: ProfileRoute.about) {
+                    Label("关于语幕", systemImage: "info.circle")
+                }
+            }
+
+            // 退出
+            Section {
+                Button(role: .destructive) {
+                    showLogout = true
+                } label: {
+                    Text("退出登录")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
         }
-        .screenBackground()
-        .glassNavigationBar()
+        .listStyle(.insetGrouped)
         .navigationTitle("我的")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
-                Button("完成") { dismiss() }
-                    .fontWeight(.semibold)
-                    .foregroundStyle(Theme.accent)
-            }
-        }
+        .navigationBarTitleDisplayMode(.large)
         .navigationDestination(for: ProfileRoute.self) { r in
             switch r {
             case .credit:  CreditView()
@@ -53,7 +89,6 @@ struct ProfileView: View {
         .task { if cloud.profile == nil { await cloud.refresh() } }
         .sheet(isPresented: $showEdit) {
             NavigationStack { AccountEditView() }
-                .sheetChrome(radius: 30)
         }
         .alert("确认退出登录？", isPresented: $showLogout) {
             Button("取消", role: .cancel) {}
@@ -63,146 +98,34 @@ struct ProfileView: View {
         }
     }
 
-    // MARK: - 账号
+    // MARK: - 账号行
 
-    private var accountCard: some View {
-        // 整张卡就是入口：点头像或昵称都进同一个修改面板，头像上不再挂相机角标
-        Button {
-            showEdit = true
-        } label: {
-            HStack(spacing: 14) {
-                AvatarView(size: 58)
-                    .overlay(
-                        Circle().strokeBorder(
-                            LinearGradient(colors: [Theme.accent.opacity(0.85), Theme.accent.opacity(0.25)],
-                                           startPoint: .topLeading, endPoint: .bottomTrailing),
-                            lineWidth: 1.5
-                        )
-                    )
-                    .shadow(color: Theme.accent.opacity(0.25), radius: 10, x: 0, y: 4)
+    private var accountRow: some View {
+        HStack(spacing: DSSpace.s) {
+            AvatarView(size: 52)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(cloud.profile?.displayName ?? "语幕用户")
-                        .font(.system(size: 19, weight: .semibold))
-                        .foregroundStyle(Theme.ink)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(cloud.profile?.displayName ?? "语幕用户")
+                    .font(DSFont.headline)
+                    .foregroundStyle(DSColor.label)
+                    .lineLimit(1)
+
+                if let email = cloud.profile?.email, !email.isEmpty {
+                    Text(email)
+                        .font(DSFont.footnote)
+                        .foregroundStyle(DSColor.secondaryLabel)
                         .lineLimit(1)
-
-                    if let email = cloud.profile?.email, !email.isEmpty {
-                        Text(email)
-                            .font(.system(size: 14))
-                            .foregroundStyle(Theme.sub)
-                            .lineLimit(1)
-                    }
                 }
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.faint)
             }
-            .contentShape(Rectangle())
+
+            Spacer(minLength: 0)
+
+            Image(systemName: "chevron.right")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(DSColor.tertiaryLabel)
         }
-        .buttonStyle(.plain)
-        .card(padding: 18)
-        .contextMenu {
-            Button("使用默认头像", role: .destructive) { app.setAvatar(nil) }
-        }
-    }
-
-    // MARK: - 积分
-
-    private var creditRow: some View {
-        NavigationLink(value: ProfileRoute.credit) {
-            HStack(spacing: 10) {
-                // 积分图标：星形套圆环，上白下主题色——跟积分页那个是同一颗
-                Image(systemName: "star.circle.fill")
-                    .font(.system(size: 26))
-                    .symbolRenderingMode(.palette)
-                    .foregroundStyle(.white, Theme.accent)
-                    .frame(width: 28, height: 28)
-                Text("我的积分")
-                    .font(.system(size: 16))
-                    .foregroundStyle(Theme.ink)
-                Spacer()
-                Text(Format.credits(cloud.balanceCredits))
-                    .font(.system(size: 16, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(Theme.ink)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.faint)
-            }
-            .padding(.horizontal, 16)
-            .frame(height: 54)
-            .glassSurface(radius: Theme.radius)
-        }
-        .buttonStyle(RowButtonStyle())
-    }
-
-    // MARK: - 对话记录 / 关于 / 退出
-
-    private var mainGroup: some View {
-        VStack(spacing: 0) {
-            NavigationLink(value: ProfileRoute.history) {
-                rowContent(icon: "clock.arrow.circlepath", title: "对话记录",
-                           tint: .orange, detail: "", chevron: true)
-            }
-            .buttonStyle(RowButtonStyle())
-
-            divider
-
-            NavigationLink(value: ProfileRoute.about) {
-                rowContent(icon: "info.circle.fill", title: "关于语幕",
-                           tint: .gray, detail: "", chevron: true)
-            }
-            .buttonStyle(RowButtonStyle())
-
-            divider
-
-            Button { showLogout = true } label: {
-                HStack(spacing: 12) {
-                    // 跟上面两行一样的图标方块，只是换成红色系，位置对齐
-                    Image(systemName: "rectangle.portrait.and.arrow.right")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 28, height: 28)
-                        .background(Theme.warn)
-                        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    Text("退出登录").font(.system(size: 16)).foregroundStyle(Theme.warn)
-                    Spacer()
-                }
-                .padding(.horizontal, 16).frame(height: 52)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(RowButtonStyle())
-        }
-        .glassSurface(radius: Theme.radius)
-    }
-
-    private var divider: some View {
-        Rectangle().fill(Theme.line).frame(height: 0.5).padding(.leading, 56)
-    }
-
-    private func rowContent(icon: String, title: String, tint: Color, detail: String, chevron: Bool) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 28, height: 28)
-                .background(tint)
-                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-            Text(title).font(.system(size: 16)).foregroundStyle(Theme.ink)
-            Spacer()
-            if !detail.isEmpty {
-                Text(detail).font(.system(size: 14)).foregroundStyle(Theme.sub)
-            }
-            if chevron {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.faint)
-            }
-        }
-        .padding(.horizontal, 16)
-        .frame(height: 52)
         .contentShape(Rectangle())
+        .padding(.vertical, DSSpace.xxs)
     }
 }
 
@@ -230,5 +153,6 @@ struct AvatarView: View {
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
+        .overlay(Circle().strokeBorder(DSColor.separator, lineWidth: 0.5))
     }
 }
