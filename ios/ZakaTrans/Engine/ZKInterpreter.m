@@ -482,22 +482,47 @@ static double ZKSim(NSString *a, NSString *b) {
     [s setActive:YES error:&err];
     if (err) { [self fail:@"麦克风没有权限，请在系统设置里允许"]; return; }
 
-    // 两条独立会话
-    _toOther = [ZKDoubaoAST session];
-    _toMine = [ZKDoubaoAST session];
-    // 这两条是面对面对话用的，账目标成同声传译
-    _toOther.mode = @"interp";
-    _toMine.mode = @"interp";
-    [self wire:_toOther side:@"a"];
-    [self wire:_toMine side:@"b"];
+    // 两条独立会话：已经预热过的直接续用，没有才现建。
+    // 以前这里无条件新建，用户每次点开始都要重新握手（弱网下就是"点了等一秒"）。
+    if (!_toOther) {
+        _toOther = [ZKDoubaoAST session];
+        _toOther.mode = @"interp";
+        [self wire:_toOther side:@"a"];
+    }
+    if (!_toMine) {
+        _toMine = [ZKDoubaoAST session];
+        _toMine.mode = @"interp";
+        [self wire:_toMine side:@"b"];
+    }
     [self applyLangs];
 
     [self resetLines];
     _running = YES;
+    // start 本身幂等：已经连着的不会重连，掉了的会重来一次
     [_toOther start];
     [_toMine start];
 
     [self startMic];
+}
+
+- (void)prewarmWith:(NSString *)a other:(NSString *)b {
+    if (_running) return;
+    _mine = a.length ? a : @"zh-CN";
+    _other = b.length ? b : @"en-US";
+    if (!_toOther) {
+        _toOther = [ZKDoubaoAST session];
+        _toOther.mode = @"interp";
+        [self wire:_toOther side:@"a"];
+    }
+    if (!_toMine) {
+        _toMine = [ZKDoubaoAST session];
+        _toMine.mode = @"interp";
+        [self wire:_toMine side:@"b"];
+    }
+    [self applyLangs];
+    // 只连通道，不开麦克风、不激活音频会话：顶部橙点不亮，用户不点开始就等于没在用
+    [_toOther start];
+    [_toMine start];
 }
 
 - (void)setMine:(NSString *)a other:(NSString *)b {
