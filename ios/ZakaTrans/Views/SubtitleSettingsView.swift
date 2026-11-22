@@ -477,7 +477,7 @@ struct SubtitleSettingsView: View {
             l.textAlignment = .left
             l.adjustsFontSizeToFitWidth = false
             l.backgroundColor = .clear
-            l.opaque = false
+            l.isOpaque = false
             l.isUserInteractionEnabled = false
             v.addSubview(l)
             return v
