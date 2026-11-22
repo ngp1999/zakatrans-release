@@ -20,6 +20,10 @@ struct SubtitleSettingsView: View {
     @State private var wideIndex = 0
     /// sheet 的高度：量完内容再定，避免系统给一档固定高度、底下留一截空白
     @State private var sheetH: CGFloat = 620
+    /// 面板真实可用的宽度。iPad 上弹出来是一张居中的卡片（不是整屏宽），
+    /// 预览要是按 UIScreen 的宽算，就会比卡片还宽——右边被裁掉、字号也跟着算错。
+    /// 所以宽度一律量出来用，不读屏幕。
+    @State private var boxW: CGFloat = 0
 
     private struct PreviewLine: Identifiable, Equatable {
         let id = UUID()
@@ -102,6 +106,17 @@ struct SubtitleSettingsView: View {
         }
         .presentationDetents([.height(sheetH)])
         .presentationDragIndicator(.visible)
+        // 量一下真实可用宽度（iPhone = 屏宽，iPad = 卡片宽）。
+        // 挂在 background 上，不参与布局，所以不会把高度量歪。
+        .background(
+            GeometryReader { g in
+                Color.clear
+                    .onAppear { if abs(g.size.width - boxW) > 0.5 { boxW = g.size.width } }
+                    .onChange(of: g.size.width) { w in
+                        if abs(w - boxW) > 0.5 { boxW = w }
+                    }
+            }
+        )
         .onAppear { restartPreview() }
         .onDisappear {
             ticker?.invalidate()
@@ -151,11 +166,14 @@ struct SubtitleSettingsView: View {
     /// 以前是按高度上限反推缩放比，大窗反而被压窄了——越大越窄，看着就不对。
     private var metrics: (w: CGFloat, h: CGFloat, k: CGFloat) {
         let dim = realDim
-        // 卡片左右各 16 的边距，剩下的全给预览，不再额外留白
-        let w = UIScreen.main.bounds.width - 32
+        // 卡片左右各 16 的边距，剩下的全给预览，不再额外留白。
+        // 宽度优先用实测值：iPad 上卡片比屏幕窄得多，按屏宽算会溢出。
+        let full = boxW > 1 ? boxW : UIScreen.main.bounds.width
+        let w = max(120, full - 32)
         let k = w / dim.width
         let h = dim.height * k
-        let cap: CGFloat = 240
+        // 大窗在 iPad 上能站到 300 出头，上限放到 320；iPhone 本来就到不了这一档。
+        let cap: CGFloat = min(320, UIScreen.main.bounds.height * 0.34)
         if h > cap {                       // 只有特别矮的屏才会走到这里
             let k2 = cap / dim.height
             return (dim.width * k2, cap, k2)
@@ -339,7 +357,8 @@ struct SubtitleSettingsView: View {
             .offset(y: -target + pad)
             .frame(width: width, height: height, alignment: .topLeading)
             .clipped()
-            .animation(.easeOut(duration: 0.22), value: target)
+            // 0.42s ease-out：跟真窗口那条 kZKRowRollDuration 的整行上推是同一个时长和曲线
+            .animation(.easeOut(duration: 0.42), value: target)
     }
 
     /// 屏幕上该显示的那一段：整段里扣掉尾巴还没长出来的。
@@ -350,11 +369,22 @@ struct SubtitleSettingsView: View {
         return s.substring(with: NSRange(location: 0, length: min(to, n)))
     }
 
+    /// 上推档的字号：双语时真窗口会按格高把主字号压下来（一格要站一行译文 + 一行原文），
+    /// 不然大窗站 5 行时原文那行会溢出到下一格。预览必须压得一模一样，否则两边看着就不一样。
+    private func rollingFonts(_ m: (w: CGFloat, h: CGFloat, k: CGFloat)) -> (zh: CGFloat, src: CGFloat) {
+        let f = previewFonts(k: m.k)
+        guard app.prefs.mode == "bilingual" else { return f }
+        let slot = slotHeight(m)
+        let maxFont = max(12, (slot - 6) / 2)
+        if f.zh > maxFont { return (maxFont, maxFont * 0.66) }
+        return f
+    }
+
     /// 中档 / 大档 · 上推：一行一句，新句从底下进来，整列被它顶着往上一格。
     /// 行高按窗口均分（见 slotHeight）——整列铺满，顶上不会留那一截空白。
     /// 动画用 ease-out（跟真窗口那条逐帧插值一个手感），不再带淡入：闪一下也叫卡。
     private func rollingPreview(_ m: (w: CGFloat, h: CGFloat, k: CGFloat)) -> some View {
-        let f = previewFonts(k: m.k)
+        let f = rollingFonts(m)
         let single = app.prefs.mode != "bilingual"
         let slot = slotHeight(m)
         let gap = max(2, m.h * 0.012)
@@ -403,14 +433,15 @@ struct SubtitleSettingsView: View {
     }
 
     /// 这块窗口站几行：跟真窗口（ZKRowStack.recalcMetrics）用的是同一套算法。
-    /// 双语：中窗 3 行、大窗 4 行，格高由窗口均分，整列铺满——所以顶上不会有那截空白。
+    /// 双语：中窗 3 行（3 行原文 + 3 行译文）、大窗 5 行（5 行原文 + 5 行译文），
+    /// 格高由窗口均分，整列铺满——所以顶上不会有那截空白。
     /// 只显一种语言时字大，按高度放宽。
     private var visibleRows: Int {
         let m = metrics
         let f = previewFonts(k: m.k)
         let inset = max(4, m.h * 0.03)
         if app.prefs.mode == "bilingual" {
-            return app.prefs.pip == "M" ? 3 : 4
+            return app.prefs.pip == "M" ? 3 : 5
         }
         let n = Int((m.h - inset * 2) / max(1, f.zh * 1.5))
         return min(6, max(2, n))
