@@ -37,9 +37,9 @@ struct SubtitlePrefs: Codable, Equatable {
     /// 收音模式：system = 内部收音（系统声音，跟别的 App 播放的声音走）
     ///           mic    = 麦克风收音（跟现场说话走）
     var audioSource: String = "system"
-    /// 滚动方式（小窗）：up 上推 | push 横向推（新句把老句往左顶）
+    /// 滚动方式（小窗）：up 叠化（新旧两批交叉淡入淡出）| cut 上切（整批向上切走，新的从下面进来）
     var scrollX: String = "up"
-    /// 滚动方式（中窗/大窗）：up 上推 | segment 分段（上半译文、下半原文）
+    /// 滚动方式（中窗/大窗）：up 上推（整列上移一格）| segment 逐字（上下两块连续文本，打字机出字，满了整块上推一行）
     var scrollMB: String = "up"
 
     /// 当前窗口档真正生效的滚动方式
@@ -49,8 +49,8 @@ struct SubtitlePrefs: Codable, Equatable {
     }
 
     static func scrollOptions(_ pip: String) -> [(String, String)] {
-        pip == "X" ? [("up", "上推"), ("push", "横推")]
-                   : [("up", "上推"), ("segment", "分段")]
+        pip == "X" ? [("up", "叠化"), ("cut", "上切")]
+                   : [("up", "上推"), ("segment", "逐字")]
     }
 
     static let key = "zt_subtitle_prefs_v6"
@@ -78,7 +78,8 @@ struct SubtitlePrefs: Codable, Equatable {
         audioSource = try c.decodeIfPresent(String.self, forKey: .audioSource) ?? d.audioSource
         scrollX = try c.decodeIfPresent(String.self, forKey: .scrollX) ?? d.scrollX
         scrollMB = try c.decodeIfPresent(String.self, forKey: .scrollMB) ?? d.scrollMB
-        if !["up", "push"].contains(scrollX) { scrollX = "up" }
+        if scrollX == "push" { scrollX = "cut" }        // 老存档里的「横推」并到「上切」
+        if !["up", "cut"].contains(scrollX) { scrollX = "up" }
         if !["up", "segment"].contains(scrollMB) { scrollMB = "up" }
 
         // 三档的新代码是 X / M / B（以前没用过），老存档的老代码在这里映射一次，
@@ -197,7 +198,11 @@ struct SubtitlePrefs: Codable, Equatable {
         if let v = dict["source_lang"] as? String { p.sourceLang = v }
         if let v = dict["dest_lang"] as? String { p.destLang = v }
         if let v = dict["audio_source"] as? String, ["system", "mic"].contains(v) { p.audioSource = v }
-        if let v = dict["scroll_x"] as? String, ["up", "push"].contains(v) { p.scrollX = v }
+        if let v = dict["scroll_x"] as? String {
+            // 老账号云端存的「横推」并到「上切」
+            p.scrollX = (v == "push") ? "cut" : v
+            if !["up", "cut"].contains(p.scrollX) { p.scrollX = "up" }
+        }
         if let v = dict["scroll_mb"] as? String, ["up", "segment"].contains(v) { p.scrollMB = v }
         return p
     }
