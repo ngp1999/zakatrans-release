@@ -22,20 +22,15 @@ struct LoginView: View {
                         .scaledToFit()
                         .frame(width: 92, height: 92)
                         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                                .strokeBorder(Color.white.opacity(0.35), lineWidth: 1)
-                        )
-                        .shadow(color: Theme.accent.opacity(0.30), radius: 26, x: 0, y: 14)
 
                     VStack(spacing: 6) {
                         Text("语幕")
-                            .font(.system(size: 30, weight: .semibold))
+                            .font(.largeTitle.weight(.semibold))
                             .tracking(3)
-                            .foregroundStyle(Theme.ink)
+                            .foregroundStyle(DSColor.label)
                         Text("实时字幕　同声传译")
-                            .font(.system(size: 15))
-                            .foregroundStyle(Theme.sub)
+                            .font(.subheadline)
+                            .foregroundStyle(DSColor.secondaryLabel)
                     }
                     .padding(.top, 6)
                 }
@@ -49,8 +44,8 @@ struct LoginView: View {
 
                     if let e = error ?? apple.error {
                         Text(e)
-                            .font(.system(size: 13))
-                            .foregroundStyle(Theme.warn)
+                            .font(.footnote)
+                            .foregroundStyle(DSColor.destructive)
                             .multilineTextAlignment(.center)
                     }
 
@@ -60,16 +55,12 @@ struct LoginView: View {
                         Text(" 与 ")
                         Button("《隐私政策》") { terms = .privacy }
                     }
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.faint)
+                    .font(.caption)
+                    .foregroundStyle(DSColor.tertiaryLabel)
                     .buttonStyle(.plain)
                 }
-                // 底部这一块单独浮成一张玻璃卡：登录按钮和协议是一个整体，跟上面的品牌区分开
-                .padding(.horizontal, 20)
-                .padding(.vertical, 18)
-                .glassSurface(radius: 26, material: .ultraThinMaterial)
-                .padding(.horizontal, 24)
-                .padding(.bottom, 28)
+                .padding(.horizontal, DSSpace.xxl)
+                .padding(.bottom, DSSpace.xxl)
             }
         }
         .sheet(item: $terms) { kind in
@@ -112,7 +103,7 @@ struct AppleSignInButton: UIViewRepresentable {
 
     func makeUIView(context: Context) -> ASAuthorizationAppleIDButton {
         let b = ASAuthorizationAppleIDButton(type: .signIn, style: .black)
-        b.cornerRadius = 16
+        b.cornerRadius = DSRadius.button
         b.addTarget(context.coordinator, action: #selector(Coordinator.tap), for: .touchUpInside)
         return b
     }
