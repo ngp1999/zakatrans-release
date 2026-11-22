@@ -348,10 +348,15 @@ struct InterpreterView: View {
         .foregroundStyle(canceling ? Color.white : DSColor.secondaryLabel)
         .padding(.horizontal, DSSpace.s)
         .frame(height: 28)
-        .background(
-            Capsule(style: .continuous)
-                .fill(canceling ? AnyShapeStyle(DSColor.destructive) : AnyShapeStyle(Material.thinMaterial))
-        )
+        .background {
+            if canceling {
+                Capsule(style: .continuous).fill(DSColor.destructive)
+            } else {
+                Rectangle()
+                    .fill(Color.clear)
+                    .dsGlass(radius: 14, material: .thinMaterial)
+            }
+        }
         .offset(y: -36)
         .opacity(holding ? 1 : 0)
         .scaleEffect(holding ? 1 : 0.92, anchor: .bottom)
