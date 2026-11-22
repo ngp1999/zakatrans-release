@@ -20,12 +20,27 @@ struct HistoryView: View {
                         NavigationLink(destination: SessionDetailView(session: s)) {
                             row(s)
                         }
+                        .listRowInsets(EdgeInsets(top: 10, leading: 18, bottom: 10, trailing: 18))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                .fill(.thinMaterial)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                        .strokeBorder(Color.white.opacity(0.32), lineWidth: 0.8)
+                                )
+                                .padding(.vertical, 5)
+                                .padding(.horizontal, 2)
+                        )
                     }
                 }
                 .listStyle(.plain)
+                // 列表自己那层不透明底要关掉，否则底下的环境色和材质都透不上来
+                .scrollContentBackground(.hidden)
             }
         }
-        .background(Theme.bg)
+        .screenBackground()
+        .glassNavigationBar()
         .navigationTitle("对话记录")
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await load() }
@@ -153,7 +168,8 @@ struct SessionDetailView: View {
             .padding(.top, 8)
             .padding(.bottom, 28)
         }
-        .background(Theme.bg)
+        .screenBackground()
+        .glassNavigationBar()
         .navigationTitle("对话详情")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -406,7 +422,7 @@ struct SubtitleExportView: View {
 
             Spacer(minLength: 0)
         }
-        .background(Theme.bg)
+        .background(.regularMaterial)
         .onPreferenceChange(ExportSheetHeight.self) { h in
             guard h > 40 else { return }
             // 内容 + 自己这条标题栏 + 底部安全区，就是面板该有的高度。
