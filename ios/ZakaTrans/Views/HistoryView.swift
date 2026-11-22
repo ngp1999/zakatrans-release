@@ -333,64 +333,93 @@ struct SubtitleExportView: View {
     @State private var format = "srt"
     @State private var content = "both"
     @State private var fileURL: URL?
+    @State private var sheetH: CGFloat = 400
 
     private let formats = [("srt", "SRT 字幕"), ("txt", "TXT 文本")]
     private let contents = [("source", "原文"), ("trans", "译文"), ("both", "双语")]
 
-    @Environment(\.dismiss) private var dismiss
-
     var body: some View {
-        NavigationStack {
-            List {
-                Section {
+        VStack(spacing: 0) {
+            header
+            // 这里以前是个 ScrollView：面板高度已经按内容算好了，再套一层滚动容器，
+            // 系统会自己再加一道底部安全区的 inset，底下凭空多出一截空白。
+            // 导出面板就四行东西，直接铺开，不用滚。
+            VStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("格式")
+                        .font(.footnote)
+                        .foregroundStyle(DSColor.secondaryLabel)
                     Picker("格式", selection: $format) {
                         ForEach(formats, id: \.0) { Text($0.1).tag($0.0) }
                     }
                     .pickerStyle(.segmented)
-                    .listRowBackground(DSColor.cell)
-                } header: {
-                    Text("格式")
                 }
+                .card(padding: 14)
 
-                Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("内容")
+                        .font(.footnote)
+                        .foregroundStyle(DSColor.secondaryLabel)
                     Picker("内容", selection: $content) {
                         ForEach(contents, id: \.0) { Text($0.1).tag($0.0) }
                     }
                     .pickerStyle(.segmented)
-                    .listRowBackground(DSColor.cell)
-                } header: {
-                    Text("内容")
                 }
+                .card(padding: 14)
 
-                Section {
-                    if let url = fileURL {
-                        ShareLink(item: url) {
-                            Label("保存或分享", systemImage: "square.and.arrow.up")
-                        }
-                        .listRowBackground(DSColor.cell)
-                    } else {
-                        Text("没有可导出的内容")
-                            .foregroundStyle(DSColor.secondaryLabel)
-                            .listRowBackground(DSColor.cell)
+                Text("共 \(lines.count) 句 · 时长 \(session.durationText) · 文件名 \(fileName)")
+                    .font(.caption)
+                    .foregroundStyle(DSColor.tertiaryLabel)
+                    .multilineTextAlignment(.center)
+
+                if let url = fileURL {
+                    ShareLink(item: url) {
+                        Label("保存 / 分享", systemImage: "square.and.arrow.up")
+                            .frame(maxWidth: .infinity)
                     }
-                } footer: {
-                    Text("共 \(lines.count) 句 · 时长 \(session.durationText) · 文件名 \(fileName)")
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                } else {
+                    Text("没有可导出的内容")
+                        .font(.subheadline)
+                        .foregroundStyle(DSColor.secondaryLabel)
                 }
             }
-            .listStyle(.insetGrouped)
-            .navigationTitle("导出字幕")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") { dismiss() }
+            .padding(.horizontal, 16)
+            .padding(.top, 6)
+            .padding(.bottom, 10)
+            .background(
+                GeometryReader { g in
+                    Color.clear.preference(key: ExportSheetHeight.self, value: g.size.height)
                 }
-            }
+            )
+
+            Spacer(minLength: 0)
         }
-        .presentationDetents([.medium])
-        .presentationDragIndicator(.visible)
+        .background(DSColor.groupedBackground)
+        .onPreferenceChange(ExportSheetHeight.self) { h in
+            guard h > 40 else { return }
+            // 内容 + 自己这条标题栏 + 底部安全区，就是面板该有的高度。
+            let want = h + 40 + SafeArea.bottom
+            sheetH = min(UIScreen.main.bounds.height * 0.92, want)
+        }
         .onAppear { rebuild() }
         .onChange(of: format) { _ in rebuild() }
         .onChange(of: content) { _ in rebuild() }
+        .presentationDetents([.height(sheetH)])
+        // 面板顶上那条小横杠不要：这个面板是按内容定高的，本来就没有可拖拽的余地，
+        // 挂一条横杠只会让人以为还能往上拉。
+        .presentationDragIndicator(.hidden)
+    }
+
+    /// 自己画一条标题栏，不套导航栏：导航栏自带一层高度和安全区，面板会虚高一截。
+    /// 也不放「完成」按钮：面板高度就是内容高度，选完直接下滑走人。
+    private var header: some View {
+        Text("导出字幕")
+            .font(DSFont.headline)
+            .foregroundStyle(DSColor.label)
+            .frame(maxWidth: .infinity)
+            .frame(height: 40)
     }
 
     private var fileName: String {
@@ -464,5 +493,24 @@ struct SubtitleExportView: View {
         let s = total % 60
         let ms = Int(((t - floor(t)) * 1000).rounded())
         return String(format: "%02d:%02d:%02d,%03d", h, m, s, ms)
+    }
+}
+
+/// 导出面板量高：内容多高，面板就多高。
+private struct ExportSheetHeight: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+/// 内容比屏幕矮时不要回弹（iOS 16.4 才有 scrollBounceBehavior，这里按可用性降级）。
+private struct HugScroll: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 16.4, *) {
+            content.scrollBounceBehavior(.basedOnSize)
+        } else {
+            content
+        }
     }
 }
