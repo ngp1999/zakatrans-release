@@ -36,6 +36,10 @@ typedef NS_ENUM(NSInteger, ZKLineKind) {
 
 // a:我的语言（如 zh-CN），b:对方的语言（如 en-US）
 - (void)startWith:(NSString *)a other:(NSString *)b;
+
+/// 预热：进这个页面就把两条识别通道握上手，麦克风不动。
+/// 按下开始时 startWith:other: 会直接接着用这两条，省掉每次几百毫秒的建连。
+- (void)prewarmWith:(NSString *)a other:(NSString *)b;
 - (void)stop;
 
 // 交换两边语言，不用重开
