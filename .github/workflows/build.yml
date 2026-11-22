@@ -97,7 +97,7 @@ jobs:
           FILE_MV="$(sed -n 's/.*MARKETING_VERSION: "\(.*\)".*/\1/p' ios/project.yml | head -1)"
           MV_FINAL="${MV:-$FILE_MV}"
           if [ "$(printf '%s\n%s\n' "$MV_FINAL" "$FILE_MV" | sort -V | tail -1)" != "$MV_FINAL" ]; then
-            echo "⚠️ 传入版本 $MV_FINAL 低于 project.yml 的 $FILE_MV，改用 $FILE_MV"
+            echo "⚠️ 传入版本号 ${MV_FINAL} 低于 project.yml 的 ${FILE_MV}，改用 ${FILE_MV}"
             MV_FINAL="$FILE_MV"
           fi
           echo "📦 本次构建版本号 = $MV_FINAL"
