@@ -34,10 +34,13 @@ struct CreditView: View {
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button("使用明细") {
+                Button {
                     Haptics.tap()
                     showUsage = true
+                } label: {
+                    Image(systemName: "list.bullet.rectangle")
                 }
+                .accessibilityLabel("使用明细")
             }
         }
         .navigationDestination(isPresented: $showUsage) {
