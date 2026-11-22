@@ -9,12 +9,12 @@ struct SubtitleSettingsView: View {
     /// 预览里正在往上滚的那几行（中档 / 大档）
     @State private var feed: [PreviewLine] = []
     @State private var ticker: Timer?
-    /// 分段档的打字机（跟真窗口同一个速度：中文 22 字/秒、原文 52 字符/秒）
+    /// 逐字档的打字机（跟真窗口同一个速度：中文 22 字/秒、原文 52 字符/秒）
     @State private var typer: Timer?
-    /// 分段档的两块连续文本：上面一整段译文、下面一整段原文（跟画中画里同一条算法）
+    /// 逐字档的两块连续文本：上面一整段译文、下面一整段原文（跟画中画里同一条算法）
     @State private var segZh = TypeBlock()
     @State private var segSrc = TypeBlock()
-    /// 分段档自己往下接的句子下标
+    /// 逐字档自己往下接的句子下标
     @State private var segIndex = 0
     /// 小档（5:1）：一次上一批，整批换
     @State private var wideIndex = 0
@@ -25,16 +25,15 @@ struct SubtitleSettingsView: View {
         let id = UUID()
         let zh: String
         let src: String
-        /// 分段（打字机）用：这一行已经露出几个字。Int.max = 全显示
+        /// 逐字（打字机）用：这一行已经露出几个字。Int.max = 全显示
         var zhShown: Int = Int.max
         var srcShown: Int = Int.max
     }
 
-    /// 分段档的一整段文本：full 是攒下来的全文，trim 是头顶被顶掉的字数，
-    /// pending 是尾巴上还没露出来的字数。三个数一减就是屏幕上该显示的那一段。
+    /// 一整段文本：full 是攒下来的全文，pending 是尾巴上还没长出来的字数。
     private struct TypeBlock: Equatable {
         var full = ""
-        var trim = 0
+        /// 尾巴上还没长出来的字数（打字机用）
         var pending: CGFloat = 0
     }
 
@@ -211,7 +210,7 @@ struct SubtitleSettingsView: View {
         return ZStack {
             app.prefs.backgroundColor
             if app.prefs.pip == "X" {
-                if app.prefs.scroll == "push" { widePushPreview(m) } else { widePreview(m) }
+                if app.prefs.scroll == "cut" { wideCutPreview(m) } else { widePreview(m) }
             } else {
                 if app.prefs.scroll == "segment" { segmentPreview(m) } else { rollingPreview(m) }
             }
@@ -255,41 +254,40 @@ struct SubtitleSettingsView: View {
         .transition(.opacity)
     }
 
-    /// 小档 · 横推：句子按先后排开、靠右对齐；新的一句从右边进来，
-    /// 老的一句被它顶着往左走——走的距离跟着这句长出来的宽度走，跟真实窗口里一致。
-    private func widePushPreview(_ m: (w: CGFloat, h: CGFloat, k: CGFloat)) -> some View {
+    /// 小档 · 上切：新的一批从下面整体顶上来，老的一批被切出画面顶端。
+    /// 跟真窗口（ZKWideView 的 cut 分支）同一个动作、同一个时长（0.24s）。
+    private func wideCutPreview(_ m: (w: CGFloat, h: CGFloat, k: CGFloat)) -> some View {
         let f = previewFonts(k: m.k)
-        let pf = f.zh * 0.74
-        let idxs = [wrap(wideIndex - 2), wrap(wideIndex - 1), wrap(wideIndex)]
-        let two = app.prefs.mode == "bilingual"
-        return HStack(alignment: .center, spacing: max(6, pf * 0.5)) {
-            ForEach(idxs, id: \.self) { i in
-                VStack(alignment: .leading, spacing: max(1, m.h * 0.02)) {
-                    if app.prefs.mode != "source" {
-                        Text(Self.samples[i].zh)
-                            .font(.system(size: pf, weight: .bold))
-                            .foregroundStyle(Color(uiColor: app.prefs.effectiveColor))
-                    }
-                    if app.prefs.mode != "zh" {
-                        Text(Self.samples[i].src)
-                            .font(.system(size: two ? pf * 0.68 : pf, weight: two ? .regular : .bold))
-                            .foregroundStyle(Color(uiColor: app.prefs.secondaryColor))
-                    }
-                }
-                .fixedSize(horizontal: true, vertical: false)
-                .transition(.asymmetric(insertion: .move(edge: .trailing),
-                                        removal: .move(edge: .leading).combined(with: .opacity)))
+        let a = Self.samples[wideIndex % Self.samples.count]
+        let one = app.prefs.mode != "bilingual"
+        return VStack(spacing: max(1, m.h * 0.06)) {
+            if app.prefs.mode != "source" {
+                Text(a.zh)
+                    .font(.system(size: f.zh, weight: .bold))
+                    .foregroundStyle(Color(uiColor: app.prefs.effectiveColor))
+                    .lineLimit(2)
+                    .minimumScaleFactor(1)
+                    .multilineTextAlignment(.center)
+            }
+            if app.prefs.mode != "zh" {
+                Text(a.src)
+                    .font(.system(size: one ? f.zh : f.src, weight: one ? .bold : .regular))
+                    .foregroundStyle(Color(uiColor: app.prefs.secondaryColor))
+                    .lineLimit(2)
+                    .minimumScaleFactor(1)
+                    .multilineTextAlignment(.center)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .trailing)
-        .frame(height: m.h)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         .padding(.horizontal, 6)
-        .clipped()
+        .id(wideIndex)
+        .transition(.asymmetric(insertion: .move(edge: .bottom),
+                                removal: .move(edge: .top)))
     }
 
-    /// 中/大档 · 分段：窗口分上下两块——上面一整段译文、下面一整段原文，各是一段连续文字。
-    /// 新句像打字机一样一个字一个字往后长；长满一屏之后**最上面那一行被顶掉**、其余重新排布，
-    /// 全程没有位移。真窗口（ZKSegmentView）用的是同一套算法，两边看到的一样。
+    /// 中/大档 · 逐字：窗口分上下两块——上面一整段译文、下面一整段原文，各是一段连续文字。
+    /// 字一个一个字长出来；一块写满之后，**整块向上推一行**，最上面那一行被切出画面。
+    /// 真窗口（ZKSegmentView）用的是同一套算法，两边看到的一样。
     private func segmentPreview(_ m: (w: CGFloat, h: CGFloat, k: CGFloat)) -> some View {
         let f = previewFonts(k: m.k)
         let two = app.prefs.mode == "bilingual"
@@ -298,25 +296,22 @@ struct SubtitleSettingsView: View {
         let avail = max(10, m.h - inset * 2 - midGap)
         let blockH = two ? (avail / 2).rounded(.down) : avail
         let padX = max(3, m.w * 0.016)
+        let bw = max(8, m.w - padX * 2)
         return VStack(alignment: .leading, spacing: 0) {
             if app.prefs.mode != "source" {
-                Text(segVisible(segZh))
-                    .font(.system(size: f.zh, weight: .bold))
-                    .foregroundStyle(Color(uiColor: app.prefs.effectiveColor))
-                    .lineSpacing(0)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .frame(height: blockH, alignment: .top)
-                    .clipped()
+                segBlock(segZh,
+                         font: .system(size: f.zh, weight: .bold),
+                         uiFont: .systemFont(ofSize: f.zh, weight: .bold),
+                         color: Color(uiColor: app.prefs.effectiveColor),
+                         width: bw, height: blockH)
             }
             if two { Color.clear.frame(height: midGap) }
             if app.prefs.mode != "zh" {
-                Text(segVisible(segSrc))
-                    .font(.system(size: two ? f.src : f.zh, weight: two ? .regular : .bold))
-                    .foregroundStyle(Color(uiColor: app.prefs.secondaryColor))
-                    .lineSpacing(0)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .frame(height: blockH, alignment: .top)
-                    .clipped()
+                segBlock(segSrc,
+                         font: .system(size: two ? f.src : f.zh, weight: two ? .regular : .bold),
+                         uiFont: two ? .systemFont(ofSize: f.src) : .systemFont(ofSize: f.zh, weight: .bold),
+                         color: Color(uiColor: app.prefs.secondaryColor),
+                         width: bw, height: blockH)
             }
             Spacer(minLength: 0)
         }
@@ -325,13 +320,34 @@ struct SubtitleSettingsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    /// 屏幕上该显示的那一段：整段里扣掉头顶被顶掉的、和尾巴还没长出来的。
+    /// 一块连续文本：整段排出来，写满就把整块往上挪一行。
+    /// 挪多少 = 内容高度 - 能站几行 × 行高，按行高取整，所以每次正好是一行。
+    private func segBlock(_ b: TypeBlock, font: Font, uiFont: UIFont,
+                          color: Color, width: CGFloat, height: CGFloat) -> some View {
+        let text = segVisible(b)
+        let h = SegType.height(text as NSString, font: uiFont, width: width)
+        let lineH = ceil(uiFont.lineHeight)
+        let lines = max(1, Int(floor((height + 0.5) / lineH)))
+        let target = max(0, h - CGFloat(lines) * lineH)
+        // 块高不是行高整数倍时，这一点余量补在底下，最新一行贴着块底
+        let pad = target > 0.5 ? max(0, height - CGFloat(lines) * lineH) : 0
+        return Text(text)
+            .font(font)
+            .foregroundStyle(color)
+            .lineSpacing(0)
+            .frame(width: width, height: max(h, lineH), alignment: .topLeading)
+            .offset(y: -target + pad)
+            .frame(width: width, height: height, alignment: .topLeading)
+            .clipped()
+            .animation(.easeOut(duration: 0.22), value: target)
+    }
+
+    /// 屏幕上该显示的那一段：整段里扣掉尾巴还没长出来的。
     private func segVisible(_ b: TypeBlock) -> String {
         let s = b.full as NSString
         let n = s.length
-        let from = min(max(0, b.trim), n)
-        let to = max(from, n - Int(b.pending.rounded(.down)))
-        return s.substring(with: NSRange(location: from, length: to - from))
+        let to = max(0, n - Int(b.pending.rounded(.down)))
+        return s.substring(with: NSRange(location: 0, length: min(to, n)))
     }
 
     /// 中档 / 大档 · 上推：一行一句，新句从底下进来，整列被它顶着往上一格。
@@ -426,7 +442,6 @@ struct SubtitleSettingsView: View {
         segIndex = 0
         seedSeg()
         seedSeg()
-        retrimBlocks()
         let t = Timer.scheduledTimer(withTimeInterval: 2.7, repeats: true) { _ in
             advance()
         }
@@ -436,8 +451,13 @@ struct SubtitleSettingsView: View {
 
     private func advance() {
         if app.prefs.pip == "X" {
-            // 小窗：交叉淡入淡出，跟真窗口同一个时长（0.30s）
-            withAnimation(.easeInOut(duration: 0.30)) { wideIndex += 1 }
+            // 小窗：叠化 0.30s（新旧交叉淡入淡出）／上切 0.24s（新一批从下顶上来），
+            // 时长跟真窗口一致
+            if app.prefs.scroll == "cut" {
+                withAnimation(.easeOut(duration: 0.24)) { wideIndex += 1 }
+            } else {
+                withAnimation(.easeInOut(duration: 0.30)) { wideIndex += 1 }
+            }
             return
         }
         if app.prefs.scroll == "segment" {
@@ -453,7 +473,7 @@ struct SubtitleSettingsView: View {
         }
     }
 
-    // MARK: - 分段（打字机）
+    // MARK: - 逐字（打字机）
 
     /// 往两段文本的尾巴上接一句，不设位移——字是自己长出来的。
     private func segJoin(_ buf: String, _ s: String) -> String {
@@ -485,7 +505,7 @@ struct SubtitleSettingsView: View {
         startTyping()
     }
 
-    /// 分段档打字机：译文 22 字/秒、原文 52 字符/秒，落后了会自动快一点（是变速，不是跳字）。
+    /// 逐字档打字机：译文 22 字/秒、原文 52 字符/秒，落后了会自动快一点（是变速，不是跳字）。
     private func startTyping() {
         if typer != nil { return }
         let t = Timer(timeInterval: 0.05, repeats: true) { timer in
@@ -512,7 +532,6 @@ struct SubtitleSettingsView: View {
             if changed {
                 segZh = z
                 segSrc = r
-                retrimBlocks()
             }
             if z.pending <= 0 && r.pending <= 0 {
                 timer.invalidate()
@@ -523,37 +542,13 @@ struct SubtitleSettingsView: View {
         typer = t
     }
 
-    /// 裁头顶：块高、字号、左右留白都跟真窗口同一套算法（ZKSegmentView.render）。
-    private func retrimBlocks() {
-        let m = metrics
-        let f = previewFonts(k: m.k)
-        let two = app.prefs.mode == "bilingual"
-        let inset = max(4, m.h * 0.03)
-        let midGap = two ? max(3, f.zh * 0.30) : 0
-        let avail = max(10, m.h - inset * 2 - midGap)
-        let blockH = two ? (avail / 2).rounded(.down) : avail
-        let bw = max(8, m.w - 2 * max(3, m.w * 0.016))
-        if app.prefs.mode != "source" {
-            let cut = SegType.trimCount(segVisible(segZh) as NSString,
-                                        font: .systemFont(ofSize: f.zh, weight: .bold),
-                                        width: bw, boxH: blockH)
-            if cut > 0 { segZh.trim += cut }
-        }
-        if app.prefs.mode != "zh" {
-            let font: UIFont = two ? .systemFont(ofSize: f.src) : .systemFont(ofSize: f.zh, weight: .bold)
-            let cut = SegType.trimCount(segVisible(segSrc) as NSString, font: font, width: bw, boxH: blockH)
-            if cut > 0 { segSrc.trim += cut }
-        }
-    }
-
-    /// 换到分段档、或者换档之后，块里没东西就垫两句，别让预览空着
+    /// 换到逐字档、或者换档之后，块里没东西就垫两句，别让预览空着
     private func ensureSegSeed() {
         guard app.prefs.scroll == "segment", app.prefs.pip != "X" else { return }
         if segZh.full.isEmpty && segSrc.full.isEmpty {
             seedSeg()
             seedSeg()
         }
-        retrimBlocks()
         startTyping()
     }
 
@@ -715,7 +710,7 @@ struct SubtitleSettingsView: View {
                         }
                     }
                 )) {
-                    // 选项跟着浮窗档位走：小窗是「上推 / 横推」，中窗大窗是「上推 / 分段」
+                    // 选项跟着浮窗档位走：小窗是「叠化 / 上切」，中窗大窗是「上推 / 逐字」
                     ForEach(SubtitlePrefs.scrollOptions(app.prefs.pip), id: \.0) { opt in
                         Text(opt.1).tag(opt.0)
                     }
