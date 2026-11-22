@@ -5,7 +5,8 @@ import UIKit
 ///
 /// 「我的积分」和充值弹窗共用这一块。顺序按用户习惯来：
 /// 先选档位（卡片只选中、不付款）→ 按「立即充值」→ 协议勾在按钮下面。
-/// 页面上不放任何说明性小字，只在没勾协议时给一句提醒。
+/// 三样东西放在同一组里，点击顺序从上往下一条线，中间不隔大段空白。
+/// 页面上不放任何说明性小字；没勾协议就点充值，弹系统确认框。
 struct CreditPurchaseSection: View {
     @ObservedObject private var purch = Purchases.shared
 
@@ -13,87 +14,115 @@ struct CreditPurchaseSection: View {
     @State private var agreed = false
     @State private var hint: String?
     @State private var showTerms = false
+    /// 没勾协议就点了「立即充值」：先弹确认，同意后自动勾上再下单
+    @State private var askAgree = false
 
     private let haptic = UINotificationFeedbackGenerator()
 
     var body: some View {
-        Group {
-            Section {
-                ForEach(Purchases.shown, id: \.id) { item in
-                    card(item)
-                        .onTapGesture { pick(item.id) }
-                        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
-                }
-            } header: {
-                Text("选择充值档位")
+        Section {
+            ForEach(Purchases.shown, id: \.id) { item in
+                card(item)
+                    .onTapGesture { pick(item.id) }
+                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
             }
 
-            Section {
-                Button(action: recharge) {
-                    Text(purch.busy ? "正在处理…" : "立即充值")
-                        .font(.body.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 2)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(DSColor.accentFill)
-                .controlSize(.large)
-                .disabled(purch.busy || selectedId == nil)
-                .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+            Button(action: recharge) {
+                Text(purch.busy ? "正在处理…" : "立即充值")
+                    .font(.body.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 2)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(DSColor.accentFill)
+            .controlSize(.large)
+            .disabled(purch.busy || selectedId == nil)
+            .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 4, trailing: 16))
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+
+            agreementRow
+                .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 2, trailing: 16))
+                .listRowSeparator(.hidden)
                 .listRowBackground(Color.clear)
-            }
 
-            Section {
-                HStack(spacing: DSSpace.s) {
-                    Button {
-                        toggleAgree()
-                    } label: {
-                        HStack(spacing: DSSpace.s) {
-                            Image(systemName: agreed ? "checkmark.circle.fill" : "circle")
-                                .font(.system(size: 21))
-                                .foregroundStyle(agreed ? DSColor.accent : DSColor.tertiaryLabel)
-                            Text("我已阅读并同意")
-                                .font(DSFont.body)
-                                .foregroundStyle(DSColor.label)
-                            Spacer(minLength: 0)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-
-                    Button {
-                        showTerms = true
-                    } label: {
-                        Text("《付费协议》")
-                            .font(DSFont.body)
-                            .foregroundStyle(DSColor.accent)
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                if let hint {
-                    Text(hint)
-                        .font(DSFont.footnote)
-                        .foregroundStyle(DSColor.destructive)
-                }
+            if let hint {
+                Text(hint)
+                    .font(DSFont.footnote)
+                    .foregroundStyle(DSColor.destructive)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 6, trailing: 16))
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
             }
 
             if let m = purch.message {
-                Section {
-                    Text(m)
-                        .font(DSFont.footnote)
-                        .foregroundStyle(
-                            (m.contains("失败") || m.contains("未通过"))
-                            ? DSColor.destructive : DSColor.secondaryLabel
-                        )
-                }
+                Text(m)
+                    .font(DSFont.footnote)
+                    .foregroundStyle(
+                        (m.contains("失败") || m.contains("未通过"))
+                        ? DSColor.destructive : DSColor.secondaryLabel
+                    )
+                    .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 6, trailing: 16))
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
             }
+        } header: {
+            Text("选择充值档位")
         }
         .navigationDestination(isPresented: $showTerms) {
             TermsView(kind: .payment)
         }
+        .alert("购买前请确认", isPresented: $askAgree) {
+            Button("取消", role: .cancel) {}
+            Button("同意并购买") {
+                agreed = true
+                hint = nil
+                guard let id = selectedId, purch.available(id) else { return }
+                Task { await purch.buy(id: id) }
+            }
+        } message: {
+            Text("购买积分需先阅读并同意《付费协议》。积分按实际用量扣除，充值通过 App Store 内购完成，退款按 Apple 规则处理。")
+        }
+    }
+
+    // MARK: - 协议行
+
+    /// 一行小字：圆形勾选 +「我已阅读并同意」+ 可点的《付费协议》。
+    /// 字号比正文小一档，紧贴充值按钮下面，不占高度。
+    private var agreementRow: some View {
+        HStack(spacing: 6) {
+            Button {
+                toggleAgree()
+            } label: {
+                Image(systemName: agreed ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 17))
+                    .foregroundStyle(agreed ? DSColor.accent : DSColor.tertiaryLabel)
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                toggleAgree()
+            } label: {
+                Text("我已阅读并同意")
+                    .font(DSFont.footnote)
+                    .foregroundStyle(DSColor.secondaryLabel)
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                showTerms = true
+            } label: {
+                Text("《付费协议》")
+                    .font(DSFont.footnote)
+                    .foregroundStyle(DSColor.accent)
+            }
+            .buttonStyle(.plain)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 2)
     }
 
     // MARK: - 档位卡片
@@ -122,7 +151,7 @@ struct CreditPurchaseSection: View {
         }
         guard agreed else {
             haptic.notificationOccurred(.warning)
-            withAnimation(DSMotion.quick) { hint = "请先勾选《付费协议》" }
+            askAgree = true
             return
         }
         hint = nil
