@@ -227,10 +227,11 @@ struct SubtitleSettingsView: View {
     }
 
     /// 双语字号：跟画中画里的 recalcMetrics 是同一套算法（那边改了这里必须一起改）。
-    /// 一格要站「一行译文 + 一行原文」：站得下就抬到刚好填满，站不下就压到刚好放下。
+    /// 一格要站「一行译文 + 一行原文」：字号取「能站得下的最大值」，把格子的上下留白吃干净。
+    /// 用户设定的档位决定窗口尺寸本身（尺寸变了格子跟着变），字号不再单独压一层——
+    /// 之前这里拿档位换算的字号当上限，结果中窗一直停在 46pt，上下各留一大条白边。
     static func slotFont(dim: CGSize, rows: Int, zhBase: CGFloat) -> CGFloat {
-        let scale = max(0.45, min(2.10, sqrt((dim.width * dim.height) / (480.0 * 360.0))))
-        let base = max(12.0, min(74.0, zhBase * scale * 1.35))
+        _ = zhBase
         let inset = max(4.0, dim.height * 0.03)
         let gap = max(2.0, dim.height * 0.012)
         let slotH = max(10.0, (dim.height - inset * 2 - CGFloat(rows - 1) * gap) / CGFloat(rows))
