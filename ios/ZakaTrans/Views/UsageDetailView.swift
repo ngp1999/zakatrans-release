@@ -31,35 +31,18 @@ struct UsageDetailView: View {
             } else if items.isEmpty {
                 emptyState
             } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 10) {
-                        ForEach(sections, id: \.day) { sec in
-                            Text(Self.dayText(sec.day))
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(Theme.sub)
-                                .padding(.leading, 4)
-                                .padding(.top, 6)
-                            VStack(spacing: 0) {
-                                ForEach(Array(sec.rows.enumerated()), id: \.element.id) { idx, it in
-                                    row(it)
-                                    if idx < sec.rows.count - 1 {
-                                        Divider()
-                                            .overlay(Theme.hairline)
-                                            .padding(.leading, 16)
-                                    }
-                                }
+                List {
+                    ForEach(sections, id: \.day) { sec in
+                        Section(Self.dayText(sec.day)) {
+                            ForEach(sec.rows) { it in
+                                row(it)
                             }
-                            .glassSurface(radius: Theme.radius, material: .thinMaterial, elevated: false)
                         }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
-                    .padding(.bottom, 28)
                 }
+                .listStyle(.insetGrouped)
             }
         }
-        .screenBackground()
-        .glassNavigationBar()
         .navigationTitle("使用明细")
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await load() }
@@ -67,41 +50,40 @@ struct UsageDetailView: View {
     }
 
     private func row(_ it: Cloud.LedgerItem) -> some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .center, spacing: DSSpace.s) {
+            VStack(alignment: .leading, spacing: DSSpace.xxs) {
                 Text(it.title)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(Theme.ink)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(DSColor.label)
                     .lineLimit(1)
                 Text(Self.timeText(it.at))
-                    .font(.system(size: 12).monospacedDigit())
-                    .foregroundStyle(Theme.faint)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(DSColor.tertiaryLabel)
             }
-            Spacer(minLength: 8)
-            VStack(alignment: .trailing, spacing: 4) {
+            Spacer(minLength: DSSpace.xs)
+            VStack(alignment: .trailing, spacing: DSSpace.xxs) {
                 Text(it.creditsText)
-                    .font(.system(size: 15, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(it.isIncome ? Theme.accent : Theme.ink)
+                    .font(.subheadline.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(it.isIncome ? DSColor.accent : DSColor.label)
                     .lineLimit(1)
                 Text("余额 " + Format.credits(it.balanceCredits))
-                    .font(.system(size: 11).monospacedDigit())
-                    .foregroundStyle(Theme.faint)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(DSColor.tertiaryLabel)
                     .lineLimit(1)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 13)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, DSSpace.xxs)
     }
 
     private var emptyState: some View {
         VStack(spacing: 12) {
             Image(systemName: "list.bullet.rectangle")
                 .font(.system(size: 38, weight: .light))
-                .foregroundStyle(Theme.faint)
+                .foregroundStyle(DSColor.tertiaryLabel)
             Text("还没有使用记录")
-                .font(.system(size: 15))
-                .foregroundStyle(Theme.sub)
+                .font(.subheadline)
+                .foregroundStyle(DSColor.secondaryLabel)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
