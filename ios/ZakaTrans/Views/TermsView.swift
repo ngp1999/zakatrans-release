@@ -47,7 +47,7 @@ struct TermsView: View {
             .padding(.top, 10)
             .padding(.bottom, 32)
         }
-        .background(Theme.bg)
+        .screenBackground()
         .navigationBarTitleDisplayMode(.inline)
     }
 
