@@ -17,17 +17,30 @@ enum DSMaterial {
 
 /// 浮层的玻璃底。
 ///
-/// 这里只用系统材质，不手写 `glassEffect`：
-///   · 部署目标是 iOS 16，`glassEffect` 是 iOS 26 才有的符号，强写会让低版本 SDK 直接编不过
-///   · 更重要的是：iOS 26 上系统控件（TabView、导航栏、Sheet、List）会自动呈现新的液态玻璃外观，
-///     用系统控件本身就能拿到，不需要给每个浮层手写一遍
-///   · 手写玻璃再叠材质，两层透明度撞在一起会发浑，反而是「AI 味」的来源
+/// iOS 26 上用官方的 Liquid Glass（`.glassEffect`），私钥式的高光、折射、边缘反光由系统算，
+/// 比任何手绘描边+投影都准；iOS 16~18 退回系统材质 `.regularMaterial`，
+/// 这也是 Apple 自己在那些版本上用的玻璃，观感天然一致。
+///
+/// 注意：绝大多数地方不需要手动调用它。TabView、导航栏、工具栏按钮、Sheet、List
+/// 在 iOS 26 上会**自动**变成新的液态玻璃外观——用系统控件就等于拿到了，不用自己再涂一层。
+/// 手写玻璃只留给真正自定义的浮层（字幕控制条这类）。
 struct GlassCompat: ViewModifier {
     var radius: CGFloat = DSRadius.card
     var material: Material = DSMaterial.floating
 
     func body(content: Content) -> some View {
-        content.background(material, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+        content.dsGlassBackground(radius: radius, material: material)
+    }
+}
+
+extension View {
+    @ViewBuilder
+    func dsGlassBackground(radius: CGFloat, material: Material) -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect(.regular, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+        } else {
+            self.background(material, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+        }
     }
 }
 
