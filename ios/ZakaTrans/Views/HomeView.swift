@@ -36,6 +36,7 @@ struct HomeView: View {
         }
         .sheet(isPresented: $showCredit) {
             NavigationStack { CreditView() }
+                .sheetChrome(radius: 30)
         }
         .sheet(isPresented: $showStyle) {
             panel(SubtitleSettingsView())
@@ -52,12 +53,14 @@ struct HomeView: View {
         }
     }
 
-    /// 面板底色：presentationBackground 是 iOS 16.4 才有的，
-    /// 低版本直接不铺（系统默认背景本来就是浅色，看不出差别），不能因为一句修饰就编不过。
+    /// 面板底色：原先铺的是一块纯色，面板本身看着像一张白纸。
+    /// 现在铺系统材质，面板浮在 App 上面时能透出底下的内容，跟系统 sheet 是一类观感。
     @ViewBuilder
     private func panel<V: View>(_ content: V) -> some View {
         if #available(iOS 16.4, *) {
-            content.presentationBackground(Theme.bg)
+            content
+                .presentationBackground(.regularMaterial)
+                .presentationCornerRadius(30)
         } else {
             content
         }
@@ -95,13 +98,8 @@ struct HomeView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Theme.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-        // 边框固定一根细线：运行中不再套绿框，界面只在按钮上表达状态
-        .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .strokeBorder(Theme.hairline, lineWidth: 0.8)
-        )
+        // 一块浮起来的玻璃：材质 + 顶亮底暗的细边，运行中不开绿框，状态只由按钮表达
+        .glassSurface(radius: 26, material: .ultraThinMaterial)
     }
 
     /// 没开始时的引导：三步，按实际的系统流程写
@@ -253,8 +251,21 @@ struct HomeView: View {
             content()
                 .foregroundStyle(on ? Theme.accent : Theme.sub)
                 .frame(width: 54, height: 54)
-                .background(on ? Theme.accentSoft : Theme.surface)
-                .clipShape(Circle())
+                .background {
+                    Circle()
+                        .fill(on ? AnyShapeStyle(Theme.accent.opacity(0.14))
+                                  : AnyShapeStyle(Material.ultraThinMaterial))
+                }
+                .overlay(
+                    Circle().strokeBorder(
+                        LinearGradient(
+                            colors: [Color.white.opacity(0.55), Color.white.opacity(0.08)],
+                            startPoint: .top, endPoint: .bottom
+                        ),
+                        lineWidth: 1
+                    )
+                )
+                .shadow(color: Color.black.opacity(0.07), radius: 14, x: 0, y: 6)
         }
         .buttonStyle(TileButtonStyle())
     }
