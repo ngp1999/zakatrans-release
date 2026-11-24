@@ -606,6 +606,35 @@ static NSUInteger ZKVisibleLen(NSString *text) {
     return n;
 }
 
+/// 比对「是不是同一句话」用的键：去掉首尾标点和多余空白。
+///
+/// 为什么需要：浮窗里存的原文有两种——逐字档存原样（带句尾标点），
+/// 上层落行时存的是去掉句尾标点的那份；译文迟到回来按原文回填时，
+/// 两边对不上就被当成「这句已经滚走了」整条丢掉，屏上就成了只有原文没有译文。
+/// 比对前先归一化，这个坑就没了。
+static NSString *ZKNormKey(NSString *s) {
+    if (![s isKindOfClass:[NSString class]] || !s.length) return @"";
+    NSMutableString *out = [NSMutableString stringWithCapacity:s.length];
+    BOOL space = NO;
+    for (NSUInteger i = 0; i < s.length; i++) {
+        unichar c = [s characterAtIndex:i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == 0x3000) {
+            if (!space && out.length) [out appendString:@" "];
+            space = YES;
+            continue;
+        }
+        space = NO;
+        [out appendFormat:@"%C", c];
+    }
+    NSCharacterSet *edge = [NSCharacterSet characterSetWithCharactersInString:
+        @" 。！？，、；：.!?,;:…—\"'“”‘’"];
+    NSRange f = [out rangeOfCharacterFromSet:edge.invertedSet];
+    if (f.location == NSNotFound) return @"";
+    NSRange b = [out rangeOfCharacterFromSet:edge.invertedSet options:NSBackwardsSearch];
+    if (b.location == NSNotFound || b.location < f.location) return @"";
+    return [out substringWithRange:NSMakeRange(f.location, b.location - f.location + 1)];
+}
+
 #pragma mark - 小档（5:1）：两行，中文在上、源语言在下
 
 #pragma mark - 逐帧动画（画中画里唯一跑得动的动画）
@@ -717,7 +746,7 @@ static CGFloat ZKFitSize(NSString *text, UIFont *font, CGFloat width, CGFloat fl
             l.numberOfLines = 1;
             l.lineBreakMode = NSLineBreakByTruncatingTail;
             l.adjustsFontSizeToFitWidth = YES;
-            l.minimumScaleFactor = 0.5;
+            l.minimumScaleFactor = 0.42;
             l.backgroundColor = [UIColor clearColor];
             l.opaque = NO;
             l.userInteractionEnabled = NO;
@@ -866,22 +895,23 @@ static CGFloat ZKFitSize(NSString *text, UIFont *font, CGFloat width, CGFloat fl
     CGFloat zhH = 0, srcH = 0;
     if (showTrans) {
         NSString *t = r.zh ?: @"";
-        CGFloat fs = ZKFitSize(t, zhBase, w, two ? 0.5 : 0.72);
+        CGFloat fs = ZKFitSize(t, zhBase, w, two ? 0.5 : 0.42);
         UIFont *f = [UIFont boldSystemFontOfSize:fs];
         r.zhLabel.font = f;
         r.zhLabel.textColor = ZKMainColor();
-        r.zhLabel.numberOfLines = two ? 1 : 2;
-        r.zhLabel.adjustsFontSizeToFitWidth = two;
+        // 一行一句话：塞不下就缩字号，绝不折行
+        r.zhLabel.numberOfLines = 1;
+        r.zhLabel.adjustsFontSizeToFitWidth = YES;
         zhH = [self heightFor:t font:f width:w lines:r.zhLabel.numberOfLines];
     }
     if (showSource) {
         NSString *t = r.en ?: @"";
-        CGFloat fs = ZKFitSize(t, srcBase, w, two ? 0.5 : 0.72);
+        CGFloat fs = ZKFitSize(t, srcBase, w, two ? 0.5 : 0.42);
         UIFont *f = two ? [UIFont systemFontOfSize:fs] : [UIFont boldSystemFontOfSize:fs];
         r.srcLabel.font = f;
         r.srcLabel.textColor = two ? [ZKMainColor() colorWithAlphaComponent:0.62] : ZKMainColor();
-        r.srcLabel.numberOfLines = two ? 1 : 2;
-        r.srcLabel.adjustsFontSizeToFitWidth = two;
+        r.srcLabel.numberOfLines = 1;
+        r.srcLabel.adjustsFontSizeToFitWidth = YES;
         srcH = [self heightFor:t font:f width:w lines:r.srcLabel.numberOfLines];
     }
 
@@ -1054,12 +1084,25 @@ static CGFloat ZKFitSize(NSString *text, UIFont *font, CGFloat width, CGFloat fl
 
 - (void)patchZh:(NSString *)zh forEn:(NSString *)en {
     if (![zh isKindOfClass:[NSString class]] || !zh.length) return;
+    NSString *want = ZKNormKey(en);
     ZKLineRow *hit = nil;
     for (NSInteger i = (NSInteger)_rows.count - 1; i >= 0; i--) {
         ZKLineRow *r = _rows[(NSUInteger)i];
-        if (en.length) {
-            if ([r.en isEqualToString:en]) { hit = r; break; }
-        } else if ([r.en length] && ![r.zh length]) {
+        NSString *re = ZKNormKey(r.en);
+        if (want.length) {
+            if (re.length && [re isEqualToString:want]) { hit = r; break; }
+        } else if (re.length && ![r.zh length]) {
+            hit = r;
+            break;
+        }
+    }
+    // 对不上号：从最近几行里挑一行「有原文、还没译文」的补上，
+    // 别让这条译文整条丢掉（那就是屏上只有原文、一直等不到中文）。
+    if (!hit && want.length) {
+        NSInteger scan = 0;
+        for (NSInteger i = (NSInteger)_rows.count - 1; i >= 0 && scan < 6; i--, scan++) {
+            ZKLineRow *r = _rows[(NSUInteger)i];
+            if (!r.en.length || r.zh.length) continue;
             hit = r;
             break;
         }
@@ -1572,14 +1615,30 @@ static void ZKSegAppend(NSMutableString *buf, NSString *s) {
 
 - (void)patchZh:(NSString *)zh forEn:(NSString *)en {
     if (![zh isKindOfClass:[NSString class]] || !zh.length) return;
+    NSString *want = ZKNormKey(en);
     NSInteger hit = -1;
     for (NSInteger i = (NSInteger)_pairs.count - 1; i >= 0; i--) {
         NSMutableDictionary *p = _pairs[(NSUInteger)i];
         NSString *e = p[@"en"];
         if (![e isKindOfClass:[NSString class]]) e = @"";
-        if (en.length) {
-            if ([e isEqualToString:en]) { hit = i; break; }
-        } else if (e.length && ![p[@"zh"] length]) {
+        NSString *pe = ZKNormKey(e);
+        if (want.length) {
+            if (pe.length && [pe isEqualToString:want]) { hit = i; break; }
+        } else if (pe.length && ![p[@"zh"] length]) {
+            hit = i;
+            break;
+        }
+    }
+    // 归一化之后还对不上：上游有时把两句并成一句、或者改了一个标点。
+    // 从最近几条里挑一条「有原文、还没译文」的补上——宁可补到相邻那句，
+    // 也不能把译文整条丢掉（那就是屏上只有原文、中文一直不出来的样子）。
+    if (hit < 0 && want.length) {
+        NSInteger scan = 0;
+        for (NSInteger i = (NSInteger)_pairs.count - 1; i >= 0 && scan < 6; i--, scan++) {
+            NSMutableDictionary *p = _pairs[(NSUInteger)i];
+            NSString *e = p[@"en"];
+            if (![e isKindOfClass:[NSString class]] || !e.length) continue;
+            if ([p[@"zh"] length]) continue;
             hit = i;
             break;
         }
@@ -1722,10 +1781,12 @@ static void ZKSegAppend(NSMutableString *buf, NSString *s) {
 
 - (UILabel *)makeRow {
     UILabel *l = [UILabel new];
-    l.numberOfLines = 0;
-    l.lineBreakMode = NSLineBreakByWordWrapping;
+    // 小窗只有一格高：一句话就是一行，塞不下缩字号，绝不折行
+    l.numberOfLines = 1;
+    l.lineBreakMode = NSLineBreakByTruncatingTail;
     l.textAlignment = NSTextAlignmentCenter;
-    l.adjustsFontSizeToFitWidth = NO;
+    l.adjustsFontSizeToFitWidth = YES;
+    l.minimumScaleFactor = 0.42;
     l.baselineAdjustment = UIBaselineAdjustmentAlignCenters;
     l.backgroundColor = [UIColor clearColor];
     l.textColor = [UIColor whiteColor];
@@ -1771,7 +1832,8 @@ static void ZKSegAppend(NSMutableString *buf, NSString *s) {
     // 一句一行之后，横条上的留白变多了，字号可以再放大一档（45 → 48 左右）。
     // 仍然只跟窗口走，跟这一句多长无关：长句靠换行，绝不缩字。
     CGFloat byWidth = _w / 17.2;       // 一行十七八个汉字，比上一版大一圈
-    CGFloat byHeight = _h / 3.7;       // 两行译文 + 一行原文，各自留一点余量
+    // 一句一行之后只剩「一行译文 + 一行原文」，竖向余量放出来了，字可以再大一点。
+    CGFloat byHeight = _h / 2.8;
     CGFloat f = MIN(byWidth, byHeight);
     _font = MAX(13.0, MIN(64.0, f));
 }
@@ -1788,46 +1850,16 @@ static void ZKSegAppend(NSMutableString *buf, NSString *s) {
 // 这样「一句两句并排铺满」还在，长句也不用缩字。
 - (NSString *)lineFor:(NSArray<NSDictionary *> *)items key:(NSString *)key {
     BOOL chinese = [key isEqualToString:@"zh"];
-    UIFont *font = [self zhFont:_font];
-    if (!chinese) font = [self srcFont:_font];
     NSString *sep = chinese ? @"　" : @"  ";   // 中文用全角空格、英文用两个半角，都有停顿感
-    CGFloat limit = [self textLimit];           // 量的宽度 = 排字时真正的宽度，一点不差
-
-    // 一句一条，句子是**整句单位**：宁可这一行没铺满，也不许一句话被劈到两行去。
+    // 一句一行：整批拼成一行交给 label，塞不下由 fitRowFont 缩字号，
+    // 不再按句子自己折行（折出来的第二行在这个高度上会被裁掉）。
     NSMutableArray<NSString *> *parts = [NSMutableArray array];
     for (NSDictionary *it in items) {
         id v = it[key];
         if ([v isKindOfClass:[NSString class]] && [v length]) [parts addObject:v];
     }
     if (!parts.count) return @"";
-    if (!(_w > 1) || !font || limit < 8) return [parts componentsJoinedByString:sep];
-
-    // 逐句往里塞，塞之前先按真实排版量一遍：这一行加上这句还是不是「一行」。
-    // 不靠宽度相加来估（估的和 UILabel 实际排的差一两点就会串行），而是直接量行数。
-    CGFloat oneLineH = ceil(font.lineHeight) + 0.5;
-    NSMutableString *out = [NSMutableString string];
-    NSMutableString *cur = [NSMutableString string];
-    for (NSString *part in parts) {
-        if (!cur.length) {
-            [cur appendString:part];
-            continue;
-        }
-        NSString *cand = [NSString stringWithFormat:@"%@%@%@", cur, sep, part];
-        // 超过一行高度（说明这句塞不进去会换行）就把它整句挪到下一行
-        if (ZKTextHeight(cand, limit, font, 0) > oneLineH) {
-            if (out.length) [out appendString:@"\n"];
-            [out appendString:cur];
-            cur = [NSMutableString stringWithString:part];
-        } else {
-            [cur appendString:sep];
-            [cur appendString:part];
-        }
-    }
-    if (cur.length) {
-        if (out.length) [out appendString:@"\n"];
-        [out appendString:cur];
-    }
-    return out;
+    return [parts componentsJoinedByString:sep];
 }
 
 /// 文字真正能用的宽度：左右各留 5pt。
@@ -1837,15 +1869,42 @@ static void ZKSegAppend(NSMutableString *buf, NSString *s) {
     return MAX(8.0, _w - 10.0);
 }
 
+/// 一行放不下的时候按宽度把字号缩下来，让整句仍在一行里显示完。
+/// 以前这里是硬折行：长句一折成两行，窗口就那么高，第二句就被顶出去了。
+/// 缩字号的下限 0.55 倍——再小就看不清，那种长度本来就该换下一屏。
+- (UIFont *)fitRowFont:(UIFont *)base text:(NSString *)text {
+    if (!text.length || !base || _w < 1) return base;
+    CGFloat limit = [self textLimit];
+    CGFloat widest = 0;
+    for (NSString *line in [text componentsSeparatedByString:@"\n"]) {
+        if (!line.length) continue;
+        widest = MAX(widest, ZKTextWidth(line, base));
+    }
+    if (widest <= limit || widest < 1) return base;
+    CGFloat k = MAX(0.42, limit / widest);
+    CGFloat size = MAX(9.0, floor(base.pointSize * k * 10.0) / 10.0);
+    return [base fontWithSize:size];
+}
+
+- (UIFont *)zhFontFor:(NSArray<NSDictionary *> *)items {
+    return [self fitRowFont:[self zhFont:_font] text:[self lineFor:items key:@"zh"]];
+}
+
+- (UIFont *)srcFontFor:(NSArray<NSDictionary *> *)items {
+    return [self fitRowFont:[self srcFont:_font] text:[self lineFor:items key:@"en"]];
+}
+
 /// 这一批在屏上占多高（按换行算，不封顶）
 - (CGFloat)zhHeightFor:(NSArray<NSDictionary *> *)items {
     if (![self showTrans]) return 0;
-    return ZKTextHeight([self lineFor:items key:@"zh"], [self textLimit], [self zhFont:_font], 0);
+    NSString *t = [self lineFor:items key:@"zh"];
+    return ZKTextHeight(t, [self textLimit], [self fitRowFont:[self zhFont:_font] text:t], 0);
 }
 
 - (CGFloat)srcHeightFor:(NSArray<NSDictionary *> *)items {
     if (![self showSource]) return 0;
-    return ZKTextHeight([self lineFor:items key:@"en"], [self textLimit], [self srcFont:_font], 0);
+    NSString *t = [self lineFor:items key:@"en"];
+    return ZKTextHeight(t, [self textLimit], [self fitRowFont:[self srcFont:_font] text:t], 0);
 }
 
 /// 这一批是不是整批都塞得进（两行都算上换行，绝不靠缩字硬塞）
@@ -2086,8 +2145,8 @@ static void ZKSegAppend(NSMutableString *buf, NSString *s) {
     _srcLabel.alpha = 1;
 
     UIColor *main = ZKMainColor();
-    NSAttributedString *za = [self attr:zh font:[self zhFont:_font] color:main];
-    NSAttributedString *sa = [self attr:src font:[self srcFont:_font]
+    NSAttributedString *za = [self attr:zh font:[self zhFontFor:_current] color:main];
+    NSAttributedString *sa = [self attr:src font:[self srcFontFor:_current]
                                    color:[main colorWithAlphaComponent:0.62]];
 
     // 第一批（或者重建）：直接摆上去，不从看不见淡一遍
@@ -2274,7 +2333,8 @@ static void ZKSegAppend(NSMutableString *buf, NSString *s) {
         NSDictionary *it = _current[i];
         if (![it isKindOfClass:[NSDictionary class]]) continue;
         NSString *e = it[@"en"];
-        if (![e isKindOfClass:[NSString class]] || ![e isEqualToString:en]) continue;
+        if (![e isKindOfClass:[NSString class]]) continue;
+        if (![ZKNormKey(e) isEqualToString:ZKNormKey(en)]) continue;
         NSString *old = it[@"zh"];
         if ([old isKindOfClass:[NSString class]] && old.length) return NO;
         NSMutableArray *arr = [_current mutableCopy];
@@ -2290,7 +2350,8 @@ static void ZKSegAppend(NSMutableString *buf, NSString *s) {
         NSDictionary *it = _queue[i];
         if (![it isKindOfClass:[NSDictionary class]]) continue;
         NSString *e = it[@"en"];
-        if (![e isKindOfClass:[NSString class]] || ![e isEqualToString:en]) continue;
+        if (![e isKindOfClass:[NSString class]]) continue;
+        if (![ZKNormKey(e) isEqualToString:ZKNormKey(en)]) continue;
         NSString *old = it[@"zh"];
         if ([old isKindOfClass:[NSString class]] && old.length) return NO;
         NSMutableDictionary *m = [it mutableCopy];
