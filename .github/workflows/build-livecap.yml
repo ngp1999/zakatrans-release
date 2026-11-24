@@ -63,6 +63,16 @@ jobs:
           set -euo pipefail
           python3 lite/tools/ensure_livecap.py
 
+      - name: 清理多余的签发证书
+        continue-on-error: true
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          pip3 install --quiet --user cryptography 2>/dev/null || pip3 install --quiet --break-system-packages cryptography 2>/dev/null || true
+          python3 lite/tools/revoke_extra_certs.py
+
       - name: 生成工程
         working-directory: lite
         run: |
