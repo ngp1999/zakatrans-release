@@ -25,7 +25,7 @@ struct CreditPurchaseSection: View {
             ForEach(Purchases.shown, id: \.id) { item in
                 card(item)
                     .onTapGesture { pick(item.id) }
-                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                    .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
             }
@@ -43,12 +43,12 @@ struct CreditPurchaseSection: View {
             }
             .buttonStyle(.plain)
             .disabled(purch.busy || selectedId == nil)
-            .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 2, trailing: 16))
+            .listRowInsets(EdgeInsets(top: 12, leading: 8, bottom: 2, trailing: 8))
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
 
             agreementRow
-                .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 2, trailing: 16))
+                .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 2, trailing: 8))
                 .listRowSeparator(.hidden)
                 .listRowBackground(Color.clear)
 
@@ -57,7 +57,7 @@ struct CreditPurchaseSection: View {
                     .font(DSFont.footnote)
                     .foregroundStyle(DSColor.destructive)
                     .frame(maxWidth: .infinity, alignment: .center)
-                    .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 6, trailing: 16))
+                    .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 6, trailing: 8))
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
             }
@@ -70,7 +70,7 @@ struct CreditPurchaseSection: View {
                         ? DSColor.destructive : DSColor.secondaryLabel
                     )
                     .frame(maxWidth: .infinity, alignment: .center)
-                    .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 6, trailing: 16))
+                    .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 6, trailing: 8))
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
             }
@@ -147,14 +147,14 @@ struct CreditPurchaseSection: View {
 
     // MARK: - 档位卡片
 
-    /// 档位名跟积分量绑在一起，不写「初次使用 / 少量补充」这类推销词。
-    private func title(for credits: Int) -> String {
+    /// 积分量在上当主角，下面用一句话说明这档适合什么场景，不写「初次使用 / 少量补充」
+    /// 这类推销词，也不啰嗦。
+    private func note(for credits: Int) -> String {
         switch credits {
-        case ..<300:   return "体验套餐"
-        case ..<700:   return "标准套餐"
-        case ..<1400:  return "进阶套餐"
-        case ..<3000:  return "畅享套餐"
-        default:       return "尊享套餐"
+        case ..<300:   return "满足日常需求"
+        case ..<700:   return "适合短期出行"
+        case ..<1400:  return "适合高频使用"
+        default:       return "适合长期使用"
         }
     }
 
@@ -193,13 +193,21 @@ struct CreditPurchaseSection: View {
         let ready = purch.available(item.id)
         let on = selectedId == item.id
         return HStack(alignment: .center, spacing: DSSpace.s) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title(for: item.credits))
-                    .font(DSFont.body.weight(.semibold))
-                    .foregroundStyle(DSColor.label)
-                Text("\(Format.credits(Double(item.credits))) 积分")
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(Format.credits(Double(item.credits)))
+                        .font(.system(size: 21, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(DSColor.label)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                    Text("积分")
+                        .font(DSFont.footnote)
+                        .foregroundStyle(DSColor.secondaryLabel)
+                }
+                Text(note(for: item.credits))
                     .font(DSFont.footnote)
                     .foregroundStyle(DSColor.secondaryLabel)
+                    .lineLimit(1)
             }
 
             Spacer(minLength: DSSpace.xs)
@@ -215,8 +223,8 @@ struct CreditPurchaseSection: View {
                 .padding(.leading, 2)
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .frame(minHeight: 62)
+        .padding(.vertical, 10)
+        .frame(minHeight: 78)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(on && ready ? DSColor.accentSoft : DSColor.cell)
