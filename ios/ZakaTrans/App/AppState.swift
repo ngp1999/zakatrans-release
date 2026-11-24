@@ -29,6 +29,10 @@ final class AppState: ObservableObject {
     private var pendTimer: DispatchWorkItem?
     @Published var alert: String?
     @Published var prefs: SubtitlePrefs = SubtitlePrefs.load()
+
+    /// 双向同传（同声传译页用）：外语 → 中文、中文 → 外语，
+    /// 同一份音频两条会话各跑一遍，按这句原话是什么语言挑一路显示。
+    @Published var duplex = false
     /// 音频到底有没有进来：录屏扩展每秒写心跳，这里对帧数做差。
     /// 用户说「开了扩展没声音、不出字」时，一眼就能看到是没收到音频还是收到了没翻出来。
     @Published var audioHint = ""
@@ -173,6 +177,19 @@ final class AppState: ObservableObject {
         pendSrc = ""
         pendZh = ""
         guard !src.isEmpty || !zh.isEmpty else { return }
+        // 同一句话被上游回调了两次：上一行就是它，别再多冒一行出来。
+        // 「多出来一行重复的原语言」就是这么来的——英文原文先落了一行、
+        // 中文一直没到，随后同样一句英文又落了一行。
+        // 4 秒以内算同一次回调；这句带着译文就补到上一行去，没译文就丢掉。
+        if !src.isEmpty, let last = lines.last,
+           Speaker.key(last.source) == Speaker.key(src),
+           Date().timeIntervalSince(last.at) < 4 {
+            if last.trans.isEmpty && !zh.isEmpty {
+                lines[lines.count - 1].trans = zh
+                ZKPip.shared()!.patchZh(zh, forEn: last.source)
+            }
+            return
+        }
         let key = Speaker.key(src) + "\u{1}" + Speaker.key(zh)
         if recentFinalKeys.contains(key) { return }
         recentFinalKeys.append(key)
@@ -192,6 +209,8 @@ final class AppState: ObservableObject {
         let s = ZKSpeechStream.shared()!
         s.onPartial = { [weak self] stable, unstable in
             guard let self else { return }
+            // 双向：这一路只在实时字幕页用，同传页那边另有三套回调
+            guard !self.duplex else { return }
             let t = (stable ?? "") + (unstable ?? "")
             // 有人在说话：朗读据此避让，只在空隙里念（麦克风收音时还会让路）
             Speaker.shared.noteInput(t)
@@ -200,6 +219,8 @@ final class AppState: ObservableObject {
         }
         s.onSegment = { [weak self] text, _ in
             guard let self else { return }
+            // 双向：这一路只在实时字幕页用，同传页那边另有三套回调
+            guard !self.duplex else { return }
             let raw = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !raw.isEmpty else { return }
             self.liveSource = raw
@@ -230,10 +251,14 @@ final class AppState: ObservableObject {
         }
         s.onTransPartial = { [weak self] delta in
             guard let self else { return }
+            // 双向：这一路只在实时字幕页用，同传页那边另有三套回调
+            guard !self.duplex else { return }
             self.liveTrans += delta ?? ""
         }
         s.onTransSegment = { [weak self] full in
             guard let self else { return }
+            // 双向：这一路只在实时字幕页用，同传页那边另有三套回调
+            guard !self.duplex else { return }
             let zh = (full ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             self.liveTrans = ""
             guard !zh.isEmpty else { return }
@@ -264,6 +289,45 @@ final class AppState: ObservableObject {
             ZKPip.shared()!.showLiveEn(self.pendSrc, zh: self.pendZh)
             // 译文到了就落定，不再等尾巴
             self.armPendFlush(0)
+        }
+        // ── 双向回调 ──
+        // 一句话落定：原文 + 对面的译文（译文可能还没到，稍后 onDuplexZh 补）
+        s.onDuplexLine = { [weak self] src, trans in
+            guard let self else { return }
+            let a = (src ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let b = (trans ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !a.isEmpty else { return }
+            Speaker.shared.noteInput(a, final: true)
+            self.liveSource = ""
+            self.liveTrans = ""
+            // 同一句只上屏一次
+            if let last = self.lines.last, Speaker.key(last.source) == Speaker.key(a) { return }
+            self.lines.append(SubtitleLine(source: a, trans: AppState.trimEndPunct(b)))
+            if self.lines.count > 200 { self.lines.removeFirst(self.lines.count - 200) }
+            ZKPip.shared()!.appendLineEn(a, zh: b)
+        }
+        // 这句的译文比原文晚到：原地补到那一行上，别另起一行
+        s.onDuplexZh = { [weak self] trans, src in
+            guard let self else { return }
+            let b = (trans ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let a = (src ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !b.isEmpty, !a.isEmpty else { return }
+            guard let i = self.lines.lastIndex(where: { Speaker.key($0.source) == Speaker.key(a) })
+            else { return }
+            guard self.lines[i].trans.isEmpty else { return }
+            let t = AppState.trimEndPunct(b)
+            self.lines[i].trans = t
+            ZKPip.shared()!.patchZh(t, forEn: self.lines[i].source)
+        }
+        // 正在说的这一句（还没说完）
+        s.onDuplexLive = { [weak self] src, trans in
+            guard let self, self.duplex else { return }
+            let a = (src ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let b = (trans ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !a.isEmpty { Speaker.shared.noteInput(a) }
+            self.liveSource = a
+            self.liveTrans = b
+            ZKPip.shared()!.setLiveEn(a, zh: b)
         }
         s.onDiag = { [weak self] d in
             guard let self, let d, !d.isEmpty else { return }
@@ -450,6 +514,16 @@ final class AppState: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in
             self?.preparing = false
         }
+    }
+
+    /// 双向同传开关（同声传译页用）。
+    /// 音频层同时挂两条会话，界面这边只负责把「原话 + 对面的译文」一行一行记下来。
+    func setDuplex(_ on: Bool) {
+        guard duplex != on else { return }
+        duplex = on
+        liveSource = ""
+        liveTrans = ""
+        ZKSpeechStream.shared()!.setDuplex(on)
     }
 
     func stop() {
