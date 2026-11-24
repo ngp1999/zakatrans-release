@@ -28,6 +28,25 @@
 
 @property (nonatomic, copy) void (^onDiag)(NSString *d);
 
+// ── 双向（同声传译）──
+//
+// 打开之后这一层同时挂两条会话：
+//   一路：源语言自动 → 中文（对方说外语，给用户看）
+//   另一路：源语言自动 → 英文（用户说中文，给对方看）
+// 同一份音频两边都喂，按「这句原话是什么语言」决定哪一路的结果上屏：
+// 原话是中文就走中→英，原话不是中文就走外语→中。
+// 这样不会出现「中文译成中文」，也不会同一句两路都冒出来。
+
+/// 有这一句落定了：原文 + 对面的译文（译文可能还没到，先给空串）
+@property (nonatomic, copy) void (^onDuplexLine)(NSString *source, NSString *trans);
+/// 这句译文迟到了，按原文补上
+@property (nonatomic, copy) void (^onDuplexZh)(NSString *trans, NSString *source);
+/// 正在说的这一句（还没落定，滚动显示用）
+@property (nonatomic, copy) void (^onDuplexLive)(NSString *source, NSString *trans);
+
+- (void)setDuplex:(BOOL)on;
+@property (nonatomic, readonly) BOOL duplex;
+
 // 兼容老接口（不再使用）
 @property (nonatomic, copy) void (^onLive)(NSString *);
 @property (nonatomic, copy) void (^onSentence)(NSString *);
