@@ -1,10 +1,11 @@
 import SwiftUI
 import UIKit
 
-/// 我的积分：余额 + 充值。
+/// 我的积分（充值页）。
 ///
-/// 页面上只留三样东西：余额、充值档位、下单按钮。说明性小字一律不放，
-/// 使用明细挪到导航栏右上角，需要的时候点进去看。
+/// 版式按参考图：最上面一张余额卡（余额 +「积分明细」入口），下面一组套餐卡，
+/// 一颗整宽的「立即充值 · 价格」按钮，按钮下面一行协议小字。
+/// 使用明细同时保留在导航栏右上角的图标上，两处都能进。
 struct CreditView: View {
     @ObservedObject private var cloud = Cloud.shared
     @ObservedObject private var purch = Purchases.shared
@@ -13,25 +14,17 @@ struct CreditView: View {
     var body: some View {
         List {
             Section {
-                VStack(alignment: .leading, spacing: DSSpace.xxs) {
-                    Text("可用积分")
-                        .font(DSFont.footnote)
-                        .foregroundStyle(DSColor.secondaryLabel)
-                    Text(Format.credits(cloud.balanceCredits))
-                        .font(.largeTitle.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(DSColor.label)
-                        .contentTransition(.numericText())
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.6)
-                }
-                .padding(.vertical, DSSpace.xxs)
+                balanceCard
+                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 6, trailing: 16))
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
             }
 
             CreditPurchaseSection()
         }
         .listStyle(.insetGrouped)
-        .navigationTitle("我的积分")
-        .navigationBarTitleDisplayMode(.large)
+        .navigationTitle("积分充值")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -40,7 +33,7 @@ struct CreditView: View {
                 } label: {
                     Image(systemName: "list.bullet.rectangle")
                 }
-                .accessibilityLabel("使用明细")
+                .accessibilityLabel("积分明细")
             }
         }
         .navigationDestination(isPresented: $showUsage) {
@@ -50,5 +43,60 @@ struct CreditView: View {
             if purch.products.isEmpty { await purch.load() }
             await cloud.refresh()
         }
+    }
+
+    /// 余额卡：余额是主角，「积分明细」贴在卡片里当入口，不另占一行。
+    private var balanceCard: some View {
+        VStack(alignment: .leading, spacing: DSSpace.xs) {
+            Text("我的积分余额")
+                .font(DSFont.footnote)
+                .foregroundStyle(DSColor.secondaryLabel)
+
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(Format.credits(cloud.balanceCredits))
+                    .font(.system(size: 34, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(DSColor.label)
+                    .contentTransition(.numericText())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                Text("积分")
+                    .font(DSFont.subheadline)
+                    .foregroundStyle(DSColor.secondaryLabel)
+            }
+
+            Button {
+                Haptics.tap()
+                showUsage = true
+            } label: {
+                HStack(spacing: 4) {
+                    Text("积分可用于实时翻译服务")
+                        .font(DSFont.footnote)
+                        .foregroundStyle(DSColor.secondaryLabel)
+                    Text("·")
+                        .font(DSFont.footnote)
+                        .foregroundStyle(DSColor.tertiaryLabel)
+                    Text("积分明细")
+                        .font(DSFont.footnote)
+                        .foregroundStyle(DSColor.accent)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(DSColor.accent.opacity(0.8))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 2)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 16)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(DSColor.cell)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(DSColor.accent.opacity(0.16), lineWidth: 0.5)
+        )
     }
 }
