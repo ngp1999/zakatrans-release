@@ -1,0 +1,58 @@
+name: LiveCap
+options:
+  bundleIdPrefix: com.zakatrans
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: "9VSZ8M2JL5"
+    ENABLE_BITCODE: NO
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    SWIFT_OPTIMIZATION_LEVEL: "-O"
+    GCC_OPTIMIZATION_LEVEL: "s"
+    CODE_SIGN_STYLE: Automatic
+
+targets:
+  LiveCap:
+    type: application
+    platform: iOS
+    sources:
+      - path: LiveCap
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.zakatrans.livecap
+        PRODUCT_NAME: LiveCap
+        INFOPLIST_FILE: LiveCap/Resources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: LiveCap/Resources/LiveCap.entitlements
+        SWIFT_OBJC_BRIDGING_HEADER: LiveCap/Engine/LiveCap-Bridging-Header.h
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: "9VSZ8M2JL5"
+    dependencies:
+      - target: Broadcast
+        embed: true
+
+  Broadcast:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Broadcast
+      - path: LiveCap/Engine/Shared.m
+      - path: LiveCap/Engine/Shared.h
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.zakatrans.livecap.ext
+        PRODUCT_NAME: Broadcast
+        INFOPLIST_FILE: Broadcast/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Broadcast/Broadcast.entitlements
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: "9VSZ8M2JL5"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
