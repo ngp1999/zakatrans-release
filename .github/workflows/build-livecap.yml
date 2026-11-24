@@ -69,6 +69,18 @@ jobs:
           xcodegen generate
           ls -la
 
+      - name: 编译检查（不签名）
+        run: |
+          set -euo pipefail
+          xcodebuild -project lite/LiveCap.xcodeproj \
+            -scheme LiveCap \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/dd" \
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee "$RUNNER_TEMP/compile.log"
+          test ${PIPESTATUS[0]} -eq 0
+
       - name: 归档（真签名）
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
