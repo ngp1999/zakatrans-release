@@ -733,11 +733,30 @@ struct SubtitleSettingsView: View {
     // MARK: - 逐字（打字机）
 
     /// 往两段文本的尾巴上接一句，不设位移——字是自己长出来的。
+    ///
+    /// 跟真窗口（ZKSegmentView 的 ZKSegAppend）同一套：标点一律转成「，」，
+    /// 句子之间也用一个逗号接上。译文和原文都走这条，两块文字的节奏才一致。
     private func segJoin(_ buf: String, _ s: String) -> String {
-        if buf.isEmpty { return s }
-        if buf.hasSuffix(s) { return buf }
-        if let c = s.unicodeScalars.first, c.isASCII, !buf.hasSuffix(" ") { return buf + " " + s }
-        return buf + s
+        let t = segCommafy(s)
+        if t.isEmpty { return buf }
+        if buf.isEmpty { return t }
+        if buf.hasSuffix(t) { return buf }
+        return buf + "，" + t
+    }
+
+    /// 句号、问号、叹号、分号、冒号、省略号 → 逗号；连续逗号只留一个，首尾不留。
+    private func segCommafy(_ s: String) -> String {
+        var out = ""
+        for ch in s {
+            let o: Character = "。！？.!?;:；：…".contains(ch) ? "，" : ch
+            if o == "，" {
+                if out.isEmpty { continue }
+                if let last = out.last, "， \u{3000}\n".contains(last) { continue }
+            }
+            out.append(o)
+        }
+        while let last = out.last, "， \u{3000}\n".contains(last) { out.removeLast() }
+        return out
     }
 
     /// 垫一句进去（已经全显示，不参与打字）
