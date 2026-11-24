@@ -37,6 +37,11 @@ final class AppState: ObservableObject {
 
     /// 画中画：用户想不想开（持久化），以及此刻是否真的在屏幕上
     @Published var pipOn: Bool = (UserDefaults.standard.object(forKey: "zt_pip_on") as? Bool) ?? true
+    /// 同声传译页专用：这一页永远用麦克风收音，跟首页「收音来源」那个设置无关。
+    /// 用户首页可能选的是系统内录，进同传页不该因此没声音；退出时不改他的设置。
+    @Published var micOnly: Bool = false
+    /// 这一页到底走不走麦克风
+    var usesMic: Bool { micOnly || prefs.audioSource == "mic" }
     @Published var pipActive = false
 
     /// 头像：没有就是系统灰头像；换过就存本机（照片不出设备，也不上传）
@@ -158,8 +163,13 @@ final class AppState: ObservableObject {
     private func flushPending() {
         pendTimer?.cancel()
         pendTimer = nil
-        let src = AppState.trimEndPunct(pendSrc.trimmingCharacters(in: .whitespacesAndNewlines))
-        let zh = AppState.trimEndPunct(pendZh.trimmingCharacters(in: .whitespacesAndNewlines))
+        // 原始文本（带句尾标点）：逐字滚动是把每句接成一整段，句尾那个句号就是
+        // 段落里的分隔，删了整段就成了没有标点的一串字。所以这里把原样文本一起往下传，
+        // 由浮窗按档位自己决定要不要裁（整句/上推/全宽照样裁掉，逐字保留）。
+        let rawSrc = pendSrc.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawZh = pendZh.trimmingCharacters(in: .whitespacesAndNewlines)
+        let src = AppState.trimEndPunct(rawSrc)
+        let zh = AppState.trimEndPunct(rawZh)
         pendSrc = ""
         pendZh = ""
         guard !src.isEmpty || !zh.isEmpty else { return }
@@ -173,7 +183,7 @@ final class AppState: ObservableObject {
         lastLineKey = Speaker.key(src)
         lastLineAt = Date()
         if lines.count > 200 { lines.removeFirst(lines.count - 200) }
-        ZKPip.shared()!.appendLineEn(src, zh: zh)
+        ZKPip.shared()!.appendLineEn(rawSrc, zh: rawZh)
     }
 
     // MARK: - 引擎回调
@@ -361,7 +371,7 @@ final class AppState: ObservableObject {
     /// 麦克风收音前必须先拿到系统权限：
     /// 没权限就直接去碰 AVAudioEngine 的输入节点，系统会当场把进程带走（闪退）。
     func requestMicPermissionIfNeeded() async -> Bool {
-        guard prefs.audioSource == "mic" else { return true }
+        guard usesMic else { return true }
         if #available(iOS 17.0, *) {
             switch AVAudioApplication.shared.recordPermission {
             case .granted: return true
@@ -417,11 +427,11 @@ final class AppState: ObservableObject {
 
         Speaker.shared.resume()
         // 麦克风收音这一路由麦克风在听，朗读不能挂静音门（那等于把话筒掐了）
-        Speaker.shared.micCapture = (prefs.audioSource == "mic")
+        Speaker.shared.micCapture = usesMic
         ZKSpeechStream.shared()!.start()
         keeper.start()
         running = true
-        let mic = (prefs.audioSource == "mic")
+        let mic = usesMic
         status = mic ? "正在听" : "等待录屏"
         startWatchingBroadcast()
         if mic {
@@ -471,7 +481,7 @@ final class AppState: ObservableObject {
         stopWatching()
         // 麦克风收音不经过录屏扩展：既没有广播权限要等，也没有扩展心跳可看。
         // 这两条轮询只在内部收音（系统声音）时才需要，否则会一直提示"等待授予直播录屏权限"。
-        if prefs.audioSource != "mic" {
+        if !usesMic {
             broadcastTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
                 Task { @MainActor in self?.checkBroadcast() }
             }
