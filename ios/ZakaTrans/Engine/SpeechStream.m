@@ -476,27 +476,6 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
     }
 }
 
-- (void)duplexTrEnd:(NSString *)full seg:(NSInteger)seg
-               list:(NSMutableArray *)list sent:(NSMutableDictionary *)sent
-          toChinese:(BOOL)toChinese {
-    NSString *tr = [self duplexTrim:full];
-    if (!tr.length) return;
-    NSMutableDictionary *p = [self duplexPair:list seg:seg];
-    p[@"tr"] = [tr mutableCopy];
-    NSString *src = [self duplexTrim:p[@"src"]];
-    // 原文那一对可能已经被清掉了（连说很多句之后），用 sent 里记的原文兜底
-    if (!src.length) src = [self duplexTrim:sent[@(seg)]];
-    if (![self duplexWanted:src toChinese:toChinese]) return;
-    NSString *shown = sent[@(seg)];
-    if (shown.length) {
-        // 原文已经先上屏了：把译文补到那一行，而不是再冒一行
-        if (self.onDuplexZh) self.onDuplexZh(tr, shown);
-        [sent removeObjectForKey:@(seg)];
-    } else if (self.onDuplexLive) {
-        self.onDuplexLive(src, tr);
-    }
-}
-
 /// 第二路（中文 → 英文）的回调。段号跟第一路各编各的，所以另存一套。
 - (void)wireDuplexAst:(ZKDoubaoAST *)ast list:(NSMutableArray *)list
                  sent:(NSMutableDictionary *)sent toChinese:(BOOL)toChinese {
