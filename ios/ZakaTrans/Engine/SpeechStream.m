@@ -68,6 +68,18 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
     // 当前这一段（一句）的原文/译文累计，用来给 root 做兜底
     NSString *_curSrc;
     NSString *_curTr;
+
+    // 双向（同声传译）：
+    //   一路 = 单例会话（原文 → 用户设的目标语言，同传页是中文）
+    //   另一路 = _astB（原文 → 英文，用户自己说中文时给对方看）
+    // 两条各自维护「还没落定的这一句」和「已经上屏的这句原文」，
+    // 因为两条会话的段号是各自独立编号的，混在一起会串。
+    BOOL _duplex;
+    ZKDoubaoAST *_astB;
+    NSMutableArray *_pairA;
+    NSMutableArray *_pairB;
+    NSMutableDictionary *_sentA;
+    NSMutableDictionary *_sentB;
 }
 
 + (instancetype)shared {
@@ -136,6 +148,8 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
         if (self.onDiag) self.onDiag([self diag]);
     }
 
+    if (_duplex) [self startDuplexSession];
+
     ZKCrumb("speech.source");
     @try { [self applyAudioSource]; } @catch (NSException *e) { [ZKStore log:@"source ex %@", e.reason]; }
 
@@ -152,6 +166,11 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
     _running = NO;
     @try { [self stopMicFeed]; } @catch (__unused NSException *e) {}
     @try { [[ZKDoubaoAST shared] stop]; } @catch (__unused NSException *e) {}
+    @try { [_astB stop]; } @catch (__unused NSException *e) {}
+    [_pairA removeAllObjects];
+    [_pairB removeAllObjects];
+    [_sentA removeAllObjects];
+    [_sentB removeAllObjects];
     if (_listenFd >= 0) { close(_listenFd); _listenFd = -1; }
     if (_connFd >= 0) { close(_connFd); _connFd = -1; }
     [_pollTimer invalidate];
@@ -183,6 +202,7 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
         [ast stop];
         if (_running) [ast start];
     } @catch (__unused NSException *e) {}
+    if (_duplex) [self startDuplexSession];
 }
 
 - (void)wireAst {
@@ -192,6 +212,10 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
     ast.onSourcePartial = ^(NSString *delta, NSInteger seg) {
         ZKSpeechStream *s = weakSelf;
         if (!s || !s->_running) return;
+        if (s->_duplex) {
+            [s duplexSrcDelta:delta seg:seg list:s->_pairA sent:s->_sentA toChinese:YES];
+            return;
+        }
         if (!s->_curSrc.length) s->_curSrc = @"";
         s->_curSrc = [s->_curSrc stringByAppendingString:delta ?: @""];
         // root 那边用 (stable, unstable) 两个口子：这里原文本身就是增量，
@@ -202,6 +226,11 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
     ast.onSourceEnd = ^(NSString *full, NSInteger seg) {
         ZKSpeechStream *s = weakSelf;
         if (!s || !s->_running) return;
+        if (s->_duplex) {
+            s->_curSrc = @"";
+            [s duplexSrcEnd:full seg:seg list:s->_pairA sent:s->_sentA toChinese:YES];
+            return;
+        }
         NSString *t = full.length ? full : s->_curSrc;
         s->_curSrc = @"";
         t = [t stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
@@ -212,6 +241,10 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
     ast.onTransPartial = ^(NSString *delta, NSInteger seg) {
         ZKSpeechStream *s = weakSelf;
         if (!s || !s->_running) return;
+        if (s->_duplex) {
+            [s duplexTrDelta:delta seg:seg list:s->_pairA sent:s->_sentA toChinese:YES];
+            return;
+        }
         if (!s->_curTr.length) s->_curTr = @"";
         s->_curTr = [s->_curTr stringByAppendingString:delta ?: @""];
         if (s.onTransPartial) s.onTransPartial(delta);
@@ -220,6 +253,11 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
     ast.onTransEnd = ^(NSString *full, NSInteger seg) {
         ZKSpeechStream *s = weakSelf;
         if (!s || !s->_running) return;
+        if (s->_duplex) {
+            s->_curTr = @"";
+            [s duplexTrEnd:full seg:seg list:s->_pairA sent:s->_sentA toChinese:YES];
+            return;
+        }
         NSString *t = full.length ? full : s->_curTr;
         s->_curTr = @"";
         t = [t stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
@@ -232,6 +270,11 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
     ast.onTransReplace = ^(NSString *full, NSInteger seg) {
         ZKSpeechStream *s = weakSelf;
         if (!s || !s->_running) return;
+        if (s->_duplex) {
+            s->_curTr = @"";
+            [s duplexTrEnd:full seg:seg list:s->_pairA sent:s->_sentA toChinese:YES];
+            return;
+        }
         NSString *t = full.length ? full : s->_curTr;
         s->_curTr = @"";
         t = [t stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
@@ -254,6 +297,201 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
         if (s.onDiag) s.onDiag([s diag]);
     };
 }
+
+#pragma mark - 双向（同声传译）
+
+/// 这句原话到底是不是中文：汉字占压倒多数才算。
+/// 不能只看「有没有汉字」——「我用 iPhone 拍的」有 5 个汉字 6 个字母，那是中文；
+/// 「OK，我明白了」只有 4 个汉字，也算中文。反过来纯英文一句一个汉字都没有。
+- (BOOL)duplexIsChinese:(NSString *)s {
+    if (!s.length) return NO;
+    NSUInteger han = 0, latin = 0;
+    for (NSUInteger i = 0; i < s.length; i++) {
+        unichar c = [s characterAtIndex:i];
+        if (c >= 0x3400 && c <= 0x9FFF) han++;
+        else if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) latin++;
+    }
+    if (!han) return NO;
+    return han * 2 >= latin;
+}
+
+- (NSString *)duplexTrim:(NSString *)s {
+    if (![s isKindOfClass:[NSString class]]) return @"";
+    return [s stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+
+/// 这一路该不该上屏：toChinese=YES 的那路只管外语原话，=NO 的那路只管中文原话。
+- (BOOL)duplexWanted:(NSString *)src toChinese:(BOOL)toChinese {
+    if (!src.length) return NO;
+    BOOL zh = [self duplexIsChinese:src];
+    return toChinese ? !zh : zh;
+}
+
+- (NSMutableDictionary *)duplexPair:(NSMutableArray *)list seg:(NSInteger)seg {
+    for (NSMutableDictionary *p in list) {
+        if ([p[@"seg"] integerValue] == seg) return p;
+    }
+    NSMutableDictionary *p = [NSMutableDictionary dictionary];
+    p[@"seg"] = @(seg);
+    p[@"src"] = [NSMutableString string];
+    p[@"tr"] = [NSMutableString string];
+    [list addObject:p];
+    while (list.count > 12) [list removeObjectAtIndex:0];
+    return p;
+}
+
+- (void)duplexSrcDelta:(NSString *)delta seg:(NSInteger)seg
+                  list:(NSMutableArray *)list sent:(NSMutableDictionary *)sent
+             toChinese:(BOOL)toChinese {
+    if (!delta.length) return;
+    if (sent[@(seg)]) return;                    // 这句已经上过屏了
+    NSMutableDictionary *p = [self duplexPair:list seg:seg];
+    [(NSMutableString *)p[@"src"] appendString:delta];
+    NSString *src = [self duplexTrim:p[@"src"]];
+    if ([self duplexWanted:src toChinese:toChinese] && self.onDuplexLive) {
+        self.onDuplexLive(src, [self duplexTrim:p[@"tr"]]);
+    }
+}
+
+- (void)duplexSrcEnd:(NSString *)full seg:(NSInteger)seg
+                list:(NSMutableArray *)list sent:(NSMutableDictionary *)sent
+           toChinese:(BOOL)toChinese {
+    NSString *src = [self duplexTrim:full];
+    NSMutableDictionary *p = [self duplexPair:list seg:seg];
+    NSString *tr = [self duplexTrim:p[@"tr"]];
+    [list removeObject:p];
+    if (!src.length) return;
+    if (sent[@(seg)]) return;
+    if (![self duplexWanted:src toChinese:toChinese]) return;
+    // 同一句被服务端重发一次：屏上不能多冒一行出来
+    if ([sent.allValues containsObject:src]) return;
+    sent[@(seg)] = src;
+    if (sent.count > 24) [sent removeAllObjects];
+    if (self.onDuplexLine) self.onDuplexLine(src, tr);
+    if (self.onDuplexLive) self.onDuplexLive(@"", @"");
+}
+
+- (void)duplexTrDelta:(NSString *)delta seg:(NSInteger)seg
+                 list:(NSMutableArray *)list sent:(NSMutableDictionary *)sent
+            toChinese:(BOOL)toChinese {
+    if (!delta.length) return;
+    NSMutableDictionary *p = [self duplexPair:list seg:seg];
+    [(NSMutableString *)p[@"tr"] appendString:delta];
+    NSString *src = [self duplexTrim:p[@"src"]];
+    if ([self duplexWanted:src toChinese:toChinese] && self.onDuplexLive) {
+        self.onDuplexLive(src, [self duplexTrim:p[@"tr"]]);
+    }
+}
+
+- (void)duplexTrEnd:(NSString *)full seg:(NSInteger)seg
+               list:(NSMutableArray *)list sent:(NSMutableDictionary *)sent
+          toChinese:(BOOL)toChinese {
+    NSString *tr = [self duplexTrim:full];
+    if (!tr.length) return;
+    NSMutableDictionary *p = [self duplexPair:list seg:seg];
+    p[@"tr"] = [tr mutableCopy];
+    NSString *src = [self duplexTrim:p[@"src"]];
+    if (![self duplexWanted:src toChinese:toChinese]) return;
+    NSString *shown = sent[@(seg)];
+    if (shown.length) {
+        // 原文已经先上屏了：把译文补到那一行，而不是再冒一行
+        if (self.onDuplexZh) self.onDuplexZh(tr, shown);
+        [sent removeObjectForKey:@(seg)];
+    } else if (self.onDuplexLive) {
+        self.onDuplexLive(src, tr);
+    }
+}
+
+/// 第二路（中文 → 英文）的回调。段号跟第一路各编各的，所以另存一套。
+- (void)wireDuplexAst:(ZKDoubaoAST *)ast list:(NSMutableArray *)list
+                 sent:(NSMutableDictionary *)sent toChinese:(BOOL)toChinese {
+    __weak typeof(self) weakSelf = self;
+    ast.onSourcePartial = ^(NSString *delta, NSInteger seg) {
+        ZKSpeechStream *s = weakSelf;
+        if (!s || !s->_running || !s->_duplex) return;
+        [s duplexSrcDelta:delta seg:seg list:list sent:sent toChinese:toChinese];
+    };
+    ast.onSourceEnd = ^(NSString *full, NSInteger seg) {
+        ZKSpeechStream *s = weakSelf;
+        if (!s || !s->_running || !s->_duplex) return;
+        [s duplexSrcEnd:full seg:seg list:list sent:sent toChinese:toChinese];
+    };
+    ast.onTransPartial = ^(NSString *delta, NSInteger seg) {
+        ZKSpeechStream *s = weakSelf;
+        if (!s || !s->_running || !s->_duplex) return;
+        [s duplexTrDelta:delta seg:seg list:list sent:sent toChinese:toChinese];
+    };
+    ast.onTransEnd = ^(NSString *full, NSInteger seg) {
+        ZKSpeechStream *s = weakSelf;
+        if (!s || !s->_running || !s->_duplex) return;
+        [s duplexTrEnd:full seg:seg list:list sent:sent toChinese:toChinese];
+    };
+    ast.onTransReplace = ^(NSString *full, NSInteger seg) {
+        ZKSpeechStream *s = weakSelf;
+        if (!s || !s->_running || !s->_duplex) return;
+        [s duplexTrEnd:full seg:seg list:list sent:sent toChinese:toChinese];
+    };
+    ast.onState = ^(NSString *state) {
+        ZKSpeechStream *s = weakSelf;
+        if (!s) return;
+        [ZKStore log:@"duplex(b): %@", state];
+        if (s.onDiag) s.onDiag([s diag]);
+    };
+    ast.onFail = ^(NSString *why) {
+        ZKSpeechStream *s = weakSelf;
+        if (!s) return;
+        [ZKStore log:@"duplex(b) fail: %@", why];
+        if (s.onDiag) s.onDiag([s diag]);
+    };
+}
+
+/// 起（或重建）双向的第二路。语种在会话建立时固定，所以换语种要重建。
+- (void)startDuplexSession {
+    if (!_pairA) _pairA = [NSMutableArray array];
+    if (!_pairB) _pairB = [NSMutableArray array];
+    if (!_sentA) _sentA = [NSMutableDictionary dictionary];
+    if (!_sentB) _sentB = [NSMutableDictionary dictionary];
+    ZKDoubaoAST *b = _astB;
+    if (!b) {
+        b = [ZKDoubaoAST session];
+        _astB = b;
+        b.srcLang = @"auto";
+        b.dstLang = @"en";
+        b.mode = @"interp";
+        [self wireDuplexAst:b list:_pairB sent:_sentB toChinese:NO];
+    }
+    if (!_running) return;
+    @try {
+        [b stop];
+        [b start];
+    } @catch (__unused NSException *e) {}
+}
+
+- (void)setDuplex:(BOOL)on {
+    if (_duplex == on) return;
+    _duplex = on;
+    if (!_pairA) _pairA = [NSMutableArray array];
+    if (!_pairB) _pairB = [NSMutableArray array];
+    if (!_sentA) _sentA = [NSMutableDictionary dictionary];
+    if (!_sentB) _sentB = [NSMutableDictionary dictionary];
+    [_pairA removeAllObjects];
+    [_pairB removeAllObjects];
+    [_sentA removeAllObjects];
+    [_sentB removeAllObjects];
+    _curSrc = @"";
+    _curTr = @"";
+    if (on) {
+        [self startDuplexSession];
+    } else {
+        ZKDoubaoAST *b = _astB;
+        _astB = nil;
+        @try { [b stop]; } @catch (__unused NSException *e) {}
+        if (self.onDuplexLive) self.onDuplexLive(@"", @"");
+    }
+    [ZKStore log:@"speech: 双向 %@", on ? @"开" : @"关"];
+}
+
+- (BOOL)duplex { return _duplex; }
 
 #pragma mark - TCP 服务端
 
@@ -486,6 +724,9 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
     // 直接交给同传：识别 + 翻译都由它一个模型干
     @try {
         [[ZKDoubaoAST shared] pushFloat32:(const float *)d.bytes count:frames];
+        // 双向：同一条音频再喂一遍给「外语 → 英文」那条，
+        // 两条各出各的，最后按原话语言挑一路显示。
+        if (_duplex && _astB) [_astB pushFloat32:(const float *)d.bytes count:frames];
         _chunksOut++;
     } @catch (NSException *e) {
         [ZKStore log:@"ast push ex %@", e.reason];
