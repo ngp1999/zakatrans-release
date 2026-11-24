@@ -30,6 +30,12 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
     return YES;
 }
 
+@interface ZKSpeechStream ()
+- (void)duplexNotePeerLang:(NSString *)src;
+- (NSString *)duplexLangOf:(NSString *)s;
+- (void)applyPeerTarget;
+@end
+
 @implementation ZKSpeechStream {
     int _listenFd;
     int _connFd;
@@ -71,7 +77,7 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
 
     // 双向（同声传译）：
     //   一路 = 单例会话（原文 → 用户设的目标语言，同传页是中文）
-    //   另一路 = _astB（原文 → 英文，用户自己说中文时给对方看）
+    //   另一路 = _astB（中文 → 对方的语言，用户自己说中文时给对方看）
     // 两条各自维护「还没落定的这一句」和「已经上屏的这句原文」，
     // 因为两条会话的段号是各自独立编号的，混在一起会串。
     BOOL _duplex;
@@ -80,6 +86,9 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
     NSMutableArray *_pairB;
     NSMutableDictionary *_sentA;
     NSMutableDictionary *_sentB;
+    /// 对方在说的语言（从第一路的原文里认出来的）；第二路的目标语言就是它。
+    /// 认不出来、或者对方还没开口时按英语走。
+    NSString *_peerLang;
 }
 
 + (instancetype)shared {
@@ -300,6 +309,61 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
 
 #pragma mark - 双向（同声传译）
 
+/// 这句话是哪国语言：按字符区间认，认不出来当英语。
+/// 只认「文字形态就能区分」的那几种（泰/日/韩/俄/阿/越），
+/// 拉丁字母的几种（英/法/德/西…）从字面上分不出来，统一按英语走。
+- (NSString *)duplexLangOf:(NSString *)s {
+    if (!s.length) return @"en";
+    NSInteger ja = 0, ko = 0, ru = 0, ar = 0, th = 0, vi = 0, latin = 0;
+    for (NSUInteger i = 0; i < s.length; i++) {
+        unichar c = [s characterAtIndex:i];
+        if ((c >= 0x3040 && c <= 0x30FF)) ja++;
+        else if ((c >= 0xAC00 && c <= 0xD7AF) || (c >= 0x1100 && c <= 0x11FF)) ko++;
+        else if (c >= 0x0400 && c <= 0x04FF) ru++;
+        else if (c >= 0x0600 && c <= 0x06FF) ar++;
+        else if (c >= 0x0E00 && c <= 0x0E7F) th++;
+        else if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) latin++;
+        else if ((c >= 0x1EA0 && c <= 0x1EF9)
+                 || c == 0x0102 || c == 0x0103 || c == 0x0110 || c == 0x0111
+                 || c == 0x0128 || c == 0x0129 || c == 0x0168 || c == 0x0169
+                 || c == 0x01A0 || c == 0x01A1 || c == 0x01AF || c == 0x01B0) vi++;
+    }
+    if (th > 0 && th * 3 >= latin) return @"th";
+    if (ja > 0) return @"ja";
+    if (ko > 0) return @"ko";
+    if (ru > 0 && ru * 2 >= latin) return @"ru";
+    if (ar > 0) return @"ar";
+    if (vi > 0 && vi * 4 >= MAX(1, latin)) return @"vi";
+    return @"en";
+}
+
+/// 第一路（外语→中文）认出了对方在说什么语言：第二路的目标语言跟着它走。
+/// 「对方说泰语、我说中文」时，我说的话就该翻成泰语，而不是永远翻英语。
+- (void)duplexNotePeerLang:(NSString *)src {
+    NSString *lg = [self duplexLangOf:src];
+    if (!lg.length || [lg isEqualToString:@"zh"]) return;
+    if ([_peerLang isEqualToString:lg]) return;
+    _peerLang = [lg copy];
+    [self applyPeerTarget];
+}
+
+/// 把第二路的目标语言设成对方现在说的语言；变了就重建那条会话
+/// （豆包的语向在会话建立时固定，中途改不了）。
+- (void)applyPeerTarget {
+    if (!_astB) return;
+    NSString *lg = _peerLang.length ? _peerLang : @"en";
+    if ([_astB.dstLang isEqualToString:lg]) return;
+    _astB.dstLang = lg;
+    [_pairB removeAllObjects];
+    [_sentB removeAllObjects];
+    [ZKStore log:@"duplex: 对方语言 %@ → 第二路目标语言", lg];
+    if (!_running) return;
+    @try {
+        [_astB stop];
+        [_astB start];
+    } @catch (__unused NSException *e) {}
+}
+
 /// 这句原话到底是不是中文：汉字占压倒多数才算。
 /// 不能只看「有没有汉字」——「我用 iPhone 拍的」有 5 个汉字 6 个字母，那是中文；
 /// 「OK，我明白了」只有 4 个汉字，也算中文。反过来纯英文一句一个汉字都没有。
@@ -359,16 +423,45 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
     NSString *src = [self duplexTrim:full];
     NSMutableDictionary *p = [self duplexPair:list seg:seg];
     NSString *tr = [self duplexTrim:p[@"tr"]];
-    [list removeObject:p];
-    if (!src.length) return;
+    if (!src.length) { [list removeObject:p]; return; }
     if (sent[@(seg)]) return;
-    if (![self duplexWanted:src toChinese:toChinese]) return;
+    if (![self duplexWanted:src toChinese:toChinese]) { [list removeObject:p]; return; }
     // 同一句被服务端重发一次：屏上不能多冒一行出来
     if ([sent.allValues containsObject:src]) return;
+    // 这句的原文先上屏，译文一般比它晚到几百毫秒。
+    // 这里**不能**把这一对从 list 里删掉——译文回来时要靠它找到原文对号入座，
+    // 删了以后 duplexTrEnd 新建的那对 src 是空的，整条译文就被丢掉了，
+    // 界面上就是「只有原文、一句中文都没有」。留着，等译文补上或自然滑出窗口。
+    p[@"src"] = [src mutableCopy];
     sent[@(seg)] = src;
-    if (sent.count > 24) [sent removeAllObjects];
+    if (sent.count > 24) {
+        id first = sent.allKeys.firstObject;
+        if (first) [sent removeObjectForKey:first];
+    }
+    if (toChinese) [self duplexNotePeerLang:src];
     if (self.onDuplexLine) self.onDuplexLine(src, tr);
     if (self.onDuplexLive) self.onDuplexLive(@"", @"");
+}
+
+- (void)duplexTrEnd:(NSString *)full seg:(NSInteger)seg
+               list:(NSMutableArray *)list sent:(NSMutableDictionary *)sent
+          toChinese:(BOOL)toChinese {
+    NSString *tr = [self duplexTrim:full];
+    if (!tr.length) return;
+    NSMutableDictionary *p = [self duplexPair:list seg:seg];
+    p[@"tr"] = [tr mutableCopy];
+    NSString *src = [self duplexTrim:p[@"src"]];
+    // 原文那一对可能已经被清掉了（连说很多句之后），用 sent 里记的原文兜底
+    if (!src.length) src = [self duplexTrim:sent[@(seg)]];
+    if (![self duplexWanted:src toChinese:toChinese]) return;
+    NSString *shown = sent[@(seg)];
+    if (shown.length) {
+        // 原文已经先上屏了：把译文补到那一行，而不是再冒一行
+        if (self.onDuplexZh) self.onDuplexZh(tr, shown);
+        [sent removeObjectForKey:@(seg)];
+    } else if (self.onDuplexLive) {
+        self.onDuplexLive(src, tr);
+    }
 }
 
 - (void)duplexTrDelta:(NSString *)delta seg:(NSInteger)seg
@@ -391,6 +484,8 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
     NSMutableDictionary *p = [self duplexPair:list seg:seg];
     p[@"tr"] = [tr mutableCopy];
     NSString *src = [self duplexTrim:p[@"src"]];
+    // 原文那一对可能已经被清掉了（连说很多句之后），用 sent 里记的原文兜底
+    if (!src.length) src = [self duplexTrim:sent[@(seg)]];
     if (![self duplexWanted:src toChinese:toChinese]) return;
     NSString *shown = sent[@(seg)];
     if (shown.length) {
@@ -456,9 +551,12 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
         b = [ZKDoubaoAST session];
         _astB = b;
         b.srcLang = @"auto";
-        b.dstLang = @"en";
+        // 目标语言 = 对方在说的语言（还没听到对方说话时先按英语）
+        b.dstLang = _peerLang.length ? _peerLang : @"en";
         b.mode = @"interp";
         [self wireDuplexAst:b list:_pairB sent:_sentB toChinese:NO];
+    } else {
+        b.dstLang = _peerLang.length ? _peerLang : @"en";
     }
     if (!_running) return;
     @try {
@@ -481,6 +579,7 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
     _curSrc = @"";
     _curTr = @"";
     if (on) {
+        _peerLang = nil;              // 新开一场：先按英语，等听到对方说话再跟着换
         [self startDuplexSession];
     } else {
         ZKDoubaoAST *b = _astB;
@@ -591,6 +690,13 @@ static BOOL recvFull(int fd, void *buf, size_t n) {
 }
 
 - (void)applyAudioSource {
+    // 只有真的在收音时才去开麦克风。
+    // 以前这里不看 _running：一进同传页改个设置就把麦克风打开了（橙点亮着），
+    // 用户点都没点「开始」，看着就是「一进页面就在偷偷录音」。
+    if (!_running) {
+        [self stopMicFeed];
+        return;
+    }
     if ([[self audioSource] isEqualToString:@"mic"]) {
         [self startMicFeed];
     } else {
