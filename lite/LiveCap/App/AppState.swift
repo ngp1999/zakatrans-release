@@ -1,0 +1,681 @@
+import SwiftUI
+import UIKit
+import AVFoundation
+
+/// 全局状态：把 SwiftUI 界面和底下的原生引擎连起来。
+///
+/// 音频链路：录屏扩展（或麦克风）→ 共享容器/TCP → SpeechStream → 豆包直连；
+/// 界面这边只负责按钮和字幕。没有账号、没有积分、没有中间服务。
+@MainActor
+final class AppState: ObservableObject {
+    static let shared = AppState()
+
+    @Published var running = false
+    /// 点完「开始」到字幕浮窗真正出来这段：按钮显示加载态
+    @Published var preparing = false
+    @Published var status = "未开始"
+    @Published var liveSource = ""
+    @Published var liveTrans = ""
+    @Published var lines: [SubtitleLine] = []
+
+    // 实时字幕的上屏节奏：先按「整句」攒，整句一落定就立刻上屏原文，
+    // 译文到了再就地补上去，等译文的时间不占用上屏速度。
+    private var pendSrc = ""
+    private var pendZh = ""
+    private var pendAt = Date()
+    // 已经落成一行的那条原文（译文迟到时按这个位置补回去）
+    private var lastLineKey = ""
+    private var lastLineAt = Date.distantPast
+    private var pendTimer: DispatchWorkItem?
+    @Published var alert: String?
+    @Published var prefs: SubtitlePrefs = SubtitlePrefs.load()
+
+    /// 双向同传（同声传译页用）：外语 → 中文、中文 → 外语，
+    /// 同一份音频两条会话各跑一遍，按这句原话是什么语言挑一路显示。
+    @Published var duplex = false
+    /// 音频到底有没有进来：录屏扩展每秒写心跳，这里对帧数做差。
+    /// 用户说「开了扩展没声音、不出字」时，一眼就能看到是没收到音频还是收到了没翻出来。
+    @Published var audioHint = ""
+    private var lastBufs = -1
+    private var lastBufsAt: TimeInterval = 0
+
+    /// 画中画：用户想不想开（持久化），以及此刻是否真的在屏幕上
+    @Published var pipOn: Bool = (UserDefaults.standard.object(forKey: "zt_pip_on") as? Bool) ?? true
+    /// 同声传译页专用：这一页永远用麦克风收音，跟首页「收音来源」那个设置无关。
+    /// 用户首页可能选的是系统内录，进同传页不该因此没声音；退出时不改他的设置。
+    @Published var micOnly: Bool = false
+    /// 这一页到底走不走麦克风
+    var usesMic: Bool { micOnly || prefs.audioSource == "mic" }
+    @Published var pipActive = false
+
+    struct SubtitleLine: Identifiable, Equatable {
+        let id = UUID()
+        let source: String
+        var trans: String
+        let at = Date()
+    }
+
+    /// 画中画需要一个真实的 UIView 当锚点。
+    /// 这个视图挂在 MainView 最外层（不是某个页面里），切 Tab、开抽屉都不会让它离开窗口——
+    /// 一离开窗口系统就会把画中画收掉，这也是之前「回桌面就没了」的一半原因。
+    weak var anchorView: UIView?
+
+    private var broadcastTimer: Timer?
+    private var pipPollTimer: Timer?
+    private var audioTimer: Timer?
+    private var sessionStartAt: TimeInterval = 0
+    private var broadcastSeen = false
+    private var pipRequested = false
+
+    /// 同一句最终译文可能被回调推两次，这里做去重
+    private var recentFinalKeys: [String] = []
+
+    /// 后台保活：没有它，App 一回桌面就被挂起，画中画里字幕会停在那儿不动
+    private let keeper = SilentKeeper()
+
+    private init() {
+        if prefs.voiceId.isEmpty || !Speaker.isAvailable(prefs.voiceId) {
+            prefs.voiceId = Speaker.defaultVoiceId()
+        }
+        bindEngine()
+        applyPrefsToEngine()
+        bindLifecycle()
+    }
+
+    // MARK: - 整句上屏
+
+    /// 上屏前把**句尾**的标点去掉（句子中间的保留）。
+    /// 一句话说完就是完了，行尾再挂一个「。」既占位又难看；
+    /// 「你好，我想问一下」中间那个逗号要留着，不然读不通。
+    static func trimEndPunct(_ s: String) -> String {
+        var t = s
+        let drop: Set<Character> = ["。", "！", "？", "，", "、", "；", "：",
+                                    ".", ",", "!", "?", ";", ":", "…", " ", "\u{3000}"]
+        while let c = t.last, drop.contains(c) { t.removeLast() }
+        return t
+    }
+
+    /// 译文/原文收尾了没有：带句末标点就算说完了。
+    static func endsSentence(_ s: String) -> Bool {
+        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let last = t.unicodeScalars.last else { return false }
+        if "。！？!?…；;.".unicodeScalars.contains(last) { return true }
+        return false
+    }
+
+    private static func hanCount(_ s: String) -> Int {
+        return s.unicodeScalars.filter { $0.value >= 0x3400 && $0.value <= 0x9FFF }.count
+    }
+
+    private static func wordCount(_ s: String) -> Int {
+        return s.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).count
+    }
+
+    /// 这段是新一句，还是上一句的尾巴？
+    /// 上一句没说完 → 接上；上一句已经收尾 → 只有「一个词」或三字以内的碎片才接。
+    /// 以前英文放到 40 字符、中文放到 14 字都当尾巴，结果连着几句完整的话被焊成一大条
+    /// （截图里那条「你叫什么名字? / What are you doing? How much? Welcome to China.」就是它们拼的）。
+    static func tailGlued(_ t: String, prev: String, gap: Double) -> Bool {
+        guard !prev.isEmpty, gap >= 0, gap <= 1.8 else { return false }
+        if hanCount(prev) >= 45 || prev.count >= 140 { return false }   // 已经够长，不再接
+        if !endsSentence(prev) { return true }
+        let han = hanCount(t)
+        if han > 0 { return han <= 3 && !endsSentence(t) }
+        return wordCount(t) <= 1
+    }
+
+    static func join(_ a: String, _ b: String) -> String {
+        if a.isEmpty { return b }
+        if b.isEmpty { return a }
+        guard let last = a.unicodeScalars.last, let first = b.unicodeScalars.first else { return a + b }
+        let punct = "，。！？；：、,.!?;:".unicodeScalars
+        if punct.contains(last) { return a + b }
+        if last.value >= 0x2E80 || first.value >= 0x2E80 { return a + b }
+        return a + " " + b
+    }
+
+    private func armPendFlush(_ delay: Double) {
+        pendTimer?.cancel()
+        let w = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.flushPending()
+        }
+        pendTimer = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: w)
+    }
+
+    /// 把这句落成一行：有译文带译文，没译文就只有原文一行。
+    private func flushPending() {
+        pendTimer?.cancel()
+        pendTimer = nil
+        // 原始文本（带句尾标点）：逐字滚动是把每句接成一整段，句尾那个句号就是
+        // 段落里的分隔，删了整段就成了没有标点的一串字。所以这里把原样文本一起往下传，
+        // 由浮窗按档位自己决定要不要裁（整句/上推/全宽照样裁掉，逐字保留）。
+        let rawSrc = pendSrc.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawZh = pendZh.trimmingCharacters(in: .whitespacesAndNewlines)
+        let src = AppState.trimEndPunct(rawSrc)
+        let zh = AppState.trimEndPunct(rawZh)
+        pendSrc = ""
+        pendZh = ""
+        guard !src.isEmpty || !zh.isEmpty else { return }
+        // 同一句话被上游回调了两次：上一行就是它，别再多冒一行出来。
+        // 「多出来一行重复的原语言」就是这么来的——英文原文先落了一行、
+        // 中文一直没到，随后同样一句英文又落了一行。
+        // 4 秒以内算同一次回调；这句带着译文就补到上一行去，没译文就丢掉。
+        if !src.isEmpty, let last = lines.last,
+           Speaker.key(last.source) == Speaker.key(src),
+           Date().timeIntervalSince(last.at) < 4 {
+            if last.trans.isEmpty && !zh.isEmpty {
+                lines[lines.count - 1].trans = zh
+                ZKPip.shared()!.patchZh(zh, forEn: last.source)
+            }
+            return
+        }
+        let key = Speaker.key(src) + "\u{1}" + Speaker.key(zh)
+        if recentFinalKeys.contains(key) { return }
+        recentFinalKeys.append(key)
+        if recentFinalKeys.count > 40 {
+            recentFinalKeys.removeFirst(recentFinalKeys.count - 40)
+        }
+        lines.append(SubtitleLine(source: src, trans: zh))
+        lastLineKey = Speaker.key(src)
+        lastLineAt = Date()
+        if lines.count > 200 { lines.removeFirst(lines.count - 200) }
+        ZKPip.shared()!.appendLineEn(rawSrc, zh: rawZh)
+    }
+
+    // MARK: - 引擎回调
+
+    private func bindEngine() {
+        let s = ZKSpeechStream.shared()!
+        s.onPartial = { [weak self] stable, unstable in
+            guard let self else { return }
+            // 双向：这一路只在实时字幕页用，同传页那边另有三套回调
+            guard !self.duplex else { return }
+            let t = (stable ?? "") + (unstable ?? "")
+            // 有人在说话：朗读据此避让，只在空隙里念（麦克风收音时还会让路）
+            Speaker.shared.noteInput(t)
+            self.liveSource = t
+            ZKPip.shared()!.setLiveEn(t, zh: self.liveTrans)
+        }
+        s.onSegment = { [weak self] text, _ in
+            guard let self else { return }
+            // 双向：这一路只在实时字幕页用，同传页那边另有三套回调
+            guard !self.duplex else { return }
+            let raw = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !raw.isEmpty else { return }
+            self.liveSource = raw
+            // 整句落定才算「该让路了」：半句还在滚动的时候朗读照念，
+            // 否则每秒好几次的半句会把刚开口的那句一直掐掉，听起来就是没声音。
+            Speaker.shared.noteInput(raw, final: true)
+
+            if !self.pendSrc.isEmpty {
+                let gap = Date().timeIntervalSince(self.pendAt)
+                if AppState.tailGlued(raw, prev: self.pendSrc, gap: gap) {
+                    self.pendSrc = AppState.join(self.pendSrc, raw)
+                    self.pendAt = Date()
+                    ZKPip.shared()!.showLiveEn(self.pendSrc, zh: self.pendZh)
+                    self.armPendFlush(0)
+                    return
+                }
+                // 换了一句：上一句先落定（译文早就到了的话一起带走）
+                self.flushPending()
+            }
+            self.pendSrc = raw
+            self.pendZh = ""
+            self.pendAt = Date()
+            ZKPip.shared()!.showLiveEn(raw, zh: "")
+            // 不压时间：上游整句一落定就上屏。
+            // 前几版这里压 1.6~2.2 秒等译文和尾巴，用户看到的就是「字幕慢半拍」；
+            // 译文晚到另有通路——落在上一行原地补（见 onTransSegment），所以不用等。
+            self.armPendFlush(0)
+        }
+        s.onTransPartial = { [weak self] delta in
+            guard let self else { return }
+            // 双向：这一路只在实时字幕页用，同传页那边另有三套回调
+            guard !self.duplex else { return }
+            self.liveTrans += delta ?? ""
+        }
+        s.onTransSegment = { [weak self] full in
+            guard let self else { return }
+            // 双向：这一路只在实时字幕页用，同传页那边另有三套回调
+            guard !self.duplex else { return }
+            let zh = (full ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            self.liveTrans = ""
+            guard !zh.isEmpty else { return }
+            // 没有对应的原文：这句的原文已经落过一行了。
+            // 译文比原文晚到（整句先落、译文再补）时原地补到那一行上，
+            // 不能直接丢掉——丢了界面上就是「只有原文、一句译文都没有」。
+            guard !self.pendSrc.isEmpty else {
+                // 译文比原文晚到：原文那行已经上屏了，原地把译文补上去。
+                // 从前往后找第一条还没有译文的行（译文按说话顺序到，先补最早那条），
+                // 连续两句原文都还没译文时不会一直往最后一行上堆。
+                guard let idx = self.lines.firstIndex(where: {
+                    $0.trans.isEmpty && Date().timeIntervalSince($0.at) < 20
+                }) else { return }
+                let t = AppState.trimEndPunct(zh)
+                self.lines[idx].trans = t
+                // 画中画读的是共享字幕流，那边也得补上——以前只改了内存里这份，
+                // 所以 App 内对话记录有译文、画中画永远只有原文
+                ZKPip.shared()!.patchZh(t, forEn: self.lines[idx].source)
+                return
+            }
+            // 回声先拦：这句话是我们自己刚念出去的，被录屏录回来又识别了一遍
+            if self.prefs.tts && Speaker.shared.isEcho([zh, self.pendSrc]) {
+                self.pendSrc = ""
+                self.pendZh = ""
+                return
+            }
+            self.pendZh = self.pendZh.isEmpty ? zh : AppState.join(self.pendZh, zh)
+            ZKPip.shared()!.showLiveEn(self.pendSrc, zh: self.pendZh)
+            // 译文到了就落定，不再等尾巴
+            self.armPendFlush(0)
+        }
+        // ── 双向回调 ──
+        // 一句话落定：原文 + 对面的译文（译文可能还没到，稍后 onDuplexZh 补）
+        s.onDuplexLine = { [weak self] src, trans in
+            guard let self else { return }
+            let a = (src ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let b = (trans ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !a.isEmpty else { return }
+            Speaker.shared.noteInput(a, final: true)
+            self.liveSource = ""
+            self.liveTrans = ""
+            // 同一句只上屏一次
+            if let last = self.lines.last, Speaker.key(last.source) == Speaker.key(a) { return }
+            self.lines.append(SubtitleLine(source: a, trans: AppState.trimEndPunct(b)))
+            if self.lines.count > 200 { self.lines.removeFirst(self.lines.count - 200) }
+            ZKPip.shared()!.appendLineEn(a, zh: b)
+        }
+        // 这句的译文比原文晚到：原地补到那一行上，别另起一行
+        s.onDuplexZh = { [weak self] trans, src in
+            guard let self else { return }
+            let b = (trans ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let a = (src ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !b.isEmpty, !a.isEmpty else { return }
+            guard let i = self.lines.lastIndex(where: { Speaker.key($0.source) == Speaker.key(a) })
+            else { return }
+            guard self.lines[i].trans.isEmpty else { return }
+            let t = AppState.trimEndPunct(b)
+            self.lines[i].trans = t
+            ZKPip.shared()!.patchZh(t, forEn: self.lines[i].source)
+        }
+        // 正在说的这一句（还没说完）
+        s.onDuplexLive = { [weak self] src, trans in
+            guard let self, self.duplex else { return }
+            let a = (src ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let b = (trans ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !a.isEmpty { Speaker.shared.noteInput(a) }
+            self.liveSource = a
+            self.liveTrans = b
+            ZKPip.shared()!.setLiveEn(a, zh: b)
+        }
+        s.onDiag = { [weak self] d in
+            guard let self, let d, !d.isEmpty else { return }
+            if d.contains("连接") || d.contains("监听") || d.contains("启动") {
+                self.status = self.running ? "正在听" : "未开始"
+            }
+        }
+    }
+
+    // MARK: - 前后台
+
+    private func bindLifecycle() {
+        let c = NotificationCenter.default
+        c.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.onWillBackground() }
+        }
+        c.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.onForeground() }
+        }
+    }
+
+    /// 要进后台了：画中画必须在还处于前台时起来。
+    /// 系统不允许在后台启动 PiP，所以这里是最后一个机会窗口。
+    private func onWillBackground() {
+        guard running, pipOn else { return }
+        keeper.start()
+        if !ZKPip.shared()!.isActive() {
+            pipRequested = true
+            startPipIfPossible()
+        }
+    }
+
+    /// 回到前台：画中画不该因为切出去就消失，没了就补起来
+    private func onForeground() {
+        guard running else { return }
+        keeper.start()
+        if pipOn && broadcastSeen && !ZKPip.shared()!.isActive() {
+            pipRequested = true
+            startPipIfPossible()
+        }
+        pipActive = ZKPip.shared()!.isActive()
+    }
+
+    /// 把当前的样式设置推给画中画和引擎
+    func applyPrefsToEngine() {
+        ZKPip.applyStyle([
+            "size": prefs.size,
+            "color": prefs.color,
+            "background": prefs.background,
+            "mode": prefs.mode,
+            "pip": prefs.pip,
+            "scroll": prefs.scroll,
+        ])
+        prefs.saveLocal()
+        // 收音模式改了要立刻切换采集来源（内部收音 / 麦克风收音）
+        ZKSpeechStream.shared()?.applyAudioSource()
+        // 实时字幕不再朗读：音频输出已从这一页去掉，声音只留给同声传译里手动点播
+        Speaker.shared.enabled = false
+        Speaker.shared.rate = prefs.speechRate
+        Speaker.shared.duckLevel = prefs.duckLevel
+        Speaker.shared.voiceId = prefs.voiceId
+    }
+
+    /// 改设置后统一走这里：本地存 + 云端同步 + 通知引擎
+    func updatePrefs(_ mutate: (inout SubtitlePrefs) -> Void) {
+        var p = prefs
+        let oldPip = prefs.pip
+        mutate(&p)
+        prefs = p
+        applyPrefsToEngine()
+
+        // 窗口大小只在开窗那一刻交给系统，改了必须重开一次才会变。
+        // 不重开的话，用户在运行中切到"全宽"会觉得没反应。
+        if p.pip != oldPip, pipOn, running, broadcastSeen {
+            ZKPip.shared()!.stop()
+            pipActive = false
+            pipRequested = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                self?.startPipIfPossible()
+            }
+        }
+    }
+
+    // MARK: - 开 / 停
+
+    /// 麦克风收音前必须先拿到系统权限：
+    /// 没权限就直接去碰 AVAudioEngine 的输入节点，系统会当场把进程带走（闪退）。
+    func requestMicPermissionIfNeeded() async -> Bool {
+        guard usesMic else { return true }
+        if #available(iOS 17.0, *) {
+            switch AVAudioApplication.shared.recordPermission {
+            case .granted: return true
+            case .denied: return false
+            default: break
+            }
+            return await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
+                AVAudioApplication.requestRecordPermission { ok in c.resume(returning: ok) }
+            }
+        } else {
+            let sess = AVAudioSession.sharedInstance()
+            switch sess.recordPermission {
+            case .granted: return true
+            case .denied: return false
+            default: break
+            }
+            return await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
+                sess.requestRecordPermission { ok in c.resume(returning: ok) }
+            }
+        }
+    }
+
+    func start() async {
+        guard !running, !preparing else { return }
+        // 这个版本没有账号也没有额度：凭据是使用者自己填的，能连上就一直用
+        preparing = true
+        // 每次开新的一场，字幕不会串上一次的
+        ZKStore.beginNewSession()
+        ZKStore.clearLines()
+        // 清掉上一次的停止标记，否则录屏扩展刚起来就被判定"该结束了"
+        ZKStore.setSetting("broadcast_stop", v: nil)
+        // 上一场如果停在「正在朗读」上，朗读门(tts_gate)可能还挂着未来时间戳，
+        // 那会让这一整场录到的音频被当成回声静音掉——开新的一场先清干净。
+        ZKStore.setSetting("tts_gate", v: "0")
+        lastBufs = -1
+        lastBufsAt = 0
+        audioHint = ""
+
+        lines.removeAll()
+        liveSource = ""
+        liveTrans = ""
+        recentFinalKeys.removeAll()
+        broadcastSeen = false
+        pipRequested = false
+        sessionStartAt = Date().timeIntervalSince1970
+
+        Speaker.shared.resume()
+        // 麦克风收音这一路由麦克风在听，朗读不能挂静音门（那等于把话筒掐了）
+        Speaker.shared.micCapture = usesMic
+        ZKSpeechStream.shared()!.start()
+        keeper.start()
+        running = true
+        let mic = usesMic
+        status = mic ? "正在听" : "等待录屏"
+        startWatchingBroadcast()
+        if mic {
+            // 麦克风收音：不用等系统录屏面板，直接自己把浮窗浮出来
+            broadcastSeen = true
+            if pipOn {
+                pipRequested = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                    self?.startPipIfPossible()
+                }
+            } else {
+                preparing = false
+            }
+        }
+        // 兜底：12 秒还没浮出来也不能一直转圈
+        DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in
+            self?.preparing = false
+        }
+    }
+
+    /// 双向同传开关（同声传译页用）。
+    /// 音频层同时挂两条会话，界面这边只负责把「原话 + 对面的译文」一行一行记下来。
+    func setDuplex(_ on: Bool) {
+        guard duplex != on else { return }
+        duplex = on
+        liveSource = ""
+        liveTrans = ""
+        ZKSpeechStream.shared()!.setDuplex(on)
+    }
+
+    func stop() {
+        stopWatching()
+        ZKSpeechStream.shared()!.stop()
+        // 停止后迟到的翻译回调不许再念
+        Speaker.shared.stop()
+        Speaker.shared.micCapture = false
+        // 停止就一定要关：之前 stop 后系统窗口偶尔还挂着，就是因为只调了 stop 没清引用
+        ZKPip.shared()!.stop()
+        // 系统录屏（屏幕广播）ReplayKit 没有提供"从 App 停止"的接口，
+        // 但扩展会读这个时间戳，读到就自己结束——红点跟着消失，不用用户再去点。
+        ZKStore.setSetting("broadcast_stop", v: String(format: "%.0f", Date().timeIntervalSince1970 + 1))
+        keeper.stop()
+        pipRequested = false
+        pipActive = false
+        preparing = false
+        running = false
+        status = "未开始"
+        audioHint = ""
+        lastBufs = -1
+        liveSource = ""
+        liveTrans = ""
+    }
+
+    /// 用户点了系统录屏面板之后，扩展会写心跳；轮询到就说明真的开始录了
+    private func startWatchingBroadcast() {
+        stopWatching()
+        // 麦克风收音不经过录屏扩展：既没有广播权限要等，也没有扩展心跳可看。
+        // 这两条轮询只在内部收音（系统声音）时才需要，否则会一直提示"等待授予直播录屏权限"。
+        if !usesMic {
+            broadcastTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.checkBroadcast() }
+            }
+            // 音频看门狗：扩展的心跳里带累计帧数，数字不涨就是一段都没收到
+            audioTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.checkAudio() }
+            }
+        }
+        // 画中画是否真的起来了，系统不给同步返回值，只能每秒对一次
+        pipPollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                let active = ZKPip.shared()!.isActive()
+                if active != self.pipActive { self.pipActive = active }
+                // 浮窗出来了，按钮就从「正在加载字幕浮窗」变成「停止」
+                if active && self.preparing { self.preparing = false }
+            }
+        }
+    }
+
+    private func stopWatching() {
+        broadcastTimer?.invalidate()
+        broadcastTimer = nil
+        audioTimer?.invalidate()
+        audioTimer = nil
+        pipPollTimer?.invalidate()
+        pipPollTimer = nil
+    }
+
+    /// 每秒对一次扩展心跳里的帧数：涨了就是真的在收音频，一直不动就是没收到。
+    private func checkAudio() {
+        guard running else { return }
+        let beat: [AnyHashable: Any] = ZKStore.beat() ?? [:]
+        let t = (beat["t"] as? NSNumber)?.doubleValue ?? 0
+        let bufs = (beat["bufs"] as? NSNumber)?.intValue ?? 0
+        let conn = beat["conn"] as? String ?? ""
+        let now = Date().timeIntervalSince1970
+        guard t > 0, t >= sessionStartAt - 1.5, now - t < 6 else {
+            audioHint = broadcastSeen ? "录屏已断开" : "等待授予直播录屏权限"
+            return
+        }
+        if bufs != lastBufs {
+            lastBufs = bufs
+            lastBufsAt = now
+            audioHint = "正在接收音频"
+            return
+        }
+        // 帧数没动：超过 6 秒说明扩展活着但没拿到声音
+        if lastBufsAt > 0, now - lastBufsAt > 6 {
+            audioHint = "没收到音频（在控制中心重新选「LiveCap」）"
+        } else if lastBufsAt == 0 {
+            audioHint = "扩展已连上，等音频"
+        }
+        _ = conn
+    }
+
+    private func checkBroadcast() {
+        guard running, !broadcastSeen else { return }
+        let beat: [AnyHashable: Any] = ZKStore.beat() ?? [:]
+        let t = (beat["t"] as? NSNumber)?.doubleValue ?? 0
+        let now = Date().timeIntervalSince1970
+        guard t > 0, t >= sessionStartAt - 1.5, now - t < 4 else { return }
+
+        broadcastSeen = true
+        status = "正在听"
+        // 画中画关掉的人，录制一开始就算就位了
+        if !pipOn { preparing = false }
+        broadcastTimer?.invalidate()
+        broadcastTimer = nil
+
+        // 选完广播再开画中画：这时 App 可能还在前台，系统也允许 App 内直接浮出。
+        // 间隔压到 0.15s——用户选完广播很可能马上就按 Home，慢一点就来不及了。
+        guard pipOn else { return }
+        pipRequested = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            self?.startPipIfPossible()
+        }
+    }
+
+    private func startPipIfPossible() {
+        guard running, pipRequested, pipOn else { return }
+        guard let anchor = anchorView, anchor.window != nil else {
+            // 锚点还没上屏，200ms 后再试一次（切 Tab 回来、刚启动时会发生）
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                self?.startPipIfPossible()
+            }
+            return
+        }
+        ZKPip.shared()!.start(in: anchor)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+            guard let self else { return }
+            if ZKPip.shared()!.isActive() {
+                self.pipActive = true
+                self.preparing = false
+            } else if self.running && self.pipRequested {
+                // 再试一次：视图刚上屏时系统偶尔会拒
+                ZKPip.shared()!.start(in: anchor)
+            }
+        }
+    }
+
+    /// 首页「画中画」按钮 / 设置页开关
+    func setPip(_ on: Bool) {
+        pipOn = on
+        UserDefaults.standard.set(on, forKey: "zt_pip_on")
+        if on {
+            if running && broadcastSeen {
+                pipRequested = true
+                startPipIfPossible()
+            }
+        } else {
+            pipRequested = false
+            ZKPip.shared()!.stop()
+            pipActive = false
+        }
+    }
+
+    func togglePip() { setPip(!pipOn) }
+
+    /// 本次会话已经说过的内容（本地，用于停止后立即展示，不等服务端）
+    var localTranscript: [(String, String)] {
+        lines.map { ($0.source, $0.trans) }
+    }
+}
+
+// MARK: - 后台保活
+
+/// 播一段完全听不见的音频，让 App 在后台保持运行。
+///
+/// 为什么需要：画中画的画面由系统渲染，但里面的字幕是 App 自己更新 UIView 的。
+/// App 一旦被挂起，字幕就停在最后一帧——用户看到的就是「回到桌面后画中画卡住了」。
+/// 有后台音频权限时，只要真的在出声（哪怕音量是 0），App 就不会被挂起。
+@MainActor
+final class SilentKeeper {
+    private var engine: AVAudioEngine?
+    private var player: AVAudioPlayerNode?
+
+    func start() {
+        if engine != nil { return }
+        let s = AVAudioSession.sharedInstance()
+        try? s.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+        try? s.setActive(true)
+
+        let e = AVAudioEngine()
+        let p = AVAudioPlayerNode()
+        guard let fmt = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1) else { return }
+        e.attach(p)
+        e.connect(p, to: e.mainMixerNode, format: fmt)
+        e.mainMixerNode.outputVolume = 0     // 真静音，用户听不到
+        do {
+            try e.start()
+        } catch {
+            return
+        }
+        guard let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: 44100) else { return }
+        buf.frameLength = 44100
+        p.scheduleBuffer(buf, at: nil, options: .loops, completionHandler: nil)
+        p.play()
+        engine = e
+        player = p
+    }
+
+    func stop() {
+        player?.stop()
+        engine?.stop()
+        player = nil
+        engine = nil
+    }
+}
