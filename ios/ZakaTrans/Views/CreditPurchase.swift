@@ -147,15 +147,12 @@ struct CreditPurchaseSection: View {
 
     // MARK: - 档位卡片
 
-    /// 积分量在上当主角，下面用一句话说明这档适合什么场景，不写「初次使用 / 少量补充」
-    /// 这类推销词，也不啰嗦。
+    /// 积分量在上当主角，下面那一行说明这档适合什么场景（老板给的定稿文案）。
     private func note(for credits: Int) -> String {
-        switch credits {
-        case ..<300:   return "满足日常需求"
-        case ..<700:   return "适合短期出行"
-        case ..<1400:  return "适合高频使用"
-        default:       return "适合长期使用"
-        }
+        if credits <= 120 { return "适合短期使用" }
+        if credits <= 300 { return "满足日常翻译需求" }
+        if credits <= 680 { return "适合高频使用" }
+        return "大容量积分套餐"
     }
 
     private func pick(_ id: String) {
