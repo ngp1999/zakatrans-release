@@ -15,7 +15,7 @@ struct CreditView: View {
         List {
             Section {
                 balanceCard
-                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 6, trailing: 16))
+                    .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 6, trailing: 8))
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
             }
@@ -45,7 +45,8 @@ struct CreditView: View {
         }
     }
 
-    /// 余额卡：余额是主角，「积分明细」贴在卡片里当入口，不另占一行。
+    /// 余额卡：只有余额一件事，不再挂「积分可用于…」这类小字。
+    /// 积分明细收在导航栏右上角的图标里。
     private var balanceCard: some View {
         VStack(alignment: .leading, spacing: DSSpace.xs) {
             Text("我的积分余额")
@@ -63,29 +64,6 @@ struct CreditView: View {
                     .font(DSFont.subheadline)
                     .foregroundStyle(DSColor.secondaryLabel)
             }
-
-            Button {
-                Haptics.tap()
-                showUsage = true
-            } label: {
-                HStack(spacing: 4) {
-                    Text("积分可用于实时翻译服务")
-                        .font(DSFont.footnote)
-                        .foregroundStyle(DSColor.secondaryLabel)
-                    Text("·")
-                        .font(DSFont.footnote)
-                        .foregroundStyle(DSColor.tertiaryLabel)
-                    Text("积分明细")
-                        .font(DSFont.footnote)
-                        .foregroundStyle(DSColor.accent)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(DSColor.accent.opacity(0.8))
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .padding(.top, 2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16)
