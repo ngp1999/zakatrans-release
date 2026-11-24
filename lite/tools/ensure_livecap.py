@@ -38,7 +38,7 @@ def main():
     ext_id, _ = ensure_bundle_id(c, EXT, "LiveCap Broadcast")
 
     for bid, name in ((app_id, APP), (ext_id, EXT)):
-        caps = list_capabilities(c, bid)
+        caps = list_capabilities(c, bid) or set()
         if "APP_GROUPS" in caps:
             log(f"{name} App Groups 已开启")
         else:
