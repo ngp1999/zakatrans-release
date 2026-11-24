@@ -1,0 +1,30 @@
+name: TF Status (LiveCap)
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: 准备 API 密钥
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.asc"
+          KEY="$HOME/.asc/AuthKey_${ASC_KEY_ID}.p8"
+          : > "$KEY"
+          for FLAG in -D -d --decode; do
+            if printf '%s' "$ASC_KEY_P8" | base64 "${FLAG}" > "$KEY" 2>/dev/null && grep -q "BEGIN PRIVATE KEY" "$KEY"; then break; fi
+          done
+          grep -q "BEGIN PRIVATE KEY" "$KEY" || printf '%s\n' "$ASC_KEY_P8" > "$KEY"
+          echo "ASC_KEY_FILE=$KEY" >> "$GITHUB_ENV"
+      - name: 查状态
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          APP_BUNDLE_ID: com.zakatrans.livecap
+        run: python3 lite/tools/tf_status.py
