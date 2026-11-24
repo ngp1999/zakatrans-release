@@ -1227,18 +1227,49 @@ static const CGFloat kZKZhTypeRate  = 22.0;   // 译文：22 字/秒
 static const CGFloat kZKSrcTypeRate = 52.0;   // 原文：52 字符/秒
 static const CFTimeInterval kZKRowRollDuration = 0.42;   // 逐字档满一行后整块上推一行的时长
 
-/// 句子往整段后面接：英文之间留一个空格，中文直接接上，同一句重复推到就不再加一遍。
-static void ZKSegAppend(NSMutableString *buf, NSString *s) {
-    if (!s.length) return;
-    if (!buf.length) { [buf appendString:s]; return; }
-    if ([buf hasSuffix:s]) return;
-    unichar c = [s characterAtIndex:0];
-    BOOL latin = (c < 128);
-    if (latin) {
-        unichar last = [buf characterAtIndex:buf.length - 1];
-        if (last != ' ' && last != '\n') [buf appendString:@" "];
+/// 句子往整段后面接：句子之间统一用「，」断开，同一句重复推到就不再加一遍。
+///
+/// 逐字档是一整段连续文字，段中间的「。！？」会让人以为一句话已经说完了，
+/// 读起来是断的；统一换成逗号，整段就是一条连续的流水。
+/// 译文也走同一条规则——以前只有原文保留标点，译文那段就成了没有标点的字符流，
+/// 两块文字节奏对不上。
+/// 标点一律转成逗号：句号、问号、叹号、分号、冒号、省略号都当断句，转「，」；
+/// 原来就是逗号的保留，连续两个逗号只留一个，开头结尾不留逗号。
+static NSString *ZKSegCommafy(NSString *s) {
+    if (![s isKindOfClass:[NSString class]] || !s.length) return @"";
+    NSMutableString *out = [NSMutableString stringWithCapacity:s.length + 1];
+    for (NSUInteger i = 0; i < s.length; i++) {
+        unichar c = [s characterAtIndex:i];
+        unichar o = c;
+        if (c == 0x3002 || c == 0xFF01 || c == 0xFF1F           // 。！？
+            || c == '.' || c == '!' || c == '?'                 // .!?
+            || c == ';' || c == ':' || c == 0xFF1B || c == 0xFF1A  // ;:；：
+            || c == 0x2026) {                                   // …
+            o = 0xFF0C;                                         // ，
+        }
+        if (o == 0xFF0C) {
+            if (!out.length) continue;                          // 开头不要逗号
+            unichar last = [out characterAtIndex:out.length - 1];
+            if (last == 0xFF0C || last == ' ' || last == 0x3000 || last == '\n') continue;
+        }
+        [out appendFormat:@"%C", o];
     }
-    [buf appendString:s];
+    while (out.length) {
+        unichar last = [out characterAtIndex:out.length - 1];
+        if (last == 0xFF0C || last == ' ' || last == 0x3000 || last == '\n') {
+            [out deleteCharactersInRange:NSMakeRange(out.length - 1, 1)];
+        } else break;
+    }
+    return out;
+}
+
+static void ZKSegAppend(NSMutableString *buf, NSString *s) {
+    NSString *t = ZKSegCommafy(s);
+    if (!t.length) return;
+    if (!buf.length) { [buf appendString:t]; return; }
+    if ([buf hasSuffix:t]) return;
+    [buf appendString:@"，"];
+    [buf appendString:t];
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
