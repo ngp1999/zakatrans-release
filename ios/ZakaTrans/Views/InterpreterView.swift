@@ -16,6 +16,7 @@ struct InterpreterView: View {
     /// 进页面之前用户的收音/语言设置，退出这一页时原样还回去
     @State private var savedAudioSource: String?
     @State private var savedSourceLang: String?
+    @State private var savedDestLang: String?
     /// 这一页现在在不在屏幕上（不在屏幕上但还在收音时，不要急着还原设置）
     @State private var pageVisible = false
 
@@ -47,7 +48,10 @@ struct InterpreterView: View {
         }
         // 离开页面后还在同传（画中画照常出字幕），等它真的停了再还原设置
         .onChange(of: app.running) { running in
-            if !running && !pageVisible { restoreUserPrefs() }
+            if !running && !pageVisible {
+                app.setDuplex(false)
+                restoreUserPrefs()
+            }
         }
     }
 
@@ -118,10 +122,10 @@ struct InterpreterView: View {
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: DSSpace.l) {
             VStack(alignment: .leading, spacing: DSSpace.xs) {
-                Text("边说边译，译文始终是中文")
+                Text("你说中文，译成英文；对方说外语，译成中文")
                     .font(DSFont.title3)
                     .foregroundStyle(DSColor.label)
-                Text("源语言自动识别，不用选。点下面的按钮开始，译文会实时出现在这里。")
+                Text("原语言自动识别，哪个方向也自动。每行上面是译文，下面是原话。")
                     .font(DSFont.subheadline)
                     .foregroundStyle(DSColor.secondaryLabel)
                     .fixedSize(horizontal: false, vertical: true)
@@ -131,7 +135,7 @@ struct InterpreterView: View {
             VStack(alignment: .leading, spacing: DSSpace.m) {
                 step(1, "点下面的「开启同声传译」")
                 step(2, "第一次会问麦克风权限，点「允许」")
-                step(3, "直接说话，译文跟着声音出来")
+                step(3, "直接说话：说中文就出英文，对方说英文就出中文")
                 step(4, "字幕会同时出现在画中画浮窗里，可以拖到屏幕任意位置")
             }
         }
@@ -258,7 +262,10 @@ struct InterpreterView: View {
         app.micOnly = true
         savedAudioSource = app.prefs.audioSource
         savedSourceLang = app.prefs.sourceLang
+        savedDestLang = app.prefs.destLang
 
+        // 先把语向按这一页定好（外语→中文），再开双向：两条会话的语向都在建立时固定，
+        // 顺序反了第一路会沿用用户上一次的目标语言，外语那一路就译不到中文。
         var p = app.prefs
         p.audioSource = "mic"
         p.sourceLang = "auto"
@@ -272,6 +279,8 @@ struct InterpreterView: View {
         } else {
             app.applyPrefsToEngine()
         }
+        // 双向：外语→中文、中文→英文，两条会话同时跑
+        app.setDuplex(true)
         if !app.pipOn { app.setPip(true) }
         _ = cloud
     }
@@ -282,6 +291,7 @@ struct InterpreterView: View {
     private func leavePage() {
         guard !app.running else { return }
         app.micOnly = false
+        app.setDuplex(false)
         restoreUserPrefs()
     }
 
@@ -289,12 +299,17 @@ struct InterpreterView: View {
         defer {
             savedAudioSource = nil
             savedSourceLang = nil
+            savedDestLang = nil
         }
+        app.setDuplex(false)
         guard let a = savedAudioSource, let s = savedSourceLang else { return }
-        guard app.prefs.audioSource != a || app.prefs.sourceLang != s else { return }
+        let d = savedDestLang ?? app.prefs.destLang
+        guard app.prefs.audioSource != a || app.prefs.sourceLang != s
+                || app.prefs.destLang != d else { return }
         app.updatePrefs { q in
             q.audioSource = a
             q.sourceLang = s
+            q.destLang = d
         }
     }
 }
