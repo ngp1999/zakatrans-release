@@ -3,10 +3,11 @@ import UIKit
 
 /// 充值档位 + 立即充值 + 付费协议。
 ///
-/// 「我的积分」和充值弹窗共用这一块。顺序按用户习惯来：
-/// 先选档位（卡片只选中、不付款）→ 按「立即充值」→ 协议勾在按钮下面。
-/// 三样东西放在同一组里，点击顺序从上往下一条线，中间不隔大段空白。
-/// 页面上不放任何说明性小字；没勾协议就点充值，弹系统确认框。
+/// 「我的积分」和充值弹窗共用这一块。版式按参考图来：
+/// 上面一组「选择充值套餐」标题 + 一句副标题，下面一行一个套餐卡（名称、描述、价格、右侧勾选圈），
+/// 卡片只负责选中、不付款；最下面一颗整宽的主按钮才进内购，按钮上带着当前档位的价格；
+/// 按钮下面一行小字：圆形勾选 +「我已阅读并同意《付费协议》」。
+/// 没勾协议就点充值，弹系统确认框。
 struct CreditPurchaseSection: View {
     @ObservedObject private var purch = Purchases.shared
 
@@ -30,16 +31,19 @@ struct CreditPurchaseSection: View {
             }
 
             Button(action: recharge) {
-                Text(purch.busy ? "正在处理…" : "立即充值")
-                    .font(.body.weight(.semibold))
+                Text(buyTitle)
+                    .font(DSFont.headline)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 2)
+                    .frame(height: 50)
+                    .background(
+                        RoundedRectangle(cornerRadius: DSRadius.button, style: .continuous)
+                            .fill(selectedId == nil ? DSColor.fill : DSColor.accentFill)
+                    )
+                    .foregroundStyle(selectedId == nil ? DSColor.tertiaryLabel : Color.white)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(DSColor.accentFill)
-            .controlSize(.large)
+            .buttonStyle(.plain)
             .disabled(purch.busy || selectedId == nil)
-            .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 4, trailing: 16))
+            .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 2, trailing: 16))
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
 
@@ -52,6 +56,7 @@ struct CreditPurchaseSection: View {
                 Text(hint)
                     .font(DSFont.footnote)
                     .foregroundStyle(DSColor.destructive)
+                    .frame(maxWidth: .infinity, alignment: .center)
                     .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 6, trailing: 16))
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
@@ -64,12 +69,22 @@ struct CreditPurchaseSection: View {
                         (m.contains("失败") || m.contains("未通过"))
                         ? DSColor.destructive : DSColor.secondaryLabel
                     )
+                    .frame(maxWidth: .infinity, alignment: .center)
                     .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 6, trailing: 16))
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
             }
         } header: {
-            Text("选择充值档位")
+            VStack(alignment: .leading, spacing: 2) {
+                Text("选择充值套餐")
+                    .font(DSFont.headline)
+                    .foregroundStyle(DSColor.label)
+                Text("选择适合你的积分额度")
+                    .font(DSFont.footnote)
+                    .foregroundStyle(DSColor.secondaryLabel)
+                    .textCase(nil)
+            }
+            .padding(.bottom, 2)
         }
         .navigationDestination(isPresented: $showTerms) {
             TermsView(kind: .payment)
@@ -83,21 +98,27 @@ struct CreditPurchaseSection: View {
                 Task { await purch.buy(id: id) }
             }
         } message: {
-            Text("购买积分需先阅读并同意《付费协议》。积分按实际用量扣除，充值通过 App Store 内购完成，退款按 Apple 规则处理。")
+            Text("我已阅读并同意《付费协议》")
         }
+    }
+
+    /// 按钮上的字跟着选中的档位走：选哪档、多少钱，一颗按钮上说清楚。
+    private var buyTitle: String {
+        if purch.busy { return "正在处理…" }
+        guard let id = selectedId, purch.available(id) else { return "立即充值" }
+        return "立即充值 · \(purch.priceText(for: id))"
     }
 
     // MARK: - 协议行
 
     /// 一行小字：圆形勾选 +「我已阅读并同意」+ 可点的《付费协议》。
-    /// 字号比正文小一档，紧贴充值按钮下面，不占高度。
     private var agreementRow: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 5) {
             Button {
                 toggleAgree()
             } label: {
                 Image(systemName: agreed ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 17))
+                    .font(.system(size: 15))
                     .foregroundStyle(agreed ? DSColor.accent : DSColor.tertiaryLabel)
             }
             .buttonStyle(.plain)
@@ -106,7 +127,7 @@ struct CreditPurchaseSection: View {
                 toggleAgree()
             } label: {
                 Text("我已阅读并同意")
-                    .font(DSFont.footnote)
+                    .font(.system(size: 12))
                     .foregroundStyle(DSColor.secondaryLabel)
             }
             .buttonStyle(.plain)
@@ -115,17 +136,27 @@ struct CreditPurchaseSection: View {
                 showTerms = true
             } label: {
                 Text("《付费协议》")
-                    .font(DSFont.footnote)
+                    .font(.system(size: 12))
                     .foregroundStyle(DSColor.accent)
             }
             .buttonStyle(.plain)
-
-            Spacer(minLength: 0)
         }
+        .frame(maxWidth: .infinity, alignment: .center)
         .padding(.vertical, 2)
     }
 
     // MARK: - 档位卡片
+
+    /// 档位名跟积分量绑在一起，不写「初次使用 / 少量补充」这类推销词。
+    private func title(for credits: Int) -> String {
+        switch credits {
+        case ..<300:   return "体验套餐"
+        case ..<700:   return "标准套餐"
+        case ..<1400:  return "进阶套餐"
+        case ..<3000:  return "畅享套餐"
+        default:       return "尊享套餐"
+        }
+    }
 
     private func pick(_ id: String) {
         guard purch.available(id) else { return }
@@ -162,12 +193,12 @@ struct CreditPurchaseSection: View {
         let ready = purch.available(item.id)
         let on = selectedId == item.id
         return HStack(alignment: .center, spacing: DSSpace.s) {
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text("\(item.credits)")
-                    .font(.system(size: 22, weight: .semibold).monospacedDigit())
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title(for: item.credits))
+                    .font(DSFont.body.weight(.semibold))
                     .foregroundStyle(DSColor.label)
-                Text("积分")
-                    .font(DSFont.subheadline)
+                Text("\(Format.credits(item.credits)) 积分")
+                    .font(DSFont.footnote)
                     .foregroundStyle(DSColor.secondaryLabel)
             }
 
@@ -177,33 +208,26 @@ struct CreditPurchaseSection: View {
                 .font(.body.weight(.semibold).monospacedDigit())
                 .foregroundStyle(ready ? DSColor.label : DSColor.tertiaryLabel)
                 .lineLimit(1)
+
+            Image(systemName: on ? "checkmark.circle.fill" : "circle")
+                .font(.system(size: 21))
+                .foregroundStyle(on ? DSColor.accent : DSColor.tertiaryLabel.opacity(0.5))
+                .padding(.leading, 2)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .frame(minHeight: 60)
+        .frame(minHeight: 62)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(on && ready ? DSColor.accentSoft : DSColor.cell)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .strokeBorder(
                     on && ready ? DSColor.accent : DSColor.separator.opacity(0.6),
                     lineWidth: on && ready ? 1.6 : 0.5
                 )
         )
-        .overlay(alignment: .topTrailing) {
-            if on && ready {
-                Text("已选择")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(DSColor.accent)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Capsule().fill(DSColor.accentSoft))
-                    .offset(x: -8, y: 6)
-                    .transition(.opacity)
-            }
-        }
         .opacity(ready ? 1 : 0.45)
     }
 }
