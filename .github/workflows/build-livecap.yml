@@ -1,0 +1,142 @@
+name: LiveCap Build (Xcode)
+
+# LiveCap：只做实时字幕的直连版。独立 bundle id、独立 App 记录、独立 TestFlight 包，
+# 与语幕（com.zakatrans.app）完全分开，互不影响。
+on:
+  workflow_dispatch:
+    inputs:
+      marketing_version:
+        description: "版本号（新 App 从 1.0.0 起）"
+        required: false
+        default: "1.0.0"
+      upload:
+        description: "上传到 TestFlight（true/false）"
+        required: false
+        default: "true"
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 选最新的 Xcode
+        run: |
+          set -euo pipefail
+          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          xcodebuild -version
+
+      - name: 安装 xcodegen
+        run: |
+          brew install xcodegen || brew upgrade xcodegen
+          xcodegen --version
+
+      - name: 准备 API 密钥
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        run: |
+          set -euo pipefail
+          [ -n "${ASC_KEY_P8:-}" ] || { echo "❌ 没填 ASC_KEY_P8"; exit 1; }
+          [ -n "${ASC_KEY_ID:-}" ] || { echo "❌ 没填 ASC_KEY_ID"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/keys" "$HOME/.appstoreconnect/private_keys"
+          KEY="$RUNNER_TEMP/keys/AuthKey_${ASC_KEY_ID}.p8"
+          : > "$KEY"
+          for FLAG in -D -d --decode; do
+            if printf '%s' "$ASC_KEY_P8" | base64 "${FLAG}" > "$KEY" 2>/dev/null \
+               && grep -q "BEGIN PRIVATE KEY" "$KEY"; then
+              break
+            fi
+          done
+          grep -q "BEGIN PRIVATE KEY" "$KEY" || printf '%s\n' "$ASC_KEY_P8" > "$KEY"
+          chmod 600 "$KEY"
+          cp "$KEY" "$HOME/.appstoreconnect/private_keys/"
+          echo "ASC_KEY_FILE=$KEY" >> "$GITHUB_ENV"
+
+      - name: 准备 App ID 与能力
+        continue-on-error: true
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          python3 lite/tools/ensure_livecap.py
+
+      - name: 生成工程
+        working-directory: lite
+        run: |
+          xcodegen generate
+          ls -la
+
+      - name: 归档（真签名）
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          MV: ${{ github.event.inputs.marketing_version }}
+        run: |
+          set -euo pipefail
+          BUILD_NO="$(date +%s)"
+          echo "BUILD_NO=$BUILD_NO" >> "$GITHUB_ENV"
+          FILE_MV="$(sed -n 's/.*MARKETING_VERSION: "\(.*\)".*/\1/p' lite/project.yml | head -1)"
+          MV_FINAL="${MV:-$FILE_MV}"
+          echo "📦 本次构建版本号 = $MV_FINAL"
+          xcodebuild -project lite/LiveCap.xcodeproj \
+            -scheme LiveCap \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/LiveCap.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_FILE" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            MARKETING_VERSION="$MV_FINAL" \
+            CURRENT_PROJECT_VERSION="$BUILD_NO" \
+            DEVELOPMENT_TEAM=9VSZ8M2JL5 \
+            CODE_SIGN_STYLE=Automatic \
+            archive 2>&1 | tee "$RUNNER_TEMP/archive.log"
+          test ${PIPESTATUS[0]} -eq 0
+
+      - name: 看归档产物
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/LiveCap.xcarchive/Products/Applications/LiveCap.app"
+          ls -la "$APP" | head -20
+          codesign -d --entitlements - "$APP" 2>&1 | head -30 || true
+
+      - name: 导出 ipa
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/LiveCap.xcarchive" \
+            -exportPath "$RUNNER_TEMP/out" \
+            -exportOptionsPlist lite/ExportOptions.plist \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_FILE" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+          ls -la "$RUNNER_TEMP/out"
+
+      - name: 上传 TestFlight
+        if: ${{ github.event.inputs.upload != 'false' }}
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          IPA="$(ls "$RUNNER_TEMP"/out/*.ipa | head -1)"
+          echo "上传 $IPA"
+          xcrun altool --upload-app -f "$IPA" -t ios \
+            --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID" --verbose
+
+      - name: 留存 ipa
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiveCap-ipa
+          path: ${{ runner.temp }}/out/*.ipa
+          if-no-files-found: warn
+          retention-days: 14
