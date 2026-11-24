@@ -38,6 +38,24 @@ static NSString *gScroll = @"up";
 // 优先保住中文主字幕的完整，原文宁可截一行，也不把两个字都缩到看不清。
 static NSInteger gEnMaxLines = 0;
 static const CGFloat ZK_PARA_GAP = 14.0;      // 句与句之间的空档
+
+/// 整句/上推/全宽这三档：句尾标点不要（一行一句，结尾挂个句号只会占位置）。
+/// 逐字档不走这里——它把每句接成一整段，句号就是段落里的停顿。
+static NSString *ZKSegTrimEnd(NSString *s) {
+    if (!s.length) return @"";
+    NSMutableString *m = [s mutableCopy];
+    while (m.length > 0) {
+        unichar c = [m characterAtIndex:m.length - 1];
+        BOOL punct = (c == 0x3002 || c == 0xFF01 || c == 0xFF1F || c == 0xFF0C
+                      || c == 0x3001 || c == 0xFF1B || c == 0xFF1A
+                      || c == '.' || c == ',' || c == '!' || c == '?'
+                      || c == ';' || c == ':' || c == 0x2026 || c == ' '
+                      || c == 0x3000 || c == '\n');
+        if (!punct) break;
+        [m deleteCharactersInRange:NSMakeRange(m.length - 1, 1)];
+    }
+    return m;
+}
 static const CGFloat ZK_MAX_BLOCKS = 120.0;   // 历史句上限（正常一场对话到不了）
 
 // 滚动弹簧：固有频率越高追得越快（临界阻尼下约 4/ω 秒到位）。
@@ -2830,6 +2848,13 @@ static void ZKSegAppend(NSMutableString *buf, NSString *s) {
     if (![e isKindOfClass:[NSString class]]) e = @"";
     if (![z isKindOfClass:[NSString class]]) z = @"";
     if (!e.length && !z.length) return;
+    // 上来的文本是原样的（带句尾标点）。逐字档要留着——它把每句接成一整段，
+    // 句号就是段落里的停顿；其余三档一行一句，句尾标点裁掉。
+    if (![self isSegmentMode]) {
+        e = ZKSegTrimEnd(e);
+        z = ZKSegTrimEnd(z);
+        if (!e.length && !z.length) return;
+    }
     [self hidePlaceholder];
     // 同一句重复推上来（断线重连、上游重复回调）就不再落一块。
     // 只跟上一句比是不够的：中间夹了别的句子之后，同一句照样会再出现一遍，
