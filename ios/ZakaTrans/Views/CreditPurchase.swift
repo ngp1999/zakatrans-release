@@ -197,7 +197,7 @@ struct CreditPurchaseSection: View {
                 Text(title(for: item.credits))
                     .font(DSFont.body.weight(.semibold))
                     .foregroundStyle(DSColor.label)
-                Text("\(Format.credits(item.credits)) 积分")
+                Text("\(Format.credits(Double(item.credits))) 积分")
                     .font(DSFont.footnote)
                     .foregroundStyle(DSColor.secondaryLabel)
             }
