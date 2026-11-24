@@ -49,8 +49,10 @@ struct ProfileView: View {
                             Text("我的积分")
                         } icon: {
                             Image(systemName: "star.circle.fill")
+                                .font(.system(size: 17))
                                 .symbolRenderingMode(.palette)
                                 .foregroundStyle(.white, DSColor.accent)
+                                .frame(width: 24, alignment: .center)
                         }
                     }
                 }
@@ -59,10 +61,18 @@ struct ProfileView: View {
             // 记录 / 关于
             Section {
                 NavigationLink(value: ProfileRoute.history) {
-                    Label("对话记录", systemImage: "clock.arrow.circlepath")
+                    Label {
+                        Text("对话记录")
+                    } icon: {
+                        rowIcon("clock.arrow.circlepath")
+                    }
                 }
                 NavigationLink(value: ProfileRoute.about) {
-                    Label("关于语幕", systemImage: "info.circle")
+                    Label {
+                        Text("关于语幕")
+                    } icon: {
+                        rowIcon("info.circle")
+                    }
                 }
             }
 
@@ -96,6 +106,15 @@ struct ProfileView: View {
         } message: {
             Text("退出登录不会丢失任何数据，你仍可以登录此账号。")
         }
+    }
+
+    /// 列表行图标统一尺寸。
+    /// 系统符号本身的「视觉大小」并不一致——时钟带外圈、圆里加号那种会显得比 info 大一截，
+    /// 按同一个字号排出来看着就是一高一矮。这里给同一个字号 + 同一个宽度槽位，光学校齐。
+    private func rowIcon(_ name: String) -> some View {
+        Image(systemName: name)
+            .font(.system(size: 17, weight: .regular))
+            .frame(width: 24, alignment: .center)
     }
 
     // MARK: - 账号行
