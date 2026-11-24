@@ -1,5 +1,7 @@
 #import <Foundation/Foundation.h>
 
+NS_ASSUME_NONNULL_BEGIN
+
 // 豆包同声传译大模型（火山引擎 AST v2）——客户端直连版
 //
 // 这一版不经过任何中间服务：音频直接推到 ospeech 的 WebSocket，
@@ -59,3 +61,5 @@
 + (BOOL)hasCredential;
 
 @end
+
+NS_ASSUME_NONNULL_END
