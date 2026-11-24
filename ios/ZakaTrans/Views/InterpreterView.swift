@@ -119,13 +119,15 @@ struct InterpreterView: View {
     }
 
     /// 没开始时的一段说明：干什么、怎么说、字幕在哪看。
+    /// 跟首页「实时字幕」那块保持同一个写法：一句标题 + 一句说明 + 三步，
+    /// 不堆名词、不写原理。
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: DSSpace.l) {
             VStack(alignment: .leading, spacing: DSSpace.xs) {
-                Text("你说中文，译成英文；对方说外语，译成中文")
+                Text("说你的话，对面看译文")
                     .font(DSFont.title3)
                     .foregroundStyle(DSColor.label)
-                Text("原语言自动识别，哪个方向也自动。每行上面是译文，下面是原话。")
+                Text("原语言自动识别，说的语言自动换成对方的语言。")
                     .font(DSFont.subheadline)
                     .foregroundStyle(DSColor.secondaryLabel)
                     .fixedSize(horizontal: false, vertical: true)
@@ -135,8 +137,7 @@ struct InterpreterView: View {
             VStack(alignment: .leading, spacing: DSSpace.m) {
                 step(1, "点下面的「开启同声传译」")
                 step(2, "第一次会问麦克风权限，点「允许」")
-                step(3, "直接说话：说中文就出英文，对方说英文就出中文")
-                step(4, "字幕会同时出现在画中画浮窗里，可以拖到屏幕任意位置")
+                step(3, "直接说话，译文和原话都显示在这里")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
