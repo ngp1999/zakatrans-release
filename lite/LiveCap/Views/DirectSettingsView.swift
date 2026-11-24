@@ -37,7 +37,7 @@ struct DirectSettingsView: View {
                 .padding(.vertical, 2)
             }
 
-            Section("API 凭据") {
+            Section {
                 field("AppID", text: $appID, placeholder: "例如 1234567890")
                 HStack {
                     if showToken {
@@ -63,6 +63,8 @@ struct DirectSettingsView: View {
                     .accessibilityLabel(showToken ? "隐藏 Token" : "显示 Token")
                 }
                 field("Resource ID", text: $resource, placeholder: "volc.service_type.10053")
+            } header: {
+                Text("API 凭据")
             } footer: {
                 Text("凭据只存在本机钥匙串，卸载 App 才会清掉。Resource ID 不填就用 volc.service_type.10053（同声传译大模型）。")
             }
@@ -98,6 +100,8 @@ struct DirectSettingsView: View {
                         .foregroundStyle(r.hasPrefix("连接正常") ? DSColor.secondaryLabel : DSColor.destructive)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+            } header: {
+                Text("连接")
             } footer: {
                 Text("「测试连接」会真的建一次会话（不送声音，几秒就断），用来确认 AppID、Token、Resource ID 三项都通。")
             }
