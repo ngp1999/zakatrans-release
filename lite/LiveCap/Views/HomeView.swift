@@ -9,9 +9,7 @@ import UIKit
 ///   · 文案层级靠字号和次级色区分，不靠颜色和装饰
 struct HomeView: View {
     @ObservedObject private var app = AppState.shared
-    /// 字幕样式：走系统 sheet
-    @State private var showStyle = false
-    /// 设置：豆包凭据 + 关于
+    /// 设置：豆包凭据 + 字幕样式
     @State private var showSettings = false
     /// 麦克风权限被拒时给的提示
     @State private var micDenied = false
@@ -35,16 +33,6 @@ struct HomeView: View {
         }
         .sheet(isPresented: $showSettings) {
             NavigationStack { DirectSettingsView() }
-        }
-        .sheet(isPresented: $showStyle) {
-            NavigationStack {
-                SubtitleSettingsView()
-                    .toolbar {
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("完成") { showStyle = false }
-                        }
-                    }
-            }
         }
         .onAppear { Haptics.warm() }
         .alert("需要麦克风权限", isPresented: $micDenied) {
@@ -228,51 +216,40 @@ struct HomeView: View {
                     .frame(maxWidth: .infinity, alignment: .center)
             }
 
-            HStack(spacing: DSSpace.s) {
-                // 字幕样式：颜色、字号、背景、窗口大小都在里面，系统 sheet 呈现
-                Button {
-                    showStyle = true
-                } label: {
-                    Image(systemName: app.pipOn ? "pip.fill" : "pip")
-                }
-                .buttonStyle(DSIconButtonStyle(on: app.pipOn, size: 50))
-                .accessibilityLabel("字幕样式")
-
-                Button {
-                    Haptics.tap(0.8)
-                    if app.running || app.preparing {
-                        app.stop()
-                    } else if !app.preparing {
-                        Task {
-                            // 麦克风收音：先把权限拿到，再开引擎（没权限直接碰输入节点会闪退）
-                            guard await app.requestMicPermissionIfNeeded() else {
-                                micDenied = true
-                                return
-                            }
-                            await app.start()
-                            // 麦克风收音不需要屏幕广播权限：只有内部收音（系统声音）才去叫系统面板
-                            if app.running, app.prefs.audioSource != "mic" { BroadcastTrigger.shared.fire() }
+            Button {
+                Haptics.tap(0.8)
+                if app.running || app.preparing {
+                    app.stop()
+                } else if !app.preparing {
+                    Task {
+                        // 麦克风收音：先把权限拿到，再开引擎（没权限直接碰输入节点会闪退）
+                        guard await app.requestMicPermissionIfNeeded() else {
+                            micDenied = true
+                            return
                         }
-                    }
-                } label: {
-                    HStack(spacing: DSSpace.xs) {
-                        if app.preparing {
-                            ProgressView()
-                                .progressViewStyle(.circular)
-                                .tint(.white)
-                        } else {
-                            Image(systemName: (app.running && !app.preparing) ? "stop.fill" : "play.fill")
-                                .font(.footnote.weight(.bold))
-                        }
-                        Text(app.preparing ? "正在加载" : (app.running ? "停止" : "开启实时字幕"))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.8)
+                        await app.start()
+                        // 麦克风收音不需要屏幕广播权限：只有内部收音（系统声音）才去叫系统面板
+                        if app.running, app.prefs.audioSource != "mic" { BroadcastTrigger.shared.fire() }
                     }
                 }
-                .buttonStyle(DSFilledButtonStyle(
-                    tint: (app.running && !app.preparing) ? DSColor.destructive : DSColor.accentFill
-                ))
+            } label: {
+                HStack(spacing: DSSpace.xs) {
+                    if app.preparing {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .tint(.white)
+                    } else {
+                        Image(systemName: (app.running && !app.preparing) ? "stop.fill" : "play.fill")
+                            .font(.footnote.weight(.bold))
+                    }
+                    Text(app.preparing ? "正在加载" : (app.running ? "停止" : "开启实时字幕"))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
             }
+            .buttonStyle(DSFilledButtonStyle(
+                tint: (app.running && !app.preparing) ? DSColor.destructive : DSColor.accentFill
+            ))
         }
         .padding(.horizontal, DSSpace.pageMargin)
         .padding(.top, DSSpace.s)
