@@ -25,9 +25,11 @@ final class Cloud: ObservableObject {
         // 冷启动第一帧就把登录态认下来：本地有 token 就直接进主界面，
         // 不再先显示一个转圈的检查页等异步结果。
         loggedIn = !(Keychain.get("account_token") ?? "").isEmpty
+        // 接口地址以包内的为准：老版本在本地留过旧地址，升级后不能被它拖回老服务器
+        UserDefaults.standard.set(Self.baseURL, forKey: "zt_base_url")
     }
 
-    static let baseURL = "https://api.xingyans.com"
+    static let baseURL = "https://api.yumss.cn"
 
     /// 余额对内是 token，对外全部显示积分（1 元 = 10 积分，1400 积分 = 100 万 token）
     @Published private(set) var balanceTokens: Int64 = 0
