@@ -449,10 +449,21 @@ final class AppState: ObservableObject {
         // 拉回来会把刚改好的默认值顶掉。这里只迁一次，之后用户怎么选就怎么存。
         let migrated = "zt_pip_default_w_done"
         if !UserDefaults.standard.bool(forKey: migrated) {
-            r.pip = "W"
+            r.pip = "M"
             UserDefaults.standard.set(true, forKey: migrated)
             let snapshot = r
             Task { await Cloud.shared.savePrefs(snapshot.dict()) }
+        }
+        // 3.17.0：默认窗型从小横条改成中窗。云端存的还是旧默认（X）的账号
+        // 一次迁到中窗并写回；用户自己后来挑的不再动。
+        let cloudPipMig = "zt_cloud_pip_m_v3170"
+        if !UserDefaults.standard.bool(forKey: cloudPipMig) {
+            UserDefaults.standard.set(true, forKey: cloudPipMig)
+            if r.pip == "X" {
+                r.pip = "M"
+                let snapshot = r
+                Task { await Cloud.shared.savePrefs(snapshot.dict()) }
+            }
         }
         prefs = r
         applyPrefsToEngine()
