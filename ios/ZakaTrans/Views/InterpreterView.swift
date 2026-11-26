@@ -234,7 +234,7 @@ struct InterpreterView: View {
                         if app.preparing {
                             ProgressView()
                                 .progressViewStyle(.circular)
-                                .tint(.white)
+                                .tint(DSColor.accent)
                         } else {
                             Image(systemName: (app.running && !app.preparing) ? "stop.fill" : "play.fill")
                                 .font(.footnote.weight(.bold))
@@ -244,8 +244,9 @@ struct InterpreterView: View {
                             .minimumScaleFactor(0.8)
                     }
                 }
-                .buttonStyle(DSFilledButtonStyle(
-                    tint: (app.running && !app.preparing) ? DSColor.destructive : DSColor.accentFill
+                .buttonStyle(DSGlassPrimaryButtonStyle(
+                    tint: (app.running && !app.preparing) ? DSColor.destructive : DSColor.accentFill,
+                    deep: (app.running && !app.preparing) ? DSColor.destructive : DSColor.accent
                 ))
             }
         }
