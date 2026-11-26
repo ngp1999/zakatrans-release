@@ -95,13 +95,13 @@ struct HomeView: View {
         ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: DSSpace.l) {
-                    if app.lines.isEmpty && app.liveSource.isEmpty && app.liveTrans.isEmpty {
+                    if app.lines.isEmpty && !app.shouldShowLiveRow {
                         emptyState
                     }
                     ForEach(app.lines) { line in
                         lineRow(line).id(line.id)
                     }
-                    if !app.liveSource.isEmpty || !app.liveTrans.isEmpty {
+                    if app.shouldShowLiveRow {
                         liveRow.id("live")
                     }
                     Color.clear.frame(height: 1).id("bottom")
@@ -124,29 +124,19 @@ struct HomeView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// 没开始时的引导：系统设置页那种竖排说明，不用卡片包起来
+    /// 没开始时的引导：系统设置页那种竖排说明，不用卡片包起来。
+    /// 文案固定，不跟收音来源走——不管点的是内部收音还是麦克风，这一块都一样。
     private var emptyState: some View {
-        let mic = app.prefs.audioSource == "mic"
-        return VStack(alignment: .leading, spacing: DSSpace.l) {
-            VStack(alignment: .leading, spacing: DSSpace.xs) {
-                Text(mic ? "把现场说话变成中文字幕" : "把任何声音变成中文字幕")
-                    .font(DSFont.title3)
-                    .foregroundStyle(DSColor.label)
-                Text("点下面的按钮开始，字幕会实时出现在这里。")
-                    .font(DSFont.subheadline)
-                    .foregroundStyle(DSColor.secondaryLabel)
-            }
-            .padding(.top, DSSpace.s)
+        VStack(alignment: .leading, spacing: DSSpace.l) {
+            Text("把任何声音变成中文字幕")
+                .font(DSFont.title3)
+                .foregroundStyle(DSColor.label)
+                .padding(.top, DSSpace.s)
 
             VStack(alignment: .leading, spacing: DSSpace.m) {
                 step(1, "点下面的「开启实时字幕」")
-                if mic {
-                    step(2, "第一次会问麦克风权限，点「允许」")
-                    step(3, "直接说话，字幕跟着声音出来")
-                } else {
-                    step(2, "在系统面板中打开「语幕」的直播录屏权限")
-                    step(3, "等待出现字幕浮窗后即可使用")
-                }
+                step(2, "在系统面板中打开「语幕」的直播录屏权限")
+                step(3, "等待出现字幕浮窗后即可使用")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -220,9 +210,9 @@ struct HomeView: View {
                 Button {
                     showStyle = true
                 } label: {
-                    Image(systemName: app.pipOn ? "pip.fill" : "pip")
+                    Image(systemName: "textformat.size")
                 }
-                .buttonStyle(DSIconButtonStyle(on: app.pipOn, size: 50))
+                .buttonStyle(DSIconButtonStyle(on: false, size: 50))
                 .accessibilityLabel("字幕样式")
 
                 Button {
