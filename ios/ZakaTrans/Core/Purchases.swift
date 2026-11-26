@@ -14,22 +14,22 @@ final class Purchases: ObservableObject {
 
     /// 与后端 credit.Products() 一一对应
     static let productIDs = [
-        "com.zakatrans.credits.120",
-        "com.zakatrans.credits.300",
-        "com.zakatrans.credits.680",
-        "com.zakatrans.credits.1380",
-        "com.zakatrans.credits.2980",
-        "com.zakatrans.credits.5980",
+        "com.zakatrans.token.120",
+        "com.zakatrans.token.300",
+        "com.zakatrans.token.680",
+        "com.zakatrans.token.1380",
+        "com.zakatrans.token.2980",
+        "com.zakatrans.token.5980",
     ]
 
     /// 兜底价目（当 StoreKit 拉不到商品时用来占位，真实价格永远以苹果返回为准）
     static let fallback: [(id: String, cny: Int, credits: Int)] = [
-        ("com.zakatrans.credits.120", 12, 120),
-        ("com.zakatrans.credits.300", 30, 300),
-        ("com.zakatrans.credits.680", 68, 680),
-        ("com.zakatrans.credits.1380", 138, 1380),
-        ("com.zakatrans.credits.2980", 298, 2980),
-        ("com.zakatrans.credits.5980", 598, 5980),
+        ("com.zakatrans.token.120", 12, 120),
+        ("com.zakatrans.token.300", 30, 300),
+        ("com.zakatrans.token.680", 68, 680),
+        ("com.zakatrans.token.1380", 138, 1380),
+        ("com.zakatrans.token.2980", 298, 2980),
+        ("com.zakatrans.token.5980", 598, 5980),
     ]
 
     /// 页面上展示的档位：四档，从 120 到 1380。其余两档仍在商品表里（已购用户/服务端校验
