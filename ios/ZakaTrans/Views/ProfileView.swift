@@ -85,6 +85,44 @@ struct ProfileView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
+
+            // 版本与技术支持
+            Section {
+                LabeledContent("App 版本") {
+                    Text(appVersion)
+                        .font(DSFont.body.monospacedDigit())
+                        .foregroundStyle(DSColor.secondaryLabel)
+                }
+
+                Link(destination: URL(string: "https://yumss.cn/tech")!) {
+                    HStack {
+                        Text("技术支持")
+                            .foregroundStyle(DSColor.label)
+                        Spacer(minLength: 0)
+                        Image(systemName: "arrow.up.right")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(DSColor.tertiaryLabel)
+                    }
+                }
+            }
+
+            // 页脚：应用名 + 备案号（工信部要求 App 内公示，点击可去备案系统查询）
+            Section {
+                VStack(spacing: DSSpace.xxs) {
+                    Text("应用 · 语幕")
+                        .font(.footnote)
+                        .foregroundStyle(DSColor.tertiaryLabel)
+
+                    Link(destination: URL(string: "https://beian.miit.gov.cn/")!) {
+                        Text("皖ICP备2026045837号-3A")
+                            .font(.footnote)
+                    }
+                    .foregroundStyle(DSColor.tertiaryLabel)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, DSSpace.xs)
+                .listRowBackground(Color.clear)
+            }
         }
         .listStyle(.insetGrouped)
         .navigationTitle("我的")
@@ -106,6 +144,12 @@ struct ProfileView: View {
         } message: {
             Text("退出登录不会丢失任何数据，你仍可以登录此账号。")
         }
+    }
+
+    /// 只读短版本号（V3.15.0）。构建号是内部排查用的，不给用户看。
+    private var appVersion: String {
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+        return v.isEmpty ? "" : "V\(v)"
     }
 
     /// 列表行图标统一尺寸。
