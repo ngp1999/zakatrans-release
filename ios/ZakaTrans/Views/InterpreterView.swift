@@ -90,13 +90,13 @@ struct InterpreterView: View {
         ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: DSSpace.l) {
-                    if app.lines.isEmpty && app.liveSource.isEmpty && app.liveTrans.isEmpty {
+                    if app.lines.isEmpty && !app.shouldShowLiveRow {
                         emptyState
                     }
                     ForEach(app.lines) { line in
                         lineRow(line).id(line.id)
                     }
-                    if !app.liveSource.isEmpty || !app.liveTrans.isEmpty {
+                    if app.shouldShowLiveRow {
                         liveRow.id("live")
                     }
                     Color.clear.frame(height: 1).id("bottom")
@@ -123,16 +123,10 @@ struct InterpreterView: View {
     /// 不堆名词、不写原理。
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: DSSpace.l) {
-            VStack(alignment: .leading, spacing: DSSpace.xs) {
-                Text("说你的话，对面看译文")
-                    .font(DSFont.title3)
-                    .foregroundStyle(DSColor.label)
-                Text("原语言自动识别，说的语言自动换成对方的语言。")
-                    .font(DSFont.subheadline)
-                    .foregroundStyle(DSColor.secondaryLabel)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.top, DSSpace.s)
+            Text("面对面交流，现场翻译")
+                .font(DSFont.title3)
+                .foregroundStyle(DSColor.label)
+                .padding(.top, DSSpace.s)
 
             VStack(alignment: .leading, spacing: DSSpace.m) {
                 step(1, "点下面的「开启同声传译」")
