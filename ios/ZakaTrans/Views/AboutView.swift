@@ -6,6 +6,12 @@ struct AboutView: View {
     /// 对外联系邮箱
     static let contactEmail = "1938044162@qq.com"
 
+    /// 应用版本（读包内 Info.plist，跟 App Store 上那一版一致）
+    static var appVersion: String {
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+        return v.isEmpty ? "3.17.0" : v
+    }
+
     @ObservedObject private var cloud = Cloud.shared
     @State private var showDelete = false
     @State private var deleting = false
@@ -29,6 +35,10 @@ struct AboutView: View {
                     Text("实时字幕与同声传译")
                         .font(DSFont.subheadline)
                         .foregroundStyle(DSColor.secondaryLabel)
+
+                    Text("V\(AboutView.appVersion)")
+                        .font(DSFont.footnote)
+                        .foregroundStyle(DSColor.tertiaryLabel)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, DSSpace.s)
