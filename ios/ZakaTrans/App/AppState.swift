@@ -62,12 +62,14 @@ final class AppState: ObservableObject {
     var usesMic: Bool { micOnly || prefs.audioSource == "mic" }
     @Published var pipActive = false
 
-    /// 头像：没有就是系统灰头像；换过就存本机（照片不出设备，也不上传）
+    /// 头像：没有就是系统灰头像。本机存一份用于秒开，同时同步到账号上，
+    /// 归属记在 AvatarStore.owner 里——注销或换账号时不会把上一张带给下一个账号。
     @Published var avatarImage: UIImage? = AvatarStore.load()
 
     func setAvatar(_ image: UIImage?) {
         avatarImage = image
         AvatarStore.save(image)
+        AvatarStore.setOwner(image == nil ? nil : Cloud.shared.accountID)
         let b64 = AvatarStore.base64() ?? ""
         Task {
             // 换头像要「实时同步到服务器」：一次不成就再试一次，
@@ -770,9 +772,31 @@ final class SilentKeeper {
 /// 头像：本机存一份用于秒开，同时同步到账号上（换手机 / 重装还在）。
 /// 只传压缩后的 JPEG（600px 以内，几十 KB），不传原图。
 enum AvatarStore {
+    /// 这张本机头像属于哪个账号。空 = 老版本留下的、还没归属过。
+    private static let ownerKey = "zt_avatar_owner"
+
     private static var url: URL {
         let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         return dir.appendingPathComponent("avatar.jpg")
+    }
+
+    static var owner: String? {
+        let v = UserDefaults.standard.string(forKey: ownerKey)
+        return (v?.isEmpty ?? true) ? nil : v
+    }
+
+    static func setOwner(_ accountID: String?) {
+        if let id = accountID, !id.isEmpty {
+            UserDefaults.standard.set(id, forKey: ownerKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: ownerKey)
+        }
+    }
+
+    /// 注销 / 退出登录时清干净：头像属于账号，不该留给下一个人。
+    static func clear() {
+        try? FileManager.default.removeItem(at: url)
+        UserDefaults.standard.removeObject(forKey: ownerKey)
     }
 
     static func load() -> UIImage? {
