@@ -1,17 +1,19 @@
 import SwiftUI
 
-/// 邮箱登录：输入邮箱 → 收 6 位验证码 → 登录。
+/// 邮箱登录（半屏弹窗）：输入邮箱 → 收 6 位验证码 → 登录。
 ///
 /// 没有密码，账号就是这个邮箱：换手机、重装之后用同一个邮箱进来，
 /// 余额和历史记录都在。第一次用某个邮箱登录会自动建号。
 ///
-/// 呈现方式是「页面内切换」，不用模态弹窗：左上角返回 → 中间一段说明文 →
-/// 邮箱输入框 + 发送按钮 → 验证码 → 登录按钮，与登录页同一套排版和圆角。
+/// 这一版按「正经 App 的登录弹窗」来做：只有标题、两个输入框、一个主按钮，
+/// 不放整段说明文、不放底部小字。弹窗高度由内容自己量出来交给外层。
 struct EmailLoginView: View {
-    /// 左上角返回（由登录页负责把这一页收回去）
-    var onBack: () -> Void
     /// 登录成功后的收尾（同步偏好、加载内购），由登录页传进来
-    var onSuccess: () async -> Void
+    var onSuccess: () async -> Void = {}
+    /// 内容实际高度（外层据此定半屏弹窗的高度）
+    var onHeight: (CGFloat) -> Void = { _ in }
+
+    @Environment(\.dismiss) private var dismiss
 
     @State private var email = ""
     @State private var code = ""
@@ -36,71 +38,24 @@ struct EmailLoginView: View {
         return host.contains(".") && !host.hasSuffix(".")
     }
 
-    private var canLogin: Bool {
-        code.count == 6 && emailValid && !logging
+    private var canSend: Bool { emailValid && !sending && cooldown == 0 }
+
+    private var canLogin: Bool { code.count == 6 && emailValid && !logging }
+
+    private var sendTitle: String {
+        if sending { return "发送中" }
+        if cooldown > 0 { return "\(cooldown) 秒" }
+        return sentOnce ? "重新发送" : "发送验证码"
     }
 
     var body: some View {
-        ZStack {
-            AmbientBackground()
-
-            VStack(spacing: 0) {
-                // 返回：跟系统返回一样贴在左上角
-                HStack {
-                    Button {
-                        focus = nil
-                        onBack()
-                    } label: {
-                        HStack(spacing: 3) {
-                            Image(systemName: "chevron.left")
-                                .font(.body.weight(.semibold))
-                            Text("返回")
-                                .font(.body)
-                        }
-                        .foregroundStyle(DSColor.accent)
-                        .padding(.vertical, 8)
-                        .padding(.trailing, 12)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, DSSpace.l)
-                .padding(.top, DSSpace.xs)
-
-                ScrollView(showsIndicators: false) {
-                    VStack(spacing: DSSpace.l) {
-                        header
-
-                        VStack(spacing: DSSpace.s) {
-                            emailField
-                            sendButton
-                            codeField
-                            loginButton
-                        }
-
-                        if let e = error {
-                            Text(e)
-                                .font(.footnote)
-                                .foregroundStyle(DSColor.destructive)
-                                .multilineTextAlignment(.center)
-                                .frame(maxWidth: .infinity)
-                        }
-
-                        Text("登录即表示同意《用户协议》与《隐私政策》")
-                            .font(.caption)
-                            .foregroundStyle(DSColor.tertiaryLabel)
-                            .multilineTextAlignment(.center)
-                            .padding(.top, DSSpace.xxs)
-                    }
-                    .padding(.horizontal, DSSpace.xxl)
-                    .padding(.top, DSSpace.xxl)
-                    .padding(.bottom, DSSpace.xxl)
-                    .frame(maxWidth: 520)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                }
-            }
+        VStack(spacing: 0) {
+            content
+                .readHeight(onHeight)
+            Spacer(minLength: 0)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(DSColor.groupedBackground)
         .onAppear {
             if email.isEmpty { focus = .email }
         }
@@ -109,42 +64,55 @@ struct EmailLoginView: View {
         }
     }
 
-    // MARK: - 说明文
+    // MARK: - 内容
 
-    private var header: some View {
-        VStack(spacing: DSSpace.s) {
-            ZStack {
-                Circle()
-                    .fill(DSColor.accentSoft)
-                    .frame(width: 64, height: 64)
-                Image(systemName: "envelope.fill")
-                    .font(.system(size: 26, weight: .regular))
-                    .foregroundStyle(DSColor.accent)
+    private var content: some View {
+        VStack(spacing: DSSpace.l) {
+            VStack(spacing: DSSpace.xxs) {
+                Text("通过邮箱登录")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(DSColor.label)
+                Text("验证码会发送到这个邮箱")
+                    .font(.subheadline)
+                    .foregroundStyle(DSColor.secondaryLabel)
             }
-            .padding(.bottom, DSSpace.xxs)
+            .padding(.top, DSSpace.xl)
 
-            Text("邮箱登录")
-                .font(.title2.weight(.semibold))
-                .foregroundStyle(DSColor.label)
+            VStack(spacing: DSSpace.s) {
+                emailRow
+                codeRow
 
-            Text("输入常用邮箱，我们会发送 6 位验证码。\n第一次用某个邮箱登录会自动创建账号，\n换手机、重装后余额和历史记录都还在。")
-                .font(.subheadline)
-                .foregroundStyle(DSColor.secondaryLabel)
-                .multilineTextAlignment(.center)
-                .lineSpacing(3)
-                .fixedSize(horizontal: false, vertical: true)
+                if let e = error {
+                    Text(e)
+                        .font(.footnote)
+                        .foregroundStyle(DSColor.destructive)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Button {
+                    Task { await login() }
+                } label: {
+                    HStack(spacing: 6) {
+                        if logging { ProgressView().controlSize(.small).tint(.white) }
+                        Text("登录")
+                    }
+                }
+                .buttonStyle(DSFilledButtonStyle())
+                .disabled(!canLogin)
+                .opacity(canLogin ? 1 : 0.5)
+                .padding(.top, DSSpace.xs)
+            }
         }
-        .padding(.bottom, DSSpace.s)
+        .padding(.horizontal, DSSpace.xl)
+        .padding(.bottom, DSSpace.l)
     }
 
-    // MARK: - 输入区
+    // MARK: - 输入
 
-    private var emailField: some View {
-        HStack(spacing: DSSpace.s) {
-            Image(systemName: "at")
-                .font(.body)
-                .foregroundStyle(DSColor.tertiaryLabel)
-
+    private var emailRow: some View {
+        HStack(spacing: DSSpace.xs) {
             TextField("邮箱地址", text: $email)
                 .textContentType(.emailAddress)
                 .keyboardType(.emailAddress)
@@ -152,10 +120,10 @@ struct EmailLoginView: View {
                 .autocorrectionDisabled()
                 .focused($focus, equals: .email)
                 .submitLabel(.send)
-                .onSubmit { Task { await sendCode() } }
                 .font(.body)
+                .onSubmit { Task { await sendCode() } }
 
-            if !email.isEmpty {
+            if !email.isEmpty && cooldown == 0 && !sending {
                 Button {
                     email = ""
                     focus = .email
@@ -165,98 +133,53 @@ struct EmailLoginView: View {
                 }
                 .buttonStyle(.plain)
             }
+
+            Button(sendTitle) {
+                Task { await sendCode() }
+            }
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(canSend ? DSColor.accent : DSColor.tertiaryLabel)
+            .disabled(!canSend)
+            .layoutPriority(1)
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, DSSpace.m)
         .frame(height: 54)
-        .background(
-            RoundedRectangle(cornerRadius: DSRadius.button, style: .continuous)
-                .fill(DSColor.cellAlt)
-        )
+        .background(DSColor.cell, in: RoundedRectangle(cornerRadius: DSRadius.button, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: DSRadius.button, style: .continuous)
-                .strokeBorder(focus == .email ? DSColor.accent.opacity(0.55) : DSColor.separator, lineWidth: focus == .email ? 1.2 : 0.5)
+                .strokeBorder(focus == .email ? DSColor.accent : DSColor.separator,
+                              lineWidth: focus == .email ? 1 : 0.5)
         )
         .animation(.easeOut(duration: 0.16), value: focus)
     }
 
-    private var sendButton: some View {
-        Button {
-            Task { await sendCode() }
-        } label: {
-            HStack(spacing: 6) {
-                if sending { ProgressView().controlSize(.small) }
-                Text(cooldown > 0 ? "\(cooldown) 秒后可重新发送" : (sentOnce ? "重新发送验证码" : "发送验证码"))
+    private var codeRow: some View {
+        TextField("6 位验证码", text: $code)
+            .keyboardType(.numberPad)
+            .textContentType(.oneTimeCode)
+            .focused($focus, equals: .code)
+            .font(.body.monospacedDigit())
+            .kerning(2)
+            .onChange(of: code) { v in
+                let digits = String(v.filter(\.isNumber).prefix(6))
+                if digits != v { code = digits }
+                if digits.count == 6 { focus = nil }
             }
-            .font(.subheadline.weight(.medium))
-            .frame(maxWidth: .infinity)
-            .frame(height: 48)
-        }
-        .buttonStyle(DSTintedButtonStyle())
-        .disabled(sending || cooldown > 0 || !emailValid)
-        .opacity(!emailValid || cooldown > 0 ? 0.5 : 1)
-    }
-
-    private var codeField: some View {
-        VStack(alignment: .leading, spacing: DSSpace.xs) {
-            Text("验证码")
-                .font(.footnote.weight(.medium))
-                .foregroundStyle(DSColor.secondaryLabel)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            HStack(spacing: DSSpace.s) {
-                Image(systemName: "number")
-                    .font(.body)
-                    .foregroundStyle(DSColor.tertiaryLabel)
-
-                TextField("6 位数字", text: $code)
-                    .keyboardType(.numberPad)
-                    .textContentType(.oneTimeCode)
-                    .focused($focus, equals: .code)
-                    .font(.title3.monospacedDigit())
-                    .kerning(4)
-                    .onChange(of: code) { v in
-                        let digits = String(v.filter(\.isNumber).prefix(6))
-                        if digits != v { code = digits }
-                        if digits.count == 6 { focus = nil }
-                    }
-            }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, DSSpace.m)
             .frame(height: 54)
-            .background(
-                RoundedRectangle(cornerRadius: DSRadius.button, style: .continuous)
-                    .fill(DSColor.cellAlt)
-            )
+            .background(DSColor.cell, in: RoundedRectangle(cornerRadius: DSRadius.button, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: DSRadius.button, style: .continuous)
-                    .strokeBorder(focus == .code ? DSColor.accent.opacity(0.55) : DSColor.separator, lineWidth: focus == .code ? 1.2 : 0.5)
+                    .strokeBorder(focus == .code ? DSColor.accent : DSColor.separator,
+                                  lineWidth: focus == .code ? 1 : 0.5)
             )
             .animation(.easeOut(duration: 0.16), value: focus)
-        }
-        .padding(.top, DSSpace.xxs)
-    }
-
-    private var loginButton: some View {
-        Button {
-            Task { await login() }
-        } label: {
-            HStack(spacing: 6) {
-                if logging { ProgressView().controlSize(.small).tint(.white) }
-                Text("登录")
-            }
-            .font(.headline)
-            .frame(maxWidth: .infinity)
-            .frame(height: 54)
-        }
-        .buttonStyle(DSPrimaryAccentButtonStyle())
-        .disabled(!canLogin)
-        .opacity(canLogin ? 1 : 0.55)
-        .padding(.top, DSSpace.xs)
     }
 
     // MARK: - 交互
 
     private func sendCode() async {
-        guard emailValid, !sending, cooldown == 0 else { return }
+        guard canSend else { return }
         sending = true
         error = nil
         defer { sending = false }
@@ -278,46 +201,32 @@ struct EmailLoginView: View {
         do {
             try await Cloud.shared.loginWithEmail(email: trimmedEmail, code: code)
             await onSuccess()
+            dismiss()
         } catch {
             self.error = error.localizedDescription
         }
     }
 }
 
-// MARK: - 局部按钮样式
+// MARK: - 量高度
 
-/// 次级按钮：主题色的浅底填充，用于「发送验证码」
-private struct DSTintedButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundStyle(DSColor.accent)
-            .background(DSColor.accentSoft, in: RoundedRectangle(cornerRadius: DSRadius.button, style: .continuous))
-            .opacity(configuration.isPressed ? 0.75 : 1)
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+private struct EmailSheetHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
-/// 主按钮：主题色渐变 + 轻玻璃高光，按下有回弹
-private struct DSPrimaryAccentButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundStyle(.white)
-            .background(
-                LinearGradient(
-                    colors: [DSColor.accent, DSColor.accentFill],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ),
-                in: RoundedRectangle(cornerRadius: DSRadius.button, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: DSRadius.button, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.22), lineWidth: 1)
-            )
-            .shadow(color: DSColor.accent.opacity(configuration.isPressed ? 0.12 : 0.3),
-                    radius: configuration.isPressed ? 4 : 12,
-                    y: configuration.isPressed ? 1 : 6)
-            .scaleEffect(configuration.isPressed ? 0.98 : 1)
-            .animation(.easeOut(duration: 0.14), value: configuration.isPressed)
+extension View {
+    /// 把自身实际高度读出来（用来给半屏弹窗定高度，内容多少就多高）
+    func readHeight(_ onChange: @escaping (CGFloat) -> Void) -> some View {
+        background(
+            GeometryReader { g in
+                Color.clear.preference(key: EmailSheetHeightKey.self, value: g.size.height)
+            }
+        )
+        .onPreferenceChange(EmailSheetHeightKey.self) { h in
+            if h > 0 { onChange(h) }
+        }
     }
 }
