@@ -8,6 +8,7 @@ struct LoginView: View {
     @State private var error: String?
     @State private var working = false
     @State private var terms: TermsView.Kind?
+    @State private var emailLogin = false
 
     var body: some View {
         ZStack {
@@ -42,6 +43,24 @@ struct LoginView: View {
                         .frame(height: 54)
                         .disabled(working)
 
+                    HStack(spacing: 10) {
+                        Rectangle().fill(DSColor.separator).frame(height: 0.5)
+                        Text("或").font(.footnote).foregroundStyle(DSColor.tertiaryLabel)
+                        Rectangle().fill(DSColor.separator).frame(height: 0.5)
+                    }
+                    .padding(.vertical, 2)
+
+                    Button {
+                        emailLogin = true
+                    } label: {
+                        Text("用邮箱登录")
+                            .font(.subheadline.weight(.medium))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 50)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(working)
+
                     if let e = error ?? apple.error {
                         Text(e)
                             .font(.footnote)
@@ -61,6 +80,11 @@ struct LoginView: View {
                 }
                 .padding(.horizontal, DSSpace.xxl)
                 .padding(.bottom, DSSpace.xxl)
+            }
+        }
+        .sheet(isPresented: $emailLogin) {
+            EmailLoginView {
+                await afterLogin()
             }
         }
         .sheet(item: $terms) { kind in
@@ -86,13 +110,18 @@ struct LoginView: View {
         defer { working = false }
         do {
             try await Cloud.shared.loginWithApple(identityToken: token, fullName: name)
-            await AppState.shared.syncPrefsFromCloud()
-            await Purchases.shared.load()
-            await Purchases.shared.syncUnfinished()
+            await afterLogin()
         } catch {
             self.error = error.localizedDescription
         }
         apple.busy = false
+    }
+
+    /// 两条登录路径共用的收尾：云端偏好、内购、未完成交易
+    private func afterLogin() async {
+        await AppState.shared.syncPrefsFromCloud()
+        await Purchases.shared.load()
+        await Purchases.shared.syncUnfinished()
     }
 }
 
