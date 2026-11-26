@@ -79,60 +79,44 @@ struct DSIconButtonStyle: ButtonStyle {
     }
 }
 
-// MARK: - 首页主按钮（主题色渐变 + 玻璃高光）
+// MARK: - 首页主按钮（系统玻璃材质）
 
 /// 首页那颗「开启实时字幕」的主按钮。
 ///
-/// 用玻璃质感是为了让它看着像一颗真按钮、有按下去的欲望：
-/// 底层是主题色渐变（不透明，保证白字始终够清楚），上面叠一层从顶到底的高光，
-/// 边框再走一圈半透明白描边，按下时整体轻微收缩、投影收紧。
+/// 用的是**系统自己的玻璃**，不是自己拼的渐变：
+///   · iOS 26 及以上 → 原生 Liquid Glass（`.glassEffect`），跟系统按钮同一套折射与高光
+///   · iOS 26 以下 → 系统 `ultraThinMaterial` 毛玻璃，底下垫一层很淡的主题色
+/// 两种都是半透明、看得见底下内容的材质，文字走主题色，不铺实色底、不画渐变。
 struct DSGlassPrimaryButtonStyle: ButtonStyle {
+    /// 文字与淡色底用的主题色
     var tint: Color = DSColor.accentFill
+    /// 停止态换成红色时用同一套材质
     var deep: Color = DSColor.accent
 
+    @ViewBuilder
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(DSFont.headline)
-            .foregroundStyle(.white)
-            .frame(maxWidth: .infinity)
-            .frame(minHeight: 54)
-            .background {
-                ZStack {
-                    RoundedRectangle(cornerRadius: DSRadius.button, style: .continuous)
-                        .fill(tint)
-                    RoundedRectangle(cornerRadius: DSRadius.button, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [deep.opacity(0.95), tint.opacity(0.62)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                    RoundedRectangle(cornerRadius: DSRadius.button, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [Color.white.opacity(0.28), Color.white.opacity(0.02)],
-                                startPoint: .top,
-                                endPoint: .center
-                            )
-                        )
-                }
-            }
-            .overlay(
-                RoundedRectangle(cornerRadius: DSRadius.button, style: .continuous)
-                    .strokeBorder(
-                        LinearGradient(
-                            colors: [Color.white.opacity(0.55), Color.white.opacity(0.10)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 1
-                    )
-            )
-            .shadow(color: deep.opacity(configuration.isPressed ? 0.18 : 0.36),
-                    radius: configuration.isPressed ? 5 : 14,
-                    y: configuration.isPressed ? 1 : 7)
-            .scaleEffect(configuration.isPressed ? 0.975 : 1)
-            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
+        let shape = RoundedRectangle(cornerRadius: DSRadius.button, style: .continuous)
+
+        if #available(iOS 26.0, *) {
+            configuration.label
+                .font(DSFont.headline)
+                .foregroundStyle(deep)
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: 54)
+                .glassEffect(.regular.tint(deep.opacity(0.16)).interactive(), in: shape)
+                .opacity(configuration.isPressed ? 0.9 : 1)
+                .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
+        } else {
+            configuration.label
+                .font(DSFont.headline)
+                .foregroundStyle(deep)
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: 54)
+                .background(deep.opacity(0.08), in: shape)
+                .background(.ultraThinMaterial, in: shape)
+                .overlay(shape.strokeBorder(DSColor.separator, lineWidth: 0.5))
+                .opacity(configuration.isPressed ? 0.8 : 1)
+                .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
+        }
     }
 }
