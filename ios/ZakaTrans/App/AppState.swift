@@ -18,6 +18,20 @@ final class AppState: ObservableObject {
     @Published var liveTrans = ""
     @Published var lines: [SubtitleLine] = []
 
+    /// 正在说的那一行要不要显示。
+    /// 句子刚落定、另一路会话又把同一句当「正在说」推过来时，
+    /// 屏幕上就是「已落定的那行 + 一模一样的实时行」，两份叠在底部很难看。
+    /// 跟最后一条记录内容相同时直接不显示。
+    var shouldShowLiveRow: Bool {
+        if liveSource.isEmpty && liveTrans.isEmpty { return false }
+        guard let last = lines.last else { return true }
+        if !liveSource.isEmpty, Speaker.key(liveSource) == Speaker.key(last.source) {
+            let t = liveTrans.trimmingCharacters(in: .whitespacesAndNewlines)
+            if t.isEmpty || t == last.trans { return false }
+        }
+        return true
+    }
+
     // 实时字幕的上屏节奏：先按「整句」攒，整句一落定就立刻上屏原文，
     // 译文到了再就地补上去，等译文的时间不占用上屏速度。
     private var pendSrc = ""
@@ -300,8 +314,22 @@ final class AppState: ObservableObject {
             Speaker.shared.noteInput(a, final: true)
             self.liveSource = ""
             self.liveTrans = ""
-            // 同一句只上屏一次
-            if let last = self.lines.last, Speaker.key(last.source) == Speaker.key(a) { return }
+            // 同一句只上屏一次。
+            // 同传是两路会话同时跑（外语→中文、中文→英文），一段中文说出来，
+            // 两路都会把它当原文各推一遍，只跟最后一行比是不够的——中间一旦插进
+            // 另一路的一句，底部就会冒出两行一模一样的。这里往前找最近几条，
+            // 撞上就把后来到的译文补到那一行，不再另起一行。
+            let k = Speaker.key(a)
+            if let i = self.lines.lastIndex(where: {
+                Speaker.key($0.source) == k && Date().timeIntervalSince($0.at) < 30
+            }), self.lines.count - 1 - i < 8 {
+                if self.lines[i].trans.isEmpty, !b.isEmpty {
+                    let t = AppState.trimEndPunct(b)
+                    self.lines[i].trans = t
+                    ZKPip.shared()!.patchZh(t, forEn: self.lines[i].source)
+                }
+                return
+            }
             self.lines.append(SubtitleLine(source: a, trans: AppState.trimEndPunct(b)))
             if self.lines.count > 200 { self.lines.removeFirst(self.lines.count - 200) }
             ZKPip.shared()!.appendLineEn(a, zh: b)
