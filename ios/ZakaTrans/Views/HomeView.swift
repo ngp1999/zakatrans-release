@@ -256,8 +256,9 @@ struct HomeView: View {
                             .minimumScaleFactor(0.8)
                     }
                 }
-                .buttonStyle(DSFilledButtonStyle(
-                    tint: (app.running && !app.preparing) ? DSColor.destructive : DSColor.accentFill
+                .buttonStyle(DSGlassPrimaryButtonStyle(
+                    tint: (app.running && !app.preparing) ? DSColor.destructive : DSColor.accentFill,
+                    deep: (app.running && !app.preparing) ? DSColor.destructive : DSColor.accent
                 ))
             }
         }
