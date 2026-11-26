@@ -162,7 +162,6 @@ struct EmailLoginView: View {
             .onChange(of: code) { v in
                 let digits = String(v.filter(\.isNumber).prefix(6))
                 if digits != v { code = digits }
-                if digits.count == 6 { focus = nil }
             }
             .padding(.horizontal, DSSpace.m)
             .frame(height: 54)
