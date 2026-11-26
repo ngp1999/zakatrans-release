@@ -246,7 +246,7 @@ struct HomeView: View {
                         if app.preparing {
                             ProgressView()
                                 .progressViewStyle(.circular)
-                                .tint(.white)
+                                .tint(DSColor.accent)
                         } else {
                             Image(systemName: (app.running && !app.preparing) ? "stop.fill" : "play.fill")
                                 .font(.footnote.weight(.bold))
