@@ -11,12 +11,6 @@ struct AboutView: View {
     @State private var deleting = false
     @State private var deleteError = ""
 
-    /// 只读短版本号（V3.10.5）。构建号是内部排查用的，不给用户看。
-    private var version: String {
-        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
-        return v.isEmpty ? "" : "V\(v)"
-    }
-
     var body: some View {
         List {
             // 应用信息
@@ -35,46 +29,9 @@ struct AboutView: View {
                     Text("实时字幕与同声传译")
                         .font(DSFont.subheadline)
                         .foregroundStyle(DSColor.secondaryLabel)
-
-                    Text(version)
-                        .font(.footnote.monospacedDigit())
-                        .foregroundStyle(DSColor.tertiaryLabel)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, DSSpace.s)
-                .listRowBackground(Color.clear)
-            }
-
-            // 免责声明：审核要求把第三方服务与误差责任讲清楚，放在应用信息下面
-            Section {
-                VStack(alignment: .leading, spacing: DSSpace.s) {
-                    Text("免责声明")
-                        .font(DSFont.headline)
-                        .foregroundStyle(DSColor.label)
-
-                    Text("""
-                    本应用基于第三方技术服务（豆包）提供语音识别与翻译能力，输出结果可能存在延迟或识别偏差，重要场合请以原始信息为准。
-
-                    · 本应用为工具类软件，不对因识别误差导致的任何直接或间接损失承担责任。
-                    · 使用本应用即表示你已知悉并同意上述说明。
-                    """)
-                        .font(DSFont.footnote)
-                        .foregroundStyle(DSColor.label.opacity(0.68))
-                        .lineSpacing(4)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(DSSpace.m)
-                .background(
-                    LinearGradient(
-                        colors: [DSColor.accentSoft, DSColor.accentSoft.opacity(0.45)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    in: RoundedRectangle(cornerRadius: DSRadius.card, style: .continuous)
-                )
-                .padding(.horizontal, DSSpace.xxs)
-                .listRowInsets(EdgeInsets(top: DSSpace.xs, leading: DSSpace.m, bottom: DSSpace.xs, trailing: DSSpace.m))
                 .listRowBackground(Color.clear)
             }
 
