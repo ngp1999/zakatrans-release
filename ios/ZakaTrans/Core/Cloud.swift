@@ -114,6 +114,35 @@ final class Cloud: ObservableObject {
         if let fullName, !fullName.isEmpty { body["full_name"] = fullName }
 
         let data = try await rawRequest(path: "/v1/auth/apple", body: body, auth: false)
+        try applyAuth(data)
+        await refresh()
+    }
+
+    // MARK: - 邮箱登录
+
+    /// 发验证码，返回服务端规定的重发冷却秒数。
+    func sendEmailCode(to email: String) async throws -> Int {
+        let data = try await rawRequest(path: "/v1/auth/email/send", body: ["email": email], auth: false)
+        guard let d = data as? [String: Any] else { throw CloudError.badResponse }
+        return (d["cooldown"] as? NSNumber)?.intValue ?? 60
+    }
+
+    /// 邮箱 + 验证码换账号 token。第一次用这个邮箱会自动建号。
+    func loginWithEmail(email: String, code: String) async throws {
+        let body: [String: Any] = [
+            "email": email,
+            "code": code,
+            "device_id": Keychain.deviceID(),
+            "platform": "ios",
+            "model": UIDevice.current.model,
+            "app_version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0",
+        ]
+        let data = try await rawRequest(path: "/v1/auth/email/verify", body: body, auth: false)
+        try applyAuth(data)
+    }
+
+    /// Apple 和邮箱两条路登录成功后，落账号态的动作完全一样，抽出来免得改一处漏一处。
+    private func applyAuth(_ data: Any) throws {
         guard let dict = data as? [String: Any],
               let t = dict["token"] as? String else {
             throw CloudError.server("登录失败，请重试")
@@ -128,7 +157,7 @@ final class Cloud: ObservableObject {
                 id: p["id"] as? String ?? accountID,
                 email: p["email"] as? String ?? "",
                 display_name: p["display_name"] as? String ?? "",
-                provider: p["provider"] as? String ?? "apple",
+                provider: p["provider"] as? String ?? "device",
                 created_at: (p["created_at"] as? NSNumber)?.int64Value ?? 0
             )
         }
@@ -137,7 +166,6 @@ final class Cloud: ObservableObject {
         // 引擎层（ObjC）要拿它连识别服务
         UserDefaults.standard.set(t, forKey: "zt_account_token")
         UserDefaults.standard.set(Self.baseURL, forKey: "zt_base_url")
-        await refresh()
     }
 
     func logout() {
