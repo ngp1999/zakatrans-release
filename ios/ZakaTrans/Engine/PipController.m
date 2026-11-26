@@ -280,8 +280,15 @@ static UIColor *ZKBackgroundColor(void) {
         l.layer.shadowOffset = CGSizeMake(0, 1);
     }
 
+    // 译文跟原文一模一样就不画第二行。
+    // 同传是两路会话同时跑（外语→中文、中文→英文），说中文时「外语→中文」那一路
+    // 会把中文原样当译文吐回来，双语模式下这一块就是上下两道一模一样的字，
+    // 看着就是底部字幕条里重复了两行。
+    // 注意只影响绘制：enText 照旧存着，后面按原文补译文还要靠它找回这一行。
+    BOOL dupText = en.length && zh.length &&
+                   [ZKSegTrimEnd(en) isEqualToString:ZKSegTrimEnd(zh)];
     NSAttributedString *za = [self zhAttr:zh];
-    NSAttributedString *ea = [self enAttr:en];
+    NSAttributedString *ea = dupText ? nil : [self enAttr:en];
     self.zhLabel.attributedText = za;
     self.enLabel.attributedText = ea;
 
@@ -773,6 +780,9 @@ static CGFloat ZKFitSize(NSString *text, UIFont *font, CGFloat width, CGFloat fl
     NSString *e = _en ?: @"";
     if (_showZh >= 0 && (NSInteger)z.length > _showZh) z = [z substringToIndex:(NSUInteger)_showZh];
     if (_showEn >= 0 && (NSInteger)e.length > _showEn) e = [e substringToIndex:(NSUInteger)_showEn];
+    // 原文跟译文一模一样就不显示第二行：同传两路会话同时跑，说中文时
+    // 「外语→中文」那一路会把中文原样当译文吐回来，双语模式下这里就是两行一样的字。
+    if (e.length && z.length && [ZKNormKey(e) isEqualToString:ZKNormKey(z)]) e = @"";
     if (![_zhLabel.text isEqualToString:z]) _zhLabel.text = z;
     if (![_srcLabel.text isEqualToString:e]) _srcLabel.text = e;
 }
@@ -906,6 +916,8 @@ static CGFloat ZKFitSize(NSString *text, UIFont *font, CGFloat width, CGFloat fl
     }
     if (showSource) {
         NSString *t = r.en ?: @"";
+        // 原文与译文一字不差（中文被原样译回来的那一路）时不再画第二行
+        if (t.length && [ZKNormKey(t) isEqualToString:ZKNormKey(r.zh ?: @"")]) t = @"";
         CGFloat fs = ZKFitSize(t, srcBase, w, two ? 0.5 : 0.42);
         UIFont *f = two ? [UIFont systemFontOfSize:fs] : [UIFont boldSystemFontOfSize:fs];
         r.srcLabel.font = f;
