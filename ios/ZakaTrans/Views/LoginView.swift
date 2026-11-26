@@ -14,6 +14,16 @@ struct LoginView: View {
         ZStack {
             AmbientBackground()
 
+            if emailLogin {
+                EmailLoginView(
+                    onBack: { withAnimation(.easeInOut(duration: 0.28)) { emailLogin = false } },
+                    onSuccess: { await afterLogin() }
+                )
+                .transition(.asymmetric(
+                    insertion: .move(edge: .trailing).combined(with: .opacity),
+                    removal: .move(edge: .trailing).combined(with: .opacity)
+                ))
+            } else {
             VStack(spacing: 0) {
                 Spacer(minLength: 60)
 
@@ -51,14 +61,27 @@ struct LoginView: View {
                     .padding(.vertical, 2)
 
                     Button {
-                        emailLogin = true
+                        withAnimation(.easeInOut(duration: 0.28)) { emailLogin = true }
                     } label: {
-                        Text("用邮箱登录")
-                            .font(.subheadline.weight(.medium))
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 50)
+                        HStack(spacing: DSSpace.xs) {
+                            Image(systemName: "envelope.fill")
+                                .font(.system(size: 17, weight: .medium))
+                            Text("用邮箱登录")
+                                .font(.system(size: 19, weight: .medium))
+                        }
+                        .foregroundStyle(DSColor.label)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 54)
+                        .background(
+                            RoundedRectangle(cornerRadius: DSRadius.button, style: .continuous)
+                                .fill(DSColor.cellAlt)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: DSRadius.button, style: .continuous)
+                                .strokeBorder(DSColor.separator, lineWidth: 0.5)
+                        )
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(SignInLikeButtonStyle())
                     .disabled(working)
 
                     if let e = error ?? apple.error {
@@ -81,12 +104,10 @@ struct LoginView: View {
                 .padding(.horizontal, DSSpace.xxl)
                 .padding(.bottom, DSSpace.xxl)
             }
-        }
-        .sheet(isPresented: $emailLogin) {
-            EmailLoginView {
-                await afterLogin()
+            .transition(.opacity)
             }
         }
+        .animation(.easeInOut(duration: 0.28), value: emailLogin)
         .sheet(item: $terms) { kind in
             NavigationStack {
                 TermsView(kind: kind)
@@ -145,5 +166,16 @@ struct AppleSignInButton: UIViewRepresentable {
         let action: () -> Void
         init(action: @escaping () -> Void) { self.action = action }
         @objc func tap() { action() }
+    }
+}
+
+/// 与系统「通过 Apple 登录」按钮同尺寸的次级按钮按压反馈：
+/// 高度、圆角、字号都对齐系统控件，按下只有轻微收缩和高亮，不做回弹。
+struct SignInLikeButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.82 : 1)
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
