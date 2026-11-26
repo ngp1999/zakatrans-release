@@ -109,7 +109,9 @@ struct AboutView: View {
                 }
                 .foregroundStyle(DSColor.tertiaryLabel)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, DSSpace.xs)
+                .padding(.top, 2)
+                .padding(.bottom, DSSpace.xs)
+                .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
                 .listRowBackground(Color.clear)
             }
         }
