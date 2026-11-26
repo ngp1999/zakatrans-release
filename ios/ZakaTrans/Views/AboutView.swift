@@ -99,13 +99,13 @@ struct AboutView: View {
                 }
             }
 
-            // 版权
+            // 备案信息：工信部要求 App 内公示，点击可跳转备案系统查询
             Section {
                 VStack(spacing: DSSpace.xxs) {
-                    Text("© 2026 语幕")
-                        .font(DSFont.footnote)
-                    Text("保留所有权利")
-                        .font(DSFont.caption)
+                    Link(destination: URL(string: "https://beian.miit.gov.cn/")!) {
+                        Text("皖ICP备2026045837号-3A")
+                            .font(DSFont.footnote)
+                    }
                 }
                 .foregroundStyle(DSColor.tertiaryLabel)
                 .frame(maxWidth: .infinity)
