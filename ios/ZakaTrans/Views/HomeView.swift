@@ -210,9 +210,9 @@ struct HomeView: View {
                 Button {
                     showStyle = true
                 } label: {
-                    Image(systemName: "textformat.size")
+                    Image(systemName: app.pipOn ? "pip.fill" : "pip")
                 }
-                .buttonStyle(DSIconButtonStyle(on: false, size: 50))
+                .buttonStyle(DSIconButtonStyle(on: app.pipOn, size: 50))
                 .accessibilityLabel("字幕样式")
 
                 Button {
@@ -236,7 +236,7 @@ struct HomeView: View {
                         if app.preparing {
                             ProgressView()
                                 .progressViewStyle(.circular)
-                                .tint(DSColor.accent)
+                                .tint(.white)
                         } else {
                             Image(systemName: (app.running && !app.preparing) ? "stop.fill" : "play.fill")
                                 .font(.footnote.weight(.bold))
@@ -246,9 +246,8 @@ struct HomeView: View {
                             .minimumScaleFactor(0.8)
                     }
                 }
-                .buttonStyle(DSGlassPrimaryButtonStyle(
-                    tint: (app.running && !app.preparing) ? DSColor.destructive : DSColor.accentFill,
-                    deep: (app.running && !app.preparing) ? DSColor.destructive : DSColor.accent
+                .buttonStyle(DSFilledButtonStyle(
+                    tint: (app.running && !app.preparing) ? DSColor.destructive : DSColor.accentFill
                 ))
             }
         }
