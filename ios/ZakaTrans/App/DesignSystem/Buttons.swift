@@ -60,70 +60,22 @@ struct DSRowButtonStyle: ButtonStyle {
 // MARK: - 图标按钮
 
 /// 圆形图标按钮（字幕页的辅助控制）。
-/// 跟主按钮同一套系统玻璃：iOS 26 原生 Liquid Glass，低版本系统毛玻璃，
-/// 不铺主题色底，图标走主题色。
+/// 系统 `.bordered` 的圆形变体：浅填充底 + 强调色图标，没有描边和投影；
+/// 开启态（on）走主题色实底 + 白色图标。
 struct DSIconButtonStyle: ButtonStyle {
     var on: Bool = false
     var size: CGFloat = 50
 
-    @ViewBuilder
     func makeBody(configuration: Configuration) -> some View {
-        if #available(iOS 26.0, *) {
-            configuration.label
-                .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(on ? DSColor.accentFill : DSColor.accent)
-                .frame(width: size, height: size)
-                .glassEffect(.regular.interactive(), in: Circle())
-                .opacity(configuration.isPressed ? 0.85 : 1)
-                .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
-        } else {
-            configuration.label
-                .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(on ? DSColor.accentFill : DSColor.accent)
-                .frame(width: size, height: size)
-                .background(.ultraThinMaterial, in: Circle())
-                .opacity(configuration.isPressed ? 0.75 : 1)
-                .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
-        }
-    }
-}
-
-// MARK: - 首页主按钮（系统玻璃材质）
-
-/// 首页那颗「开启实时字幕」的主按钮。
-///
-/// 用的是**系统自己的玻璃**，不是自己拼的渐变，也不铺任何主题色底：
-///   · iOS 26 及以上 → 原生 Liquid Glass（`.glassEffect`），跟系统按钮同一套折射与高光
-///   · iOS 26 以下 → 系统 `ultraThinMaterial` 毛玻璃
-/// 底色完全交给系统材质，只有文字是主题色（停止态红色）。
-struct DSGlassPrimaryButtonStyle: ButtonStyle {
-    /// 仅作兼容保留，不参与绘制
-    var tint: Color = DSColor.accentFill
-    /// 文字色（停止态传红色）
-    var deep: Color = DSColor.accent
-
-    @ViewBuilder
-    func makeBody(configuration: Configuration) -> some View {
-        let shape = RoundedRectangle(cornerRadius: DSRadius.button, style: .continuous)
-
-        if #available(iOS 26.0, *) {
-            configuration.label
-                .font(DSFont.headline)
-                .foregroundStyle(deep)
-                .frame(maxWidth: .infinity)
-                .frame(minHeight: 54)
-                .glassEffect(.regular.interactive(), in: shape)
-                .opacity(configuration.isPressed ? 0.9 : 1)
-                .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
-        } else {
-            configuration.label
-                .font(DSFont.headline)
-                .foregroundStyle(deep)
-                .frame(maxWidth: .infinity)
-                .frame(minHeight: 54)
-                .background(.ultraThinMaterial, in: shape)
-                .opacity(configuration.isPressed ? 0.8 : 1)
-                .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
-        }
+        configuration.label
+            .font(.system(size: 17, weight: .medium))
+            .foregroundStyle(on ? Color.white : DSColor.label)
+            .frame(width: size, height: size)
+            .background(
+                on ? DSColor.accentFill : DSColor.fill,
+                in: Circle()
+            )
+            .opacity(configuration.isPressed ? 0.6 : 1)
+            .animation(nil, value: configuration.isPressed)
     }
 }
