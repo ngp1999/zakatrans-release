@@ -25,7 +25,7 @@ static NSString *ZTToken(void) {
 
 static NSString *ZTBase(void) {
     NSString *b = [[NSUserDefaults standardUserDefaults] stringForKey:@"zt_base_url"];
-    return b.length ? b : @"https://api.xingyans.com";
+    return b.length ? b : @"https://api.yumss.cn";
 }
 
 static NSString *ZTHex(const unsigned char *b, NSUInteger n) {
