@@ -18,10 +18,10 @@ struct SubtitlePrefs: Codable, Equatable {
     /// 语言模式：bilingual（双语）| zh（仅中文）| source（仅原文）
     var mode: String = "bilingual"
     /// 画中画窗口大小：
-    /// X 小（5:1 1080×216，默认，铺满屏宽只占最下面一条，最不挡画面）
-    /// M 中（21:9 840×360，宽条，能站三四行）
+    /// X 小（5:1 1080×216，铺满屏宽只占最下面一条，最不挡画面）
+    /// M 中（21:9 840×360，宽条，能站三四行；新用户默认这一档）
     /// B 大（1080×640，又宽又大，一屏能站六七行）
-    var pip: String = "X"
+    var pip: String = "M"
     /// 输出音频（把译文读出来）
     var tts: Bool = false
     /// 朗读语速 0.30~0.60（0.5 是系统正常语速）。3.9.5 起整体放慢，默认 0.46
@@ -121,6 +121,17 @@ struct SubtitlePrefs: Codable, Equatable {
             UserDefaults.standard.set(true, forKey: flag)
             if tts {
                 tts = false
+                saveLocal()
+            }
+        }
+
+        // 3.17.0：默认窗型从「小横条」改成「中窗」，滚动方式上推。
+        // 只迁一次，还是旧默认（X）的存档升级过来就是中窗；用户自己后来改的不再动。
+        let pipFlag = "zt_migrate_pip_m_v3170"
+        if !UserDefaults.standard.bool(forKey: pipFlag) {
+            UserDefaults.standard.set(true, forKey: pipFlag)
+            if pip == "X" {
+                pip = "M"
                 saveLocal()
             }
         }
