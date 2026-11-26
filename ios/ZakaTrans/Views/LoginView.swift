@@ -1,29 +1,21 @@
 import SwiftUI
 import AuthenticationServices
 
-/// 登录页。Apple 登录是唯一入口，不提供匿名设备号——
+/// 登录页。Apple 登录是主入口，另一个是邮箱验证码登录——
 /// 商用版要求「一个人一个账号，换手机数据还在」。
 struct LoginView: View {
     @ObservedObject private var apple = AppleSignIn.shared
     @State private var error: String?
     @State private var working = false
     @State private var terms: TermsView.Kind?
-    @State private var emailLogin = false
+    @State private var emailSheet = false
+    /// 半屏弹窗高度：按邮箱表单的实际内容量出来，内容多少就多高
+    @State private var emailSheetHeight: CGFloat = 360
 
     var body: some View {
         ZStack {
             AmbientBackground()
 
-            if emailLogin {
-                EmailLoginView(
-                    onBack: { withAnimation(.easeInOut(duration: 0.28)) { emailLogin = false } },
-                    onSuccess: { await afterLogin() }
-                )
-                .transition(.asymmetric(
-                    insertion: .move(edge: .trailing).combined(with: .opacity),
-                    removal: .move(edge: .trailing).combined(with: .opacity)
-                ))
-            } else {
             VStack(spacing: 0) {
                 Spacer(minLength: 60)
 
@@ -61,12 +53,12 @@ struct LoginView: View {
                     .padding(.vertical, 2)
 
                     Button {
-                        withAnimation(.easeInOut(duration: 0.28)) { emailLogin = true }
+                        emailSheet = true
                     } label: {
                         HStack(spacing: DSSpace.xs) {
                             Image(systemName: "envelope.fill")
                                 .font(.system(size: 17, weight: .medium))
-                            Text("用邮箱登录")
+                            Text("通过邮箱登录")
                                 .font(.system(size: 19, weight: .medium))
                         }
                         .foregroundStyle(DSColor.label)
@@ -104,10 +96,7 @@ struct LoginView: View {
                 .padding(.horizontal, DSSpace.xxl)
                 .padding(.bottom, DSSpace.xxl)
             }
-            .transition(.opacity)
-            }
         }
-        .animation(.easeInOut(duration: 0.28), value: emailLogin)
         .sheet(item: $terms) { kind in
             NavigationStack {
                 TermsView(kind: kind)
@@ -118,6 +107,18 @@ struct LoginView: View {
                     }
             }
             .sheetChrome()
+        }
+        .sheet(isPresented: $emailSheet) {
+            EmailLoginView(
+                onSuccess: { await afterLogin() },
+                onHeight: { h in
+                    // 内容高度 + 一点余量；上下限兜住极端字号，别弹成整屏
+                    let target = min(max(h.rounded(.up) + 8, 300), 620)
+                    if abs(target - emailSheetHeight) > 1 { emailSheetHeight = target }
+                }
+            )
+            .presentationDetents([.height(emailSheetHeight)])
+            .presentationDragIndicator(.visible)
         }
         .onAppear {
             apple.onSuccess = { token, name in
