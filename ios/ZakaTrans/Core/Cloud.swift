@@ -179,6 +179,11 @@ final class Cloud: ObservableObject {
         balanceTokens = 0
         balanceCredits = 0
         loggedIn = false
+        // 头像属于账号：退出/注销就一起清掉，否则下一个账号会看到上一个人的头像。
+        // 服务端存着，同一个账号再登进来 refresh 会把它拉回来。
+        avatarUploadTried = false
+        AvatarStore.clear()
+        DispatchQueue.main.async { AppState.shared.avatarImage = nil }
     }
 
     // MARK: - 余额
@@ -198,17 +203,25 @@ final class Cloud: ObservableObject {
                     // 头像：服务端有就以服务端为准（换设备 / 重装后能补回来）
                     if let b64 = p["avatar"] as? String, !b64.isEmpty,
                        AvatarStore.save(base64: b64) {
+                        AvatarStore.setOwner(accountID)
                         DispatchQueue.main.async { AppState.shared.avatarImage = AvatarStore.load() }
                     } else if !avatarUploadTried, let local = AvatarStore.base64(), !local.isEmpty {
-                        // 本机有头像、服务端还是空的（换了账号、上次上传没成功、
-                        // 或者是老版本只存在本机的头像）：补传一次，让账号上也有。
-                        // 以前只做「服务端有就覆盖本机」，本机这张永远上不去，
-                        // 换台设备登录就变回灰头像。
-                        avatarUploadTried = true
-                        Task { [weak self] in
-                            guard let self else { return }
-                            if await self.uploadAvatar(local) {
-                                await self.refresh()
+                        // 本机这张头像如果属于别的账号（上一手登录的人），
+                        // 绝不能补传到现在这个账号上——注销后重新登录「头像还在」
+                        // 就是这么来的。直接丢掉。
+                        if let owner = AvatarStore.owner, owner != accountID {
+                            AvatarStore.clear()
+                            DispatchQueue.main.async { AppState.shared.avatarImage = nil }
+                        } else {
+                            // 本机有头像、服务端还是空的（老版本升级 / 上次上传没成功）：
+                            // 补传一次，让账号上也有，换台设备登录不会变灰头像。
+                            avatarUploadTried = true
+                            Task { [weak self] in
+                                guard let self else { return }
+                                if await self.uploadAvatar(local) {
+                                    AvatarStore.setOwner(self.accountID)
+                                    await self.refresh()
+                                }
                             }
                         }
                     }
@@ -533,9 +546,18 @@ final class Cloud: ObservableObject {
         guard let http = resp as? HTTPURLResponse else { throw CloudError.badResponse }
         let json = (try? JSONSerialization.jsonObject(with: data)) ?? [:]
         if http.statusCode == 401 {
-            // 登录态失效：本地 token 立刻作废，界面回登录页
-            if auth { logout() }
-            throw CloudError.unauthorized
+            // 401 不都是「登录已失效」：验证码不对、Apple 凭据校验失败这些
+            // 也都是 401，但它们只说明这一次没成，不该把人踹下线。
+            // 只有服务端明确说 token 不认，或者干脆没给错误码，才作废登录态。
+            let errCode = (json as? [String: Any])?["error"] as? String
+            let msg = (json as? [String: Any])?["message"] as? String
+            let deadCodes = ["unauthorized", "token_invalid", "token_expired", "token_missing", "bad_token"]
+            let sessionDead = errCode == nil || deadCodes.contains(errCode ?? "")
+            if auth && sessionDead {
+                logout()
+                throw CloudError.unauthorized
+            }
+            throw CloudError.server(msg ?? CloudError.unauthorized.localizedDescription)
         }
         if http.statusCode >= 400 {
             let msg = (json as? [String: Any])?["message"] as? String ?? "请求失败（\(http.statusCode)）"
