@@ -49,12 +49,11 @@ struct EmailLoginView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            content
-                .readHeight(onHeight)
-            Spacer(minLength: 0)
+        // 键盘弹起来时这一层可以滚，内容本身高度交给外层定弹窗
+        ScrollView(showsIndicators: false) {
+            content.readHeight(onHeight)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(DSColor.groupedBackground)
         .onAppear {
             if email.isEmpty { focus = .email }
